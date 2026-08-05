@@ -437,10 +437,14 @@ components:
 
         Not every radio has every mode: DV and DD are D-STAR modes on Icom's
         VHF/UHF and microwave sets, ATV is IC-905 only, and PSK is absent from
-        those same radios. A radio's `caps.modes` lists what it will actually
-        accept, and a mode outside that list is rejected with 422.
+        those same radios. C4FM is Yaesu's, and comes in three spellings because
+        the radios do: an FT-991A's mode table says only `C4FM`, while an FTX-1
+        selects `C4FM-DN` and `C4FM-VW` separately. A radio's `caps.modes` lists
+        what it will actually accept, and a mode outside that list is rejected
+        with 422.
       enum:
-        [UNKNOWN, LSB, USB, CW, CW-R, AM, FM, FSK, FSK-R, PSK, PSK-R, DV, DD, ATV]
+        [UNKNOWN, LSB, USB, CW, CW-R, AM, FM, FSK, FSK-R, PSK, PSK-R, DV, DD, ATV,
+         C4FM, C4FM-DN, C4FM-VW]
 
     VFO:
       type: string

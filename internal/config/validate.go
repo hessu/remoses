@@ -17,10 +17,11 @@ import (
 const (
 	BackendCIV     = "civ"
 	BackendKenwood = "kenwood"
+	BackendYaesu   = "yaesu"
 	BackendRigctld = "rigctld"
 )
 
-var backends = []string{BackendCIV, BackendKenwood, BackendRigctld}
+var backends = []string{BackendCIV, BackendKenwood, BackendYaesu, BackendRigctld}
 
 // CIVModels are the accepted values of civ.model.
 //
@@ -45,9 +46,30 @@ var KenwoodModels = []string{
 	"ts480", "ts590s", "ts590sg", "ts890s", "ts990s",
 }
 
+// YaesuModels are the accepted values of yaesu.model.
+//
+// Duplicated from the yaesu backend's own registry rather than imported, for
+// the same reason as CIVModels: config sits below rig/backend in the dependency
+// graph and asking the registry would be a cycle. The backend has a test that
+// fails if the two ever drift, which is the direction that can import both.
+var YaesuModels = []string{
+	"generic",
+	"ft-710", "ft-891", "ft-950", "ft-991a",
+	"ftdx10", "ftdx101d", "ftdx101mp", "ftdx1200", "ftdx3000", "ftdx5000", "ftdx9000",
+	"ftx-1",
+}
+
 // kenwoodModelKey folds a configured model name into a KenwoodModels entry. It
 // is the same folding the backend's own LookupModel does.
 func kenwoodModelKey(s string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", "")
+}
+
+// yaesuModelKey folds a configured model name for comparison. Yaesu is not
+// consistent about hyphens in its own product names — FT-991A but FTDX10 — so
+// both sides are folded and either spelling is accepted, which is the same
+// thing the backend's LookupModel does.
+func yaesuModelKey(s string) string {
 	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", "")
 }
 
@@ -172,6 +194,9 @@ func validateRadios(c *Config, add addFunc) {
 		case BackendKenwood:
 			validatePort(&r.Port, label, add)
 			validateKenwood(r.Kenwood, label, add)
+		case BackendYaesu:
+			validatePort(&r.Port, label, add)
+			validateYaesu(r.Yaesu, label, add)
 		case BackendRigctld:
 			if r.Rigctld == nil || r.Rigctld.Address == "" {
 				add("%s: backend rigctld requires rigctld.address", label)
@@ -271,6 +296,22 @@ func validateKenwood(k *Kenwood, label string, add addFunc) {
 	if k.AutoInformation != 0 && k.AutoInformation != 2 && k.AutoInformation != 4 {
 		add("%s: kenwood.auto_information %d, want 0 (off), 2 or 4",
 			label, k.AutoInformation)
+	}
+}
+
+func validateYaesu(y *Yaesu, label string, add addFunc) {
+	if y == nil {
+		return
+	}
+	// Both sides are folded, unlike civ.model: "FTDX10" and "FTdx-10" name the
+	// same radio, and Yaesu's own hyphenation varies from model to model.
+	if y.Model == "" {
+		return
+	}
+	key := yaesuModelKey(y.Model)
+	if !slices.ContainsFunc(YaesuModels, func(m string) bool { return yaesuModelKey(m) == key }) {
+		add("%s: yaesu.model %q, want one of %s",
+			label, y.Model, strings.Join(YaesuModels, ", "))
 	}
 }
 

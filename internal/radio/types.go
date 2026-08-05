@@ -35,6 +35,20 @@ const (
 	ModeDV  // D-STAR digital voice; IC-9700, IC-905
 	ModeDD  // D-STAR digital data; IC-9700 (1200 MHz), IC-905
 	ModeATV // analogue television; IC-905 only
+
+	// Yaesu's C4FM. Three values rather than one because two radios put the
+	// same distinction in two different places. The FTX-1 has DN and VW as
+	// genuine mode codes. The FT-991A has one C4FM mode and chooses the
+	// sub-mode with a persistent menu item (EX 090, AMS TX MODE) that is
+	// orthogonal to the operating mode, much as Kenwood's DA is orthogonal to
+	// MD — and which remoses does not read, because writing EX would alter the
+	// operator's saved configuration and reading it alone buys nothing. So
+	// ModeC4FM means "C4FM, sub-mode not expressed as a mode". Folding it into
+	// DN would report a menu setting remoses has never seen, and encoding it
+	// back would write a mode the radio does not have.
+	ModeC4FM   // FT-991A
+	ModeC4FMDN // FTX-1, digital narrow
+	ModeC4FMVW // FTX-1, voice wide
 )
 
 var modeNames = map[Mode]string{
@@ -52,6 +66,9 @@ var modeNames = map[Mode]string{
 	ModeDV:      "DV",
 	ModeDD:      "DD",
 	ModeATV:     "ATV",
+	ModeC4FM:    "C4FM",
+	ModeC4FMDN:  "C4FM-DN",
+	ModeC4FMVW:  "C4FM-VW",
 }
 
 func (m Mode) String() string {
@@ -91,6 +108,12 @@ func ParseMode(s string) (Mode, error) {
 		return ModeDD, nil
 	case "ATV":
 		return ModeATV, nil
+	case "C4FM":
+		return ModeC4FM, nil
+	case "C4FM-DN", "C4FMDN":
+		return ModeC4FMDN, nil
+	case "C4FM-VW", "C4FMVW":
+		return ModeC4FMVW, nil
 	}
 	return ModeUnknown, fmt.Errorf("radio: unknown mode %q", s)
 }

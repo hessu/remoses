@@ -46,6 +46,10 @@ const (
 	// reverts to off at rig power-down rather than permanently altering the
 	// operator's settings.
 	DefaultKenwoodAutoInformation = 2
+
+	// DefaultYaesuAutoInformation enables AI1 for the same reason, Yaesu
+	// spelling it 0/1 where Kenwood has 0/2/4.
+	DefaultYaesuAutoInformation = true
 )
 
 // applyDefaults fills unset fields. p tells it which zero values were written
@@ -160,6 +164,13 @@ func applyRadioDefaults(r *Radio, p presenceRadio) {
 		}
 		if p.Kenwood == nil || p.Kenwood.BulkPoll == nil {
 			r.Kenwood.BulkPoll = true
+		}
+	case BackendYaesu:
+		if r.Yaesu == nil {
+			r.Yaesu = &Yaesu{}
+		}
+		if p.Yaesu == nil || p.Yaesu.AutoInformation == nil {
+			r.Yaesu.AutoInformation = DefaultYaesuAutoInformation
 		}
 	}
 }

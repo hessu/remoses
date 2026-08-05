@@ -83,8 +83,8 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name:    "unknown backend",
-			mutate:  func(c *Config) { c.Radios[0].Backend = "yaesu" },
-			wantErr: `radio "rig1": unknown backend "yaesu", want one of civ, kenwood, rigctld`,
+			mutate:  func(c *Config) { c.Radios[0].Backend = "elecraft" },
+			wantErr: `radio "rig1": unknown backend "elecraft", want one of civ, kenwood, yaesu, rigctld`,
 		},
 		{
 			name: "civ without a port",
@@ -164,6 +164,40 @@ func TestValidate(t *testing.T) {
 				c.Radios[0].Backend = BackendKenwood
 				c.Radios[0].Kenwood = &Kenwood{Model: "ts990s", AutoInformation: 2}
 			},
+		},
+		{
+			name: "unknown yaesu model",
+			mutate: func(c *Config) {
+				c.Radios[0].Backend = BackendYaesu
+				c.Radios[0].Yaesu = &Yaesu{Model: "ft-857"}
+			},
+			wantErr: `yaesu.model "ft-857", want one of generic, ft-710, ft-891, ft-950, ft-991a, ` +
+				`ftdx10, ftdx101d, ftdx101mp, ftdx1200, ftdx3000, ftdx5000, ftdx9000, ftx-1`,
+		},
+		{
+			// Yaesu is not consistent about hyphens in its own product names —
+			// FT-991A but FTDX10 — so either spelling has to work.
+			name: "yaesu model as it is printed on the radio",
+			mutate: func(c *Config) {
+				c.Radios[0].Backend = BackendYaesu
+				c.Radios[0].Yaesu = &Yaesu{Model: "FT-991A"}
+			},
+		},
+		{
+			name: "yaesu model without the hyphen",
+			mutate: func(c *Config) {
+				c.Radios[0].Backend = BackendYaesu
+				c.Radios[0].Yaesu = &Yaesu{Model: "FTDX-10"}
+			},
+		},
+		{
+			name: "yaesu without a port",
+			mutate: func(c *Config) {
+				c.Radios[0].Backend = BackendYaesu
+				c.Radios[0].Yaesu = &Yaesu{Model: "ft-710"}
+				c.Radios[0].Port.Device = ""
+			},
+			wantErr: `radio "rig1": port needs device, match (vid/pid/serial), or tcp`,
 		},
 		{
 			name: "rigctld without an address",

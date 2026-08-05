@@ -79,6 +79,33 @@ radios:
 	}
 }
 
+func TestApplyDefaultsYaesu(t *testing.T) {
+	c, err := Parse([]byte(`
+auth: { users: [{username: op, password_bcrypt: "` + testHash + `"}] }
+radios:
+  - id: rig1
+    backend: yaesu
+    port: { device: /dev/ttyUSB0 }
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	r := c.Radio("rig1")
+	if r.Yaesu == nil {
+		t.Fatal("yaesu block not materialised")
+	}
+	if !r.Yaesu.AutoInformation {
+		t.Error("auto_information = false, want true")
+	}
+	// An unnamed model is legal: the backend falls back to its generic profile.
+	if r.Yaesu.Model != "" {
+		t.Errorf("model = %q, want empty", r.Yaesu.Model)
+	}
+	if r.CIV != nil || r.Kenwood != nil {
+		t.Error("yaesu radio got another backend's block")
+	}
+}
+
 func TestApplyDefaultsRigctldLeavesSerialAlone(t *testing.T) {
 	c, err := Parse([]byte(`
 auth: { users: [{username: op, password_bcrypt: "` + testHash + `"}] }
@@ -115,6 +142,10 @@ radios:
     backend: kenwood
     port: { device: COM7 }
     kenwood: { auto_information: 0, bulk_poll: false }
+  - id: yaesu
+    backend: yaesu
+    port: { device: /dev/ttyUSB1 }
+    yaesu: { auto_information: false }
 `))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -144,6 +175,10 @@ radios:
 	}
 	if kw.Kenwood.BulkPoll {
 		t.Error("bulk_poll = true, want false")
+	}
+
+	if y := c.Radio("yaesu"); y.Yaesu.AutoInformation {
+		t.Error("yaesu.auto_information = true, want false")
 	}
 }
 

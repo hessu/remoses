@@ -72,6 +72,7 @@ type presenceLock struct {
 type presenceRadio struct {
 	CIV     *presenceCIV     `yaml:"civ"`
 	Kenwood *presenceKenwood `yaml:"kenwood"`
+	Yaesu   *presenceYaesu   `yaml:"yaesu"`
 	Limits  presenceLimits   `yaml:"limits"`
 }
 
@@ -84,6 +85,10 @@ type presenceCIV struct {
 type presenceKenwood struct {
 	AutoInformation *int  `yaml:"auto_information"`
 	BulkPoll        *bool `yaml:"bulk_poll"`
+}
+
+type presenceYaesu struct {
+	AutoInformation *bool `yaml:"auto_information"`
 }
 
 type presenceLimits struct {

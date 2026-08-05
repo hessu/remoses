@@ -37,6 +37,7 @@ import (
 	// Backends register themselves.
 	_ "github.com/hessu/remoses/internal/rig/backend/civ"
 	_ "github.com/hessu/remoses/internal/rig/backend/kenwood"
+	_ "github.com/hessu/remoses/internal/rig/backend/yaesu"
 )
 
 // version is stamped at build time by the Makefile

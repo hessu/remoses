@@ -343,13 +343,64 @@ type SubReceiver interface { … }             // IC-7610 dual RX
 type Tuner       interface { … }
 ```
 
+### Rule: the operator's radio is not ours to reconfigure
+
+**remoses never writes a radio's persistent configuration in order to do its job.** If a
+setting survives power-off, remoses may read it but must not set it.
+
+The reason is that the alternative is invisible. A menu item written to make one command work
+stays written after remoses disconnects, after the rig is power-cycled, and after the operator
+goes back to using the radio by hand. They did not ask for the change, were not told about it,
+and will find it much later as unexplained behaviour. Nothing remoses gains is worth that.
+
+The test is one question: **would this still be changed after remoses is gone?** If yes, do not
+write it. This has decided the same question independently on three manufacturers:
+
+| Where | What remoses declines to write | What it costs |
+|---|---|---|
+| Icom `1A 05` | CI-V Transceive (Set-mode item `0112`) | Icoms are poll-only unless the operator enables Transceive in the menu; Kenwood gets push updates free |
+| Yaesu `KM` | Keyer memories 1–5 | No CAT CW at all on any Yaesu — sending arbitrary text would mean overwriting the operator's stored macros, so `serial_key` is the only option |
+| Yaesu `EX` | Menu items, e.g. 090 AMS TX MODE | On an FT-991A remoses can see the radio is in C4FM but not which sub-mode it will transmit in |
+
+The rule is about *persistence*, not about writing generally — remoses sets frequency, mode and
+power all day. A setting that reverts on its own is fine, and that distinction is why the
+Kenwood backend defaults to `AI2` (auto-information, self-clears at rig power-down) rather than
+the otherwise-identical `AI4` ("with backup", which persists).
+
+Where the rule costs a capability, say so in the configuration and the docs rather than working
+around it quietly: the operator can always enable the menu item themselves, and then remoses
+picks up the benefit with no code change.
+
+**The rule binds backends not yet written.** The table above is what it has cost so far, not a
+list of the commands it applies to. Every manufacturer has its own way of writing the saved
+configuration — the Elecraft and Flex backends, when they are built, will have theirs — so part
+of researching a new protocol is identifying which of its commands persist, before any code
+sends them. Three manufacturers have now produced three differently-spelled versions of the
+same trap; assume the fourth has one too and go looking for it.
+
 ### 5.1 Backends
 
 | Backend | Covers | Notes |
 |---|---|---|
 | `civ` | All Icom | Binary `FE FE <to> <from> cmd [sub] [data] FD`; BCD frequencies |
-| `kenwood` | Kenwood, Elecraft, modern Yaesu, Flex CAT | ASCII, `;`-terminated; per-model quirk table |
+| `kenwood` | Kenwood | ASCII, `;`-terminated; per-model quirk table |
+| `yaesu` | Yaesu | Same framing as `kenwood`, different fields throughout — see §5.6 |
 | `rigctld` | Everything Hamlib supports | Pure-Go TCP client; optionally spawns `rigctld` as a child process and supervises it |
+
+> **Elecraft and Flex are not covered by any of these**, whatever their similarity to Kenwood's
+> dialect suggests. An earlier draft of this table claimed `kenwood` covered "Elecraft, modern
+> Yaesu, Flex"; the Yaesu third of that turned out to be false in the worst way — `TX;` *keys* a
+> Kenwood and *reads* on a Yaesu (§5.6) — so the remaining two are unverified assertions, not
+> facts, and are removed rather than left to be planned against. Either may well fit once its
+> documentation has been read. That reading is the work, and the rule above is part of it.
+
+Yaesu is **not** a `kenwood` model, despite the shared framing. The two dialects agree on two
+ASCII letters, a `;` and the rule that a set command is answered by silence, and disagree about
+almost every field above that — including two command letters that mean *different things*.
+`TX;` keys a Kenwood and is the PTT *read* on a Yaesu; `KY` streams text on a Kenwood and plays
+a stored keyer memory on a Yaesu. That is the same class of difference §5.4 records for the
+IC-718's `1C 01`, and putting it behind a config string would make `SetPTT` — the one method
+where being wrong keys a transmitter — a runtime branch.
 
 ### 5.2 Protocol reference
 
@@ -393,10 +444,9 @@ Three consequences of the above that shaped the implementation:
   observable only through AI push frames. Acceptable for a CW-focused v1, but it is a gap
   rather than a bug, and it argues for keeping `AI2` on.
 - **Icom Transceive must be enabled in the IC-7610's menu.** It is reachable over CAT via
-  `1A 05 0112`, but `1A 05` writes the operator's *persistent* Set-mode configuration, which
-  survives power-off. remoses will not permanently reconfigure somebody's radio as a side
-  effect of connecting, so it only reads. Without it the Icom is poll-only while the Kenwood
-  gets free push updates.
+  `1A 05 0112`, but `1A 05` writes the operator's persistent Set-mode configuration — see the
+  rule at the head of this section. remoses only reads it, so the Icom is poll-only while the
+  Kenwood gets free push updates.
 - **`FW` is also wrong for FM**, not just SSB and AM: there it selects modulation degree
   (`0000` normal / `0001` narrow), which would otherwise land in state as a 0 Hz passband.
 
@@ -597,6 +647,185 @@ thing that does not vary.
   every write means the operator still sees what the rig actually took.
 - The TS-480 is profiled at 100 W. The 200 W TS-480HX answers the same `ID020`, so an HX would
   be capped at half its output until the profile learns to tell them apart.
+
+### 5.6 Yaesu models
+
+Transcribed from each radio's own CAT Operation Reference Manual — twelve radios, twelve
+manuals, read field by field for the wire formats below.
+
+The models split into **two generations**, and the split is a wire format rather than a feature
+list: `FA`/`FB` are **nine** digits on the FTdx101 generation and **eight** on the FT-950
+generation, and the `IF` answer is a byte shorter to match, because the frequency field is
+where the byte goes.
+
+| `yaesu.model` | `ID;` | `FA` | `FA` range | `IF` | Modes beyond the common set | `SH` form | `PC` |
+|---|---|---|---|---|---|---|---|
+| `ft-950` | `0310` | **8** | 30 kHz – 56 MHz | **27** | **none** (no `E`) | `SH0<nn>;` | 100 W |
+| `ftdx5000` | `0362` | **8** | 30 kHz – 60 MHz | **27** | **none** (no `E`) | `SH<s><nn>;` | **`000`–`255` index** |
+| `ftdx3000` | `0462` | **8** | 30 kHz – 60 MHz | **27** | **none** (no `E`) | `SH0<nn>;` | 100 W |
+| `ftdx1200` | `0582`/`0583` | **8** | 30 kHz – 56 MHz | **27** | **none** (no `A`, no `D`, no `E`) | `SH0<nn>;` | 100 W |
+| `ftdx9000` | **none** | **8** | 30 kHz – 60 MHz | **27** | **none** (no `D`, no `E`) | **not a width** | **`000`–`255` index** |
+| `ft-891` | `0650` | 9 | 30 kHz – 56 MHz | 28 | **none** (no `A`, no `E`) | `SH0<n><nn>;` — **narrow flag** | 100 W |
+| `ft-991a` | `0670` | 9 | 30 kHz – 470 MHz | 28 | **C4FM (`E`)**, no PSK | `SH0<nn>;` — **6 bytes** | 100 W |
+| `ftdx101d` | `0681` | 9 | 30 kHz – 75 MHz | 28 | PSK (`E`) | `SH<s>0<nn>;` | 100 W |
+| `ftdx101mp` | `0682` | 9 | 30 kHz – 75 MHz | 28 | PSK (`E`) | `SH<s>0<nn>;` | **200 W** |
+| `ftdx10` | `0761` | 9 | 30 kHz – 75 MHz | 28 | PSK (`E`) | `SH00<nn>;` | 100 W |
+| `ft-710` | `0800` | 9 | 30 kHz – 75 MHz | 28 | PSK (`E`) | `SH00<nn>;` | 100 W |
+| `ftx-1` | `0840` | 9 | 30 kHz – 470 MHz | **30** | PSK (`E`), **C4FM-DN (`H`), C4FM-VW (`I`)** | `SH<s>0<nn>;` | 10 W / **100 W with SPA-1** |
+| `generic` | — | 9 | 30 kHz – 470 MHz | 28 | PSK (`E`) | `SH00<nn>;` | 100 W |
+
+The `IF` column is the answer length **including** the terminator, as the manuals count it.
+
+Common to all twelve: `MD<sel><code>;` with DATA folded into the code, `SM0;` → three digits on
+a **255** scale, `TX;` read / `TX1;` key / `TX0;` unkey, and **no documented error response of
+any kind**. `AI1;` for push updates is common to eleven — see the FTdx9000 below.
+
+**Mode code `E` is the reason the code table is per model.** It is PSK on five radios, C4FM on
+the FT-991A, and does not exist at all on the FT-891 or on any radio of the FT-950 generation —
+so decoding an FT-991A with the family table would report a rig sitting in C4FM as PSK, the
+IC-910H failure in §5.4 on a different manufacturer. `Model.Codes` is the whole table, per
+radio, and nothing in the backend falls back to a family default. The older manuals also
+*rename* three codes without changing them: `8`, `C` and `A` are printed PKT-L, PKT-U and
+PKT-FM where the newer ones say DATA-L, DATA-U and DATA-FM. Same codes, same meaning, same
+`radio.Mode` with the DATA flag.
+
+Which codes each radio has is not a monotone function of age. The FT-950 and FTdx3000 carry the
+full twelve plus `A`; the newer FTdx1200 prints `A` as `----`, explicitly unused, and has no
+`D` either; the FTdx5000 and FTdx9000 have `A` but no `D`. `D` is AM-N, which decodes to plain
+AM where it exists, so its absence only means an AM-N frame reports nothing rather than AM —
+`encodeMode` always picks `5` for AM.
+
+**What no Yaesu here can do:**
+
+- **Send arbitrary CW over CAT.** Not one model has a streaming buffer. `KY` plays a stored
+  keyer memory and the text lives in `KM`, which is the operator's own saved messages, holds 50
+  characters, and cannot be asked how far playback has got. remoses **never writes `KM`** — the
+  same line §5.4 draws at Icom Transceive — so it reports `cw_method: none`, does not implement
+  `MorseSender` at all, and names `serial_key` as the fix. Every one of these radios has a
+  `PC KEYING` menu item offering RTS or DTR, so the fallback is first-class.
+- **Report PTT in the bulk poll.** There is no TX/RX flag anywhere in a Yaesu `IF`; Kenwood's P8
+  is Yaesu's CTCSS field. The fast poll is `IF;` + `TX;` + `SM0;`, three transactions. In
+  exchange `IF;` answers in *every* mode, so none of the Kenwood backend's data-mode fallback
+  machinery has an analogue, and `TX;` has a read form, which Kenwood's has not.
+- **Fail fast.** No manual documents an error, NAK or busy response, so there is no `errorKeys`
+  equivalent: a refused command answers with silence and costs a full session timeout. The
+  backend therefore range-checks frequency and power itself, never sends speculatively, and
+  records which commands a model lacks in its profile instead of probing for them.
+- **Select an IF filter.** No `FL` equivalent exists; `FilterSlots` is 0. The FT-950 generation
+  does have an `RF` roofing-filter command, but its parameter mixes `AUTO` with fixed widths and
+  is not the numbered bank of IF filters `FilterSlots` describes, so remoses does not model it.
+
+**Three models change the wire, not just the table.** The FTX-1's `IF` is 30 bytes because its
+memory-channel field is five characters rather than three, shifting every field after it by two.
+The whole FT-950 generation's is 27 because its frequency field is eight digits rather than
+nine, shifting every field after it back by one — the FTdx9000's own manual numbers the
+parameters differently again (it splits the clarifier in two, so its mode is P7 rather than P6)
+without moving a single byte. Decoding dispatches on the length that arrived, so a misconfigured
+station still reads correctly; encoding takes the width from the model. The FTX-1's `PC` also
+carries a head selector — `1` the field head (10 W), `2` the SPA-1 amplifier (100 W) — which
+makes the power ceiling a property of what is plugged in, refined from the first `PC;` answer.
+
+**`PC` is not always watts.** On the FTdx5000 and FTdx9000 the manuals give the same three
+digits as `000`–`255` where every other model gives a watt range, in the same manuals that give
+`MG`, `PL`, `SQ` and `RG` as `000`–`255` too — this is those radios' level scale, not a typo. An
+independent implementation splits the family the same way, giving the FT-950, FTdx1200 and
+FTdx3000 a 5–100 scale and those two the 0–255 one, which is worth having because it is the kind
+of thing a manual gets wrong in isolation and two sources do not.
+
+Nothing calibrates the index against an output. The same implementation does convert it for
+display, by multiplying a 0–1 fraction by a nameplate figure — 200 W for the FTdx5000, 200 W for
+the FTdx9000D and Contest, **400 W for the FTdx9000MP** — and that last figure is exactly why
+remoses will not: the FTdx9000 spans two ratings, it has no `ID` command, and so nothing on the
+wire says which one is on the desk. A watt reading would be right for some owners and half or
+double for others. So remoses reports `power_watt_accurate: false`, leaves `max_power_w` unset
+rather than publishing a rating, and **refuses a request in watts** on those two — the same
+treatment the `civ` backend gives Icom's `14 0A`.
+
+**`SH` is a table index, not a width in Hz**, and the index's meaning depends on the mode and —
+on the FT-891, the FT-991A and the whole FT-950 generation — on the separate `NA` narrow
+setting. remoses snaps a requested width onto the model's ladder the way it already does for
+Kenwood `FW`: the closest rung at or below, clamped to the ends. In AM and FM it publishes and
+sets nothing, because the older tables have no column there and the newer ones hold one fixed
+value per *mode code*, a distinction `radio.Mode` does not carry. Six distinct ladders are
+needed for twelve radios; the FTdx1200 and FTdx3000 share one to the digit, and the FTdx5000's
+differs from theirs in three places, one of which is an index its manual prints `- - - -` and
+defines for no width at all.
+
+**The FTdx9000 is missing four things the rest of the family has**, and they are capability gaps
+worth stating plainly rather than implementation gaps:
+
+- **No `ID`.** Its command list has no row for it, so there is no identity cross-check to make
+  on that radio at all. remoses does not send it: on a protocol with no error response an
+  unimplemented command answers with silence, so asking would burn the session's full
+  per-command timeout and then fail the connect. `FA;` is its link check instead.
+- **No `AI`.** It can never push a change, so it is **permanently poll-only** — a front-panel
+  knob movement is invisible until the next poll tick. This is the FTdx10's USB-only `AI`
+  restriction made absolute.
+- **No `NA`.** Nothing is lost, because it also has no bandwidth table for `NA` to choose a
+  column of.
+- **`SH` is not a bandwidth.** Its parameter is the position of the WIDTH knob — `00` fully
+  anticlockwise to `31` fully clockwise, `16` centred — and no table in the manual converts that
+  to Hz. `filter_width` is false there and `SetFilterWidth` refuses, rather than sending a number
+  that would move the knob to an arbitrary place.
+
+Its `TX` answer also has a fourth value the others lack, `3`, for keyed at the rig and by CAT at
+once. It decodes as transmitting, like `1` and `2`.
+
+**Assumptions worth revisiting on hardware:**
+
+- **The FT-891's manual does not say which of `1` and `2` is LSB.** It labels both "SSB" and
+  defers to a BFO menu item. remoses reads `1` as LSB by consistency with every other model and
+  with the pairing structure (`3`/`7` CW, `6`/`9` RTTY, `8`/`C` DATA), but it is an inference.
+- **DATA is grouped with CW/RTTY/PSK in the `SH` table.** The FT-710 and FTX-1 tables say so
+  outright; the FT-991A, FT-891 and the FT-950 generation name no DATA column at all. The
+  FTdx5000 is the one that comes closest to confirming it: its table has separate RTTY and PSK
+  columns, and they are identical.
+- The watt unit for `PC` is inferred on the models that use one. No manual states it, but the
+  200 W FTdx101MP's range stops at 200 where the 100 W FTdx101D's stops at 100, and the FTX-1's
+  table annotates both of its ranges "(W)".
+- **`FB` is taken as eight digits on the FT-950 generation, against what two manuals draw.** The
+  FT-950's and FTdx1200's `FB` tables lay out eleven parameter digits where their own `FA`
+  tables lay out eight — in the same manual, for a parameter both give the identical range
+  (`…-56000000`, which needs eight). The FTdx3000's manual repeats the same eleven, and the
+  FTdx5000's and FTdx9000's draw eight for both. Eight is the only self-consistent reading and
+  is what remoses sends, but the drawing is what it is and this wants confirming on hardware.
+- **The FTdx9000's `TX` read is spelled `TM;` in its manual.** That is the only place the
+  spelling appears; there is no `TM` row in its command list, and its own answer to the read is
+  a `TX` frame. remoses sends `TX;`, as on every other model. If the manual is literal rather
+  than mistaken, PTT on that radio would read as a timeout — which is visible and safe, where
+  the reverse mistake would not be.
+- **A cross-check of another implementation disagrees about the FTdx9000's `ID` and `AI`.** A
+  widely used third-party control library marks both as present on that radio and even records
+  three ID numbers for its variants, while the manual's command list has no row for either.
+  Its evidence is weaker than it looks, though, because on that radio neither claim is ever
+  exercised: it sends `ID;` at open with a 100 ms timeout and *discards the result*, and it
+  turns `AI` **off** at open and back on at close rather than using it, so a radio that answers
+  neither would look identical. The same table does record per-model absences where somebody
+  found one — `NA` is marked missing for that radio and no other — which is consistent with
+  these two being the gaps that never announce themselves.
+
+  Not sending them is the asymmetric choice regardless: if the radio does have them, remoses
+  loses only the cross-check and the push updates; if it does not, `ID;` would answer with
+  silence and fail every connect. The manual is the primary source here and this is an inference
+  from it, not a transcribed fact.
+- **On the FT-991A remoses can see C4FM but not which sub-mode will transmit.** DN versus VW is
+  `EX` menu item 090 there, a persistent setting orthogonal to the mode, and remoses does not
+  write `EX` for the same reason it does not write `KM`. On the FTX-1 the sub-mode *is* the mode
+  code, so it is visible.
+- **The FTdx10's `AI` works only over its USB CAT port.** Its manual says so and no other does,
+  which matters for a rig reached through the RS-232C jack or a serial-to-TCP bridge: that
+  station is poll-only.
+- **The FT-891 does not push `FA`/`FB`.** Its command list marks them AI = `X` where every other
+  model marks them `O`. `IF` is pushed there, and the fast poll reads `IF;` regardless, so this
+  costs nothing today.
+- **The FT-950's `SH` documentation contradicts its own bandwidth table.** The command row gives
+  the parameter as `00`–`13`; the table below it runs to `20`, and indices 14 to 20 are the only
+  way to reach 2450–3000 Hz in wide SSB. remoses uses the table. If the command row is right,
+  those seven requests would answer with silence and cost a timeout — which is why the row is
+  recorded here rather than quietly discarded.
+- **The FTdx1200's two ID numbers are recorded as equals.** `0582` means the optional FFT-1 unit
+  is fitted and `0583` means it is not, so both match the same profile and neither warns. remoses
+  does not act on the difference: nothing it controls depends on the FFT-1.
 
 ---
 

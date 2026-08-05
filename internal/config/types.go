@@ -88,6 +88,7 @@ type Radio struct {
 	Port    Port     `yaml:"port"`
 	CIV     *CIV     `yaml:"civ"`
 	Kenwood *Kenwood `yaml:"kenwood"`
+	Yaesu   *Yaesu   `yaml:"yaesu"`
 	Rigctld *Rigctld `yaml:"rigctld"`
 
 	Poll   Poll   `yaml:"poll"`
@@ -150,7 +151,12 @@ type CIV struct {
 	Transceive bool `yaml:"transceive"`
 }
 
-// Kenwood configures the Kenwood/Elecraft/modern-Yaesu ASCII CAT backend.
+// Kenwood configures the Kenwood/Elecraft ASCII CAT backend.
+//
+// Yaesu is not one of them, despite sharing the framing. Its FA field is two
+// digits shorter, its mode command takes a receiver selector, its IF answer has
+// a different layout and no TX/RX flag at all, and TX; — which keys a Kenwood —
+// is the PTT *read* on a Yaesu. See the yaesu backend.
 type Kenwood struct {
 	Model string `yaml:"model"` // ts590s | ts590sg | ...
 	// AutoInformation: 0 off, 2 on (self-clears at rig power-off), 4 on with
@@ -160,6 +166,21 @@ type Kenwood struct {
 	// TX/RX, mode and split — instead of four separate queries. IF; does not
 	// answer in Data mode, so the poller falls back automatically.
 	BulkPoll bool `yaml:"bulk_poll"`
+}
+
+// Yaesu configures the Yaesu ASCII CAT backend.
+type Yaesu struct {
+	// Model names the radio, and it matters more here than on any other
+	// backend: the mode-code tables are per model rather than per family. The
+	// code E is PSK on an FT-710 and C4FM on an FT-991A, so the wrong name
+	// reports the wrong mode instead of failing. The FTX-1 also has a wider IF
+	// answer and a power command with a head selector.
+	Model string `yaml:"model"`
+	// AutoInformation enables AI1, the rig's push updates. Yaesu has no AI2:
+	// the parameter is 0 or 1 only. Like Kenwood's AI2 it reverts to off when
+	// the rig is switched off, so it does not permanently alter the operator's
+	// settings. On the FTdx10 it works only over the USB CAT port.
+	AutoInformation bool `yaml:"auto_information"`
 }
 
 // Rigctld configures the Hamlib escape-hatch backend.
