@@ -1,6 +1,7 @@
 package civ
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hessu/remoses/internal/radio"
@@ -64,40 +65,45 @@ func TestSupportsDataMode(t *testing.T) {
 }
 
 func TestKeyerSpeedMapping(t *testing.T) {
-	// The endpoints are what the reference states; everything between them is
-	// the documented linear assumption.
-	if got := wpmFromNative(0); got != minWPM {
-		t.Errorf("wpmFromNative(0) = %d, want %d", got, minWPM)
-	}
-	if got := wpmFromNative(levelMax); got != maxWPM {
-		t.Errorf("wpmFromNative(255) = %d, want %d", got, maxWPM)
-	}
-	if got := nativeFromWPM(minWPM); got != 0 {
-		t.Errorf("nativeFromWPM(6) = %d, want 0", got)
-	}
-	if got := nativeFromWPM(maxWPM); got != levelMax {
-		t.Errorf("nativeFromWPM(48) = %d, want %d", got, levelMax)
-	}
-	// Every speed the rig can be asked for must survive the round trip, or the
-	// value read back would fight the value set.
-	for wpm := minWPM; wpm <= maxWPM; wpm++ {
-		n := nativeFromWPM(wpm)
-		if n < 0 || n > levelMax {
-			t.Fatalf("nativeFromWPM(%d) = %d, out of range", wpm, n)
-		}
-		if got := wpmFromNative(n); got != wpm {
-			t.Errorf("round trip of %d wpm gave %d (native %d)", wpm, got, n)
-		}
-	}
-	// Out of range requests clamp rather than failing.
-	if got := nativeFromWPM(1); got != 0 {
-		t.Errorf("nativeFromWPM(1) = %d, want 0", got)
-	}
-	if got := nativeFromWPM(100); got != levelMax {
-		t.Errorf("nativeFromWPM(100) = %d, want %d", got, levelMax)
-	}
-	if got := wpmFromNative(1000); got != maxWPM {
-		t.Errorf("wpmFromNative(1000) = %d, want %d", got, maxWPM)
+	// The top of the range is per model: 48 wpm on most, 60 on the IC-718.
+	for _, maxWPM := range []int{defaultMaxWPM, 60} {
+		t.Run(fmt.Sprintf("max%dwpm", maxWPM), func(t *testing.T) {
+			// The endpoints are what each reference states; everything between
+			// them is the documented linear assumption.
+			if got := wpmFromNative(0, maxWPM); got != minWPM {
+				t.Errorf("wpmFromNative(0) = %d, want %d", got, minWPM)
+			}
+			if got := wpmFromNative(levelMax, maxWPM); got != maxWPM {
+				t.Errorf("wpmFromNative(255) = %d, want %d", got, maxWPM)
+			}
+			if got := nativeFromWPM(minWPM, maxWPM); got != 0 {
+				t.Errorf("nativeFromWPM(%d) = %d, want 0", minWPM, got)
+			}
+			if got := nativeFromWPM(maxWPM, maxWPM); got != levelMax {
+				t.Errorf("nativeFromWPM(%d) = %d, want %d", maxWPM, got, levelMax)
+			}
+			// Every speed the rig can be asked for must survive the round trip,
+			// or the value read back would fight the value set.
+			for wpm := minWPM; wpm <= maxWPM; wpm++ {
+				n := nativeFromWPM(wpm, maxWPM)
+				if n < 0 || n > levelMax {
+					t.Fatalf("nativeFromWPM(%d) = %d, out of range", wpm, n)
+				}
+				if got := wpmFromNative(n, maxWPM); got != wpm {
+					t.Errorf("round trip of %d wpm gave %d (native %d)", wpm, got, n)
+				}
+			}
+			// Out of range requests clamp rather than failing.
+			if got := nativeFromWPM(1, maxWPM); got != 0 {
+				t.Errorf("nativeFromWPM(1) = %d, want 0", got)
+			}
+			if got := nativeFromWPM(1000, maxWPM); got != levelMax {
+				t.Errorf("nativeFromWPM(1000) = %d, want %d", got, levelMax)
+			}
+			if got := wpmFromNative(1000, maxWPM); got != maxWPM {
+				t.Errorf("wpmFromNative(1000) = %d, want %d", got, maxWPM)
+			}
+		})
 	}
 }
 

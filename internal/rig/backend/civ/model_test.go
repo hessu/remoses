@@ -264,6 +264,103 @@ func TestIdentityProbeIsAdvisory(t *testing.T) {
 	}
 }
 
+// The IC-718 is the model that does not fit the family assumptions, so each of
+// its differences is pinned here. All four come from its own command table
+// (Advanced Manual section 5).
+func TestIC718Differences(t *testing.T) {
+	r, err := New(&config.Radio{CIV: &config.CIV{Model: "ic-718"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("PTT is 1C 01", func(t *testing.T) {
+		c := &captureConn{}
+		if err := r.SetPTT(t.Context(), c, true); err != nil {
+			t.Fatalf("SetPTT: %v", err)
+		}
+		// FE FE to from 1C <sub> <state> FD
+		if len(c.last) != 8 {
+			t.Fatalf("frame % X has unexpected length", c.last)
+		}
+		if c.last[4] != cmdTransceiver || c.last[5] != 0x01 || c.last[6] != 0x01 {
+			t.Errorf("SetPTT sent % X, want command 1C sub 01 data 01", c.last)
+		}
+	})
+
+	t.Run("decodes PTT from 1C 01", func(t *testing.T) {
+		frame := []byte{0xFE, 0xFE, r.ctrlAddr, r.rigAddr, cmdTransceiver, 0x01, 0x01, 0xFD}
+		u, err := r.Decode(frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Key != KeyPTT || u.Patch.PTT == nil || !*u.Patch.PTT {
+			t.Errorf("decode of % X gave key %q patch %+v", frame, u.Key, u.Patch)
+		}
+		// 1C 00 is not PTT on this radio and must not be read as it.
+		other := []byte{0xFE, 0xFE, r.ctrlAddr, r.rigAddr, cmdTransceiver, 0x00, 0x01, 0xFD}
+		if u, _ := r.Decode(other); u.Patch.PTT != nil {
+			t.Error("1C 00 decoded as PTT on an IC-718")
+		}
+	})
+
+	t.Run("no CAT CW", func(t *testing.T) {
+		if m := r.Caps().CWMethod; m != radio.CWNone {
+			t.Errorf("Caps.CWMethod = %q, want none", m)
+		}
+		if err := r.SendChunk(t.Context(), &captureConn{}, "CQ"); err == nil {
+			t.Error("SendChunk succeeded on a radio with no command 17")
+		}
+		if err := r.Abort(t.Context(), &captureConn{}); err == nil {
+			t.Error("Abort succeeded on a radio with no command 17")
+		}
+	})
+
+	t.Run("no filter width", func(t *testing.T) {
+		if r.Caps().FilterWidth {
+			t.Error("Caps.FilterWidth = true on a radio with no 1A 03")
+		}
+		if err := r.SetFilterWidth(t.Context(), &captureConn{}, 500); err == nil {
+			t.Error("SetFilterWidth succeeded on a radio with no 1A 03")
+		}
+	})
+
+	t.Run("keyer runs to 60 wpm", func(t *testing.T) {
+		if got := r.Caps().CWMaxWPM; got != 60 {
+			t.Errorf("Caps.CWMaxWPM = %d, want 60", got)
+		}
+	})
+
+	t.Run("no FM and no PSK", func(t *testing.T) {
+		caps := r.Caps()
+		for _, m := range []radio.Mode{radio.ModeFM, radio.ModePSK, radio.ModePSKR} {
+			if caps.SupportsMode(m) {
+				t.Errorf("IC-718 should not have mode %s", m)
+			}
+		}
+		if !caps.SupportsMode(radio.ModeCWR) {
+			t.Error("IC-718 should have CW-R")
+		}
+	})
+}
+
+// Every other supported model keys PTT on 1C 00; only the IC-718 differs. A
+// regression here would key the wrong command on a transmitter.
+func TestPTTSubCommandPerModel(t *testing.T) {
+	for _, name := range ModelNames() {
+		m, err := LookupModel(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := byte(0x00)
+		if name == "ic-718" {
+			want = 0x01
+		}
+		if m.PTTSub != want {
+			t.Errorf("%s PTT sub-command = 0x%02X, want 0x%02X", name, m.PTTSub, want)
+		}
+	}
+}
+
 func TestSetModeRejectsModesTheRadioLacks(t *testing.T) {
 	r, err := New(&config.Radio{CIV: &config.CIV{Model: "ic-9700"}})
 	if err != nil {

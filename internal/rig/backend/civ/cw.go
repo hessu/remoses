@@ -54,6 +54,9 @@ func (r *Rig) BufferFree(ctx context.Context, c backend.Conn) (free int, ok bool
 // not assert PTT here; whether to do so is a per-station option, because a
 // sequencer or amplifier may need the lead-in.
 func (r *Rig) SendChunk(ctx context.Context, c backend.Conn, text string) error {
+	if err := r.requireCWBuffer(); err != nil {
+		return err
+	}
 	if text == "" {
 		return fmt.Errorf("civ: empty CW chunk")
 	}
@@ -69,14 +72,32 @@ func (r *Rig) SendChunk(ctx context.Context, c backend.Conn, text string) error 
 // Abort stops the rig sending and discards what is still in its buffer
 // (command 17 with data FF).
 func (r *Rig) Abort(ctx context.Context, c backend.Conn) error {
+	if err := r.requireCWBuffer(); err != nil {
+		return err
+	}
 	return r.set(ctx, c, "CW abort", r.frame(cmdSendCW, 0xFF))
 }
 
+// requireCWBuffer refuses the CAT CW path on a radio without command 17.
+//
+// Caps already reports CWMethod none for such a radio and main declines to wire
+// a CAT sender to it, so this is a backstop rather than the primary check. It
+// exists because the alternative — sending 17 to an IC-718 — draws an NG per
+// chunk and looks to the operator like the message was sent.
+func (r *Rig) requireCWBuffer() error {
+	if !r.model.CWBuffer {
+		return fmt.Errorf("civ: %s has no CAT CW buffer (no command 17); "+
+			"use cw.method: serial_key to key a control line instead", r.model.Label)
+	}
+	return nil
+}
+
 // SetSpeed sets the keyer speed (command 14 0C). Out-of-range values clamp to
-// the rig's 6-48 wpm rather than erroring; the usable range is published in
-// radio.Caps so a client can present it honestly.
+// the model's range rather than erroring; the usable range is published in
+// radio.Caps so a client can present it honestly. The top differs per radio —
+// 60 wpm on the IC-718 against 48 on the rest.
 func (r *Rig) SetSpeed(ctx context.Context, c backend.Conn, wpm int) error {
-	v := encodeBCD2(nativeFromWPM(wpm))
+	v := encodeBCD2(nativeFromWPM(wpm, r.model.MaxWPM))
 	return r.set(ctx, c, "keyer speed", r.frame(cmdLevel, subKeyerSpeed, v[0], v[1]))
 }
 

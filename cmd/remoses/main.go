@@ -264,9 +264,18 @@ func attachCW(s *rig.Session, b backend.Rig, rc config.Radio, log *slog.Logger) 
 		return closeBoth(snd, port), nil
 
 	default: // "cat"
+		// Ask the capability, not the Go type. A backend type may implement
+		// MorseSender for the family while a particular radio in that family
+		// lacks the command — the IC-718 has no CI-V CW buffer at all — so the
+		// type assertion would succeed and every message would draw a rejection
+		// that looks, to the operator, like it was sent.
+		if m := b.Caps().CWMethod; m != radio.CWViaCAT {
+			return nil, fmt.Errorf("this radio has no CAT CW buffer (backend %q reports cw_method %q); "+
+				"use cw.method: serial_key to key a control line instead", rc.Backend, m)
+		}
 		ms, ok := b.(backend.MorseSender)
 		if !ok {
-			return nil, fmt.Errorf("backend %q has no CAT CW buffer; use method: serial_key", rc.Backend)
+			return nil, fmt.Errorf("backend %q does not implement CAT CW sending", rc.Backend)
 		}
 		// The session is the backend.Conn, so the sender survives reconnects
 		// without rewiring.

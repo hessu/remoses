@@ -29,7 +29,9 @@ var backends = []string{BackendCIV, BackendKenwood, BackendRigctld}
 // graph and asking the registry would be a cycle. The backend has a test that
 // fails if the two ever drift, which is the direction that can import both.
 var CIVModels = []string{
-	"generic", "ic-7300mk2", "ic-7610", "ic-7760", "ic-905", "ic-9700",
+	"generic",
+	"ic-718", "ic-7300", "ic-7300mk2", "ic-7600", "ic-7610", "ic-7700",
+	"ic-7760", "ic-905", "ic-9700",
 }
 
 // idRe keeps radio ids usable unescaped in a URL path and in a cookie name.

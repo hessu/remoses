@@ -143,7 +143,12 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		return u, nil
 
 	case cmdTransceiver:
-		if len(body) < 2 || body[0] != subPTT {
+		// The sub-command carrying transmitter status is per model: 0x00 on
+		// every radio here except the IC-718, whose table puts it on 0x01 and
+		// has no 0x00 row at all. Matching on the model's value rather than a
+		// constant also keeps 1C 01 on the other radios — where it is the
+		// antenna tuner — from being decoded as PTT.
+		if len(body) < 2 || body[0] != r.model.PTTSub {
 			return u, nil
 		}
 		if body[1] > 0x01 {

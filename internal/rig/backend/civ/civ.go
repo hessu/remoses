@@ -121,6 +121,13 @@ func validAddress(a int) bool { return a >= 0x01 && a <= 0xEF }
 // MaxPowerW is left unset rather than filled in with the model's nameplate
 // rating, which would invite clients to treat the index as watts.
 func (r *Rig) Caps() radio.Caps {
+	// A radio without command 17 has no CAT CW at all, so it advertises neither
+	// a method nor a charset: a client that offered a CW box for it would be
+	// promising something the hardware cannot do.
+	cwMethod, charset := radio.CWNone, ""
+	if r.model.CWBuffer {
+		cwMethod, charset = radio.CWViaCAT, Charset
+	}
 	return radio.Caps{
 		// Fresh slice per call: Caps is published through the API and a shared
 		// backing array would be one mutation away from a data race. The set
@@ -132,17 +139,19 @@ func (r *Rig) Caps() radio.Caps {
 		// 25/29 command family, which is deferred with backend.SubReceiver.
 		VFOs:              []radio.VFO{radio.VFOCurrent},
 		PowerWattAccurate: false,
-		FilterWidth:       true,
-		FilterSlots:       3,
+		FilterWidth:       r.model.FilterWidth,
+		FilterSlots:       filterSlots,
 		SMeterScale:       sMeterScale,
 		SubReceiver:       false,
-		// Capability, not configuration: the rig has a CAT CW buffer (command
-		// 17) whether or not this station is configured to use it. Choosing
-		// between cat and serial_key is the session's job.
-		CWMethod:  radio.CWViaCAT,
-		CWCharset: Charset,
+		// Capability, not configuration: a radio with command 17 has a CAT CW
+		// buffer whether or not this station is configured to use it, and one
+		// without it — the IC-718 — cannot send Morse over CAT at all, however
+		// the station is configured. Choosing between cat and serial_key is the
+		// session's job; reporting which are possible is this one's.
+		CWMethod:  cwMethod,
+		CWCharset: charset,
 		CWMinWPM:  minWPM,
-		CWMaxWPM:  maxWPM,
+		CWMaxWPM:  r.model.MaxWPM,
 	}
 }
 
@@ -167,7 +176,7 @@ func (r *Rig) Init(ctx context.Context, c backend.Conn) error {
 		request{KeyMode, r.frame(cmdReadMode)},
 		request{KeyPower, r.frame(cmdLevel, subRFPower)},
 		request{KeySMeter, r.frame(cmdMeter, subSMeter)},
-		request{KeyPTT, r.frame(cmdTransceiver, subPTT)},
+		request{KeyPTT, r.frame(cmdTransceiver, r.model.PTTSub)},
 	)
 }
 
@@ -225,14 +234,18 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		return r.readAll(ctx, c,
 			request{KeyFrequency, r.frame(cmdReadFreq)},
 			request{KeyMode, r.frame(cmdReadMode)},
-			request{KeyPTT, r.frame(cmdTransceiver, subPTT)},
+			request{KeyPTT, r.frame(cmdTransceiver, r.model.PTTSub)},
 			request{KeySMeter, r.frame(cmdMeter, subSMeter)},
 		)
 	case backend.PollSlow:
-		return r.readAll(ctx, c,
-			request{KeyPower, r.frame(cmdLevel, subRFPower)},
-			request{KeyFilterWidth, r.frame(cmdMisc, subFilterWidth)},
-		)
+		reqs := []request{{KeyPower, r.frame(cmdLevel, subRFPower)}}
+		// Asking a radio without 1A 03 would draw an NG every slow tick. The
+		// session tolerates that (a rig that refuses is still alive), but there
+		// is no reason to generate the noise.
+		if r.model.FilterWidth {
+			reqs = append(reqs, request{KeyFilterWidth, r.frame(cmdMisc, subFilterWidth)})
+		}
+		return r.readAll(ctx, c, reqs...)
 	default:
 		return fmt.Errorf("civ: unknown poll tier %d", tier)
 	}
@@ -383,7 +396,7 @@ func (r *Rig) SetPTT(ctx context.Context, c backend.Conn, on bool) error {
 	if on {
 		v = 0x01
 	}
-	return r.set(ctx, c, "PTT", r.frame(cmdTransceiver, subPTT, v))
+	return r.set(ctx, c, "PTT", r.frame(cmdTransceiver, r.model.PTTSub, v))
 }
 
 // SetFilterWidth sets the IF filter width (command 1A 03).
@@ -397,6 +410,9 @@ func (r *Rig) SetPTT(ctx context.Context, c backend.Conn, on bool) error {
 // Requests that fall between steps snap down, matching how the Kenwood backend
 // treats an off-step FW; and erring towards the narrower filter.
 func (r *Rig) SetFilterWidth(ctx context.Context, c backend.Conn, hz int) error {
+	if !r.model.FilterWidth {
+		return fmt.Errorf("civ: %s has no IF filter width command", r.model.Label)
+	}
 	u, err := r.read(ctx, c, KeyMode, r.frame(cmdReadMode))
 	if err != nil {
 		return err

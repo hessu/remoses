@@ -21,12 +21,14 @@ const (
 	filterSlots = 3
 )
 
-// Keyer speed range for command 14 0C. The endpoints are from the reference
-// ("0000 = 6 wpm ~ 0255 = 48 wpm"); the linear interpolation between them is
-// an assumption, since the guide tabulates only the two extremes.
+// Keyer speed range for command 14 0C. The bottom is 6 wpm on every Icom here;
+// the top is per model (Model.MaxWPM) because the IC-718 runs to 60 where the
+// rest stop at 48. The endpoints come from each radio's own table; the linear
+// interpolation between them is an assumption, since they tabulate only the two
+// extremes.
 const (
-	minWPM = 6
-	maxWPM = 48
+	minWPM        = 6
+	defaultMaxWPM = 48
 )
 
 // Mode bytes of commands 01/04/06. These are literal byte values, so PSK and
@@ -80,15 +82,16 @@ func supportsDataMode(m radio.Mode) bool {
 }
 
 // wpmFromNative converts a command 14 0C value to words per minute.
-func wpmFromNative(n int) int {
+func wpmFromNative(n, maxWPM int) int {
 	n = min(max(n, 0), levelMax)
 	return minWPM + (n*(maxWPM-minWPM)+levelMax/2)/levelMax
 }
 
 // nativeFromWPM converts words per minute to a command 14 0C value, clamping to
-// the rig's range rather than refusing: a request for 60 wpm is better served
-// as 48 than as an error, and the honest range is published in radio.Caps.
-func nativeFromWPM(wpm int) int {
+// the rig's range rather than refusing: a request for 60 wpm on a radio that
+// stops at 48 is better served as 48 than as an error, and the honest range is
+// published in radio.Caps.
+func nativeFromWPM(wpm, maxWPM int) int {
 	wpm = min(max(wpm, minWPM), maxWPM)
 	span := maxWPM - minWPM
 	return ((wpm-minWPM)*levelMax*2 + span) / (2 * span)

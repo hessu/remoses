@@ -446,29 +446,54 @@ direct Morse-table lookup for locally generated keying. Clients never learn a ri
 ### 5.4 Icom models
 
 CI-V is a family protocol. The opcodes and their encodings are shared, so one backend serves
-every Icom; what differs per model is the factory bus address, which operating modes exist,
-and — on one radio — the width of the frequency field. `civ.model` names the radio so remoses
-can publish honest capabilities and default the address correctly.
+every Icom; what differs per model is the factory bus address, which operating modes and
+commands exist, and — on one radio — the width of the frequency field. `civ.model` names the
+radio so remoses can publish honest capabilities, default the address correctly, and avoid
+sending commands the radio will only reject.
 
-Verified against each model's own CI-V reference guide:
+Verified against each model's own CI-V documentation — the standalone reference guides for
+the current models, and the control-command section of the instruction manual for the older
+four:
 
-| `civ.model` | Address | Modes beyond the common set | Frequency field |
-|---|---|---|---|
-| `ic-7610` | `0x98` | PSK, PSK-R | 5 bytes |
-| `ic-7300mk2` | `0xB6` | — | 5 bytes |
-| `ic-7760` | `0xB2` | PSK, PSK-R | 5 bytes |
-| `ic-9700` | `0xA2` | DV, DD | 5 bytes |
-| `ic-905` | `0xAC` | DV, DD, ATV | 5 bytes, **6 on the 10 GHz band** |
-| `generic` | none | — | 5 bytes |
+| `civ.model` | Address | Modes beyond the common set | CW buffer `17` | Filter `1A 03` | PTT | Keyer |
+|---|---|---|---|---|---|---|
+| `ic-718` | `0x5E` | **no FM**, no PSK | **absent** | **absent** | **`1C 01`** | 6–60 |
+| `ic-7300` | `0x94` | — | yes | yes | `1C 00` | 6–48 |
+| `ic-7300mk2` | `0xB6` | — | yes | yes | `1C 00` | 6–48 |
+| `ic-7600` | `0x7A` | PSK, PSK-R | yes | yes | `1C 00` | 6–48 |
+| `ic-7610` | `0x98` | PSK, PSK-R | yes | yes | `1C 00` | 6–48 |
+| `ic-7700` | `0x74` | PSK, PSK-R | yes | yes | `1C 00` | 6–48 |
+| `ic-7760` | `0xB2` | PSK, PSK-R | yes | yes | `1C 00` | 6–48 |
+| `ic-9700` | `0xA2` | DV, DD | yes | yes | `1C 00` | 6–48 |
+| `ic-905` | `0xAC` | DV, DD, ATV | yes | yes | `1C 00` | 6–48 |
+| `generic` | none | — | yes | yes | `1C 00` | 6–48 |
 
-The common set is LSB, USB, AM, CW, CW-R, FM, FSK (the rig calls it RTTY) and FSK-R.
+The common set is LSB, USB, AM, CW, CW-R, FM, FSK (the rig calls it RTTY) and FSK-R. The
+IC-905 additionally uses a **6-byte frequency field on its 10 GHz band**; everything else
+uses 5.
 
-Everything else remoses uses is identical across all five: `03`/`05` frequency, `04`/`06`
-mode, `14 0A` RF power, `15 02` S-meter, `1A 03` filter width, `1C 00` PTT, `17` send CW
-(30 characters), `19 00` read ID. Mode *codes* are shared too — `0x03` is CW on every Icom —
-so there is one code table and each model records only which subset it accepts. `generic` is
-the escape hatch for an Icom without a profile; it has no factory address, so `rig_address`
-must be given rather than guessed.
+Mode *codes* are shared — `0x03` is CW on every Icom — so there is one code table and each
+model records only which subset it accepts. `generic` is the escape hatch for an Icom without
+a profile; it has no factory address, so `rig_address` must be given rather than guessed.
+
+**The IC-718 is the reminder that the family is not uniform.** Most models are a table entry;
+it needs four real behaviours:
+
+- **PTT is `1C 01`, not `1C 00`.** Its command table has no `1C 00` row at all, and on the
+  other radios `1C 01` is the antenna tuner — so a constant here would key the wrong command
+  on a transmitter. The sub-command is per model on both the set and decode paths.
+- **No command `17`,** so no CW over CAT at all. It reports `cw_method: none`, and the daemon
+  refuses to start with `cw.method: cat` on it, naming `serial_key` as the fix. That check
+  asks the *capability*, not the Go type: the backend type implements `MorseSender` for the
+  family, so a type assertion would succeed and every message would draw a rejection that
+  looks to the operator like it was sent.
+- **No `1A 03`,** so no IF filter width. It is dropped from the slow poll rather than
+  generating a rejection every tick.
+- **Keyer runs to 60 wpm**, where the rest stop at 48.
+
+It also has a "CI-V 731 mode" (`1A 05 27`) that shortens the frequency field to four bytes.
+remoses never enables it, and since frequency decoding is length-driven a radio left in that
+mode is still read correctly.
 
 **The IC-905's frequency field is not fixed width.** Its reference specifies ten digits
 (5 bytes) on 5.6 GHz and below, and twelve (6 bytes) when the 10 GHz band is selected.
