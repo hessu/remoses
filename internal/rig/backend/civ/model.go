@@ -38,8 +38,16 @@ type Model struct {
 	// why config.CIV.RigAddress overrides it and why the address is not a
 	// reliable way to identify a model. See Rig.checkIdentity.
 	Address byte
-	// Modes are the operating modes this radio accepts.
+	// Modes are the operating modes this radio accepts, in display order.
 	Modes []radio.Mode
+	// Codes overrides the family mode-byte table. Almost every Icom shares it,
+	// but the IC-910H puts FM on 0x04 where the rest have RTTY, so the mapping
+	// cannot be assumed. nil means the family table.
+	Codes map[byte]radio.Mode
+	// FilterSlots is how many IF filter selections the mode command carries
+	// (FIL1..FIL3). Zero on radios whose mode command has no filter byte at
+	// all, where a trailing byte must not be read as a slot.
+	FilterSlots int
 
 	// PTTSub is the sub-command of 1C that carries transmitter status. It is
 	// 0x00 on every radio here except the IC-718, whose manual puts it on 0x01.
@@ -52,6 +60,11 @@ type Model struct {
 	CWBuffer bool
 	// FilterWidth is true when the radio implements command 1A 03.
 	FilterWidth bool
+	// DataMode is true when sub-command 06 of 1A is the data-mode setting.
+	// It is not universal and not merely absent elsewhere: on the IC-910H the
+	// same sub-command is RIT on/off, so sending it to a radio without a data
+	// mode would change something unrelated rather than draw a rejection.
+	DataMode bool
 	// MaxWPM is the top of the command 14 0C keyer range. The bottom is 6 wpm
 	// everywhere.
 	MaxWPM int
@@ -84,9 +97,11 @@ func modern(name, label string, addr byte, modes []radio.Mode) Model {
 		Label:       label,
 		Address:     addr,
 		Modes:       modes,
+		FilterSlots: 3,
 		PTTSub:      0x00,
 		CWBuffer:    true,
 		FilterWidth: true,
+		DataMode:    true,
 		MaxWPM:      48,
 	}
 }
@@ -102,7 +117,15 @@ var models = map[string]Model{
 	// generic is the escape hatch for an Icom remoses has no profile for. It
 	// claims the modes common to essentially every Icom and nothing more, and
 	// has no default address, so the configuration must give one.
-	"generic": modern("generic", "generic Icom", 0, modesCommon()),
+	//
+	// Data mode is deliberately off: on an unidentified radio, 1A 06 might be
+	// something else entirely — it is RIT on the IC-910H — and quietly changing
+	// an unrelated setting is worse than not offering the feature.
+	"generic": func() Model {
+		m := modern("generic", "generic Icom", 0, modesCommon())
+		m.DataMode = false
+		return m
+	}(),
 
 	"ic-7610": modern("ic-7610", "Icom IC-7610", 0x98,
 		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)),
@@ -135,6 +158,44 @@ var models = map[string]Model{
 	"ic-7700": modern("ic-7700", "Icom IC-7700", 0x74,
 		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)),
 
+	// The IC-7850 and IC-7851 are the same radio to CI-V and share an address.
+	"ic-7850": modern("ic-7850", "Icom IC-7850/7851", 0x8E,
+		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)),
+
+	// HF/VHF/UHF with D-STAR: DV instead of PSK, and no DD.
+	"ic-9100": modern("ic-9100", "Icom IC-9100", 0x7C,
+		withModes(modesCommon(), radio.ModeDV)),
+
+	// The IC-910H is the second outlier, and the only radio here that does not
+	// use the family mode-byte table. From its command table (section 13):
+	//
+	//   - Command 06 has just four modes, and FM is 04 — where every other
+	//     Icom here has RTTY. Decoding that with the family table would report
+	//     RTTY for a radio sitting in FM.
+	//   - The mode command carries no filter byte, so there are no FIL slots.
+	//   - No command 17 (the table jumps 16 to 19), so no CW over CAT.
+	//   - No 1A 03: its 1A sub-commands stop at 09.
+	//   - Command 14 0C runs 6-60 wpm, like the IC-718.
+	//
+	// PTT is the ordinary 1C 00 here, unlike the IC-718.
+	"ic-910h": {
+		Name:    "ic-910h",
+		Label:   "Icom IC-910H",
+		Address: 0x60,
+		Modes:   []radio.Mode{radio.ModeLSB, radio.ModeUSB, radio.ModeCW, radio.ModeFM},
+		Codes: map[byte]radio.Mode{
+			0x00: radio.ModeLSB,
+			0x01: radio.ModeUSB,
+			0x03: radio.ModeCW,
+			0x04: radio.ModeFM,
+		},
+		FilterSlots: 0,
+		PTTSub:      0x00,
+		CWBuffer:    false,
+		FilterWidth: false,
+		MaxWPM:      60,
+	},
+
 	// The IC-718 is the outlier, and every difference below is from its own
 	// command table (Advanced Manual section 5):
 	//
@@ -152,6 +213,7 @@ var models = map[string]Model{
 		Label:       "Icom IC-718",
 		Address:     0x5E,
 		Modes:       []radio.Mode{radio.ModeLSB, radio.ModeUSB, radio.ModeAM, radio.ModeCW, radio.ModeFSK, radio.ModeCWR, radio.ModeFSKR},
+		FilterSlots: 0, // its mode command carries no filter byte
 		PTTSub:      0x01,
 		CWBuffer:    false,
 		FilterWidth: false,

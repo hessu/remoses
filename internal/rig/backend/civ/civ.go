@@ -140,7 +140,7 @@ func (r *Rig) Caps() radio.Caps {
 		VFOs:              []radio.VFO{radio.VFOCurrent},
 		PowerWattAccurate: false,
 		FilterWidth:       r.model.FilterWidth,
-		FilterSlots:       filterSlots,
+		FilterSlots:       r.model.FilterSlots,
 		SMeterScale:       sMeterScale,
 		SubReceiver:       false,
 		// Capability, not configuration: a radio with command 17 has a CAT CW
@@ -327,18 +327,28 @@ func (r *Rig) SetFrequency(ctx context.Context, c backend.Conn, vfo radio.VFO, h
 // entered, which is what an operator expects from a mode change. Use
 // SetFilterSlot to pick a different one afterwards.
 func (r *Rig) SetMode(ctx context.Context, c backend.Conn, m radio.Mode, dataMode bool) error {
-	mb, ok := modeByte(m)
-	if !ok {
-		return fmt.Errorf("civ: mode %s has no CI-V code", m)
-	}
 	if !r.model.supportsMode(m) {
 		return fmt.Errorf("civ: %s does not have mode %s", r.model.Label, m)
+	}
+	mb, ok := r.model.modeByte(m)
+	if !ok {
+		return fmt.Errorf("civ: mode %s has no CI-V code on %s", m, r.model.Label)
+	}
+	if dataMode && !r.model.DataMode {
+		return fmt.Errorf("civ: %s has no data mode", r.model.Label)
 	}
 	if dataMode && !supportsDataMode(m) {
 		return fmt.Errorf("civ: data mode is not available in %s", m)
 	}
 	if err := r.set(ctx, c, "mode", r.frame(cmdSetMode, mb)); err != nil {
 		return err
+	}
+	if !r.model.DataMode {
+		// Sub-command 06 of 1A is not data mode everywhere: on the IC-910H it
+		// is RIT on/off, so sending "data mode off" after every mode change
+		// would quietly switch RIT off. Radios without a data mode never see
+		// the command at all.
+		return nil
 	}
 	if !supportsDataMode(m) {
 		// 1A 06 covers the SSB/AM/FM data modes only, so leave it alone in CW,
@@ -435,8 +445,10 @@ func (r *Rig) SetFilterWidth(ctx context.Context, c backend.Conn, hz int) error 
 // Command 1A 06 can also carry a filter byte, but it carries the data-mode
 // setting with it and is not valid in CW, which is this daemon's main use.
 func (r *Rig) SetFilterSlot(ctx context.Context, c backend.Conn, slot int) error {
-	if slot < 1 || slot > filterSlots {
-		return fmt.Errorf("civ: filter slot %d out of range (1-%d)", slot, filterSlots)
+	if n := r.model.FilterSlots; n == 0 {
+		return fmt.Errorf("civ: %s has no IF filter selection", r.model.Label)
+	} else if slot < 1 || slot > n {
+		return fmt.Errorf("civ: filter slot %d out of range (1-%d)", slot, n)
 	}
 	u, err := r.read(ctx, c, KeyMode, r.frame(cmdReadMode))
 	if err != nil {
@@ -445,7 +457,7 @@ func (r *Rig) SetFilterSlot(ctx context.Context, c backend.Conn, slot int) error
 	if u.Patch.Mode == nil {
 		return fmt.Errorf("civ: cannot set filter slot: the rig reported an unrecognised mode")
 	}
-	mb, ok := modeByte(*u.Patch.Mode)
+	mb, ok := r.model.modeByte(*u.Patch.Mode)
 	if !ok {
 		return fmt.Errorf("civ: cannot set filter slot: mode %s is not supported", *u.Patch.Mode)
 	}

@@ -64,7 +64,7 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		return u, nil
 
 	case cmdReadMode, cmdXcvMode:
-		decodeMode(&u.Patch, body)
+		r.decodeMode(&u.Patch, body)
 		if cmd == cmdReadMode && u.Patch.Mode != nil {
 			u.Key = KeyMode
 		}
@@ -120,8 +120,8 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		if len(body) < 1 {
 			return u, nil
 		}
-		switch body[0] {
-		case subFilterWidth:
+		switch {
+		case body[0] == subFilterWidth && r.model.FilterWidth:
 			// Deliberately opaque. The 1A 03 index means a different width in
 			// each mode family, and a decoder holds no state, so there is no
 			// way to know which table applies. State.PassbandHz is left alone
@@ -129,12 +129,16 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 			// to read the mode first, does the conversion in the other
 			// direction.
 			u.Key = KeyFilterWidth
-		case subDataMode:
+		// Guarded by the model for the same reason the setter is: 1A 06 is the
+		// data-mode setting on most of the family but RIT on the IC-910H, and
+		// decoding an RIT report as a data-mode change would put a wrong value
+		// into state rather than merely miss one.
+		case body[0] == subDataMode && r.model.DataMode:
 			if len(body) >= 2 {
 				u.Key = KeyDataMode
 				on := body[1] != 0x00
 				u.Patch.DataMode = &on
-				if len(body) >= 3 && body[2] >= 1 && body[2] <= filterSlots {
+				if n := r.model.FilterSlots; n > 0 && len(body) >= 3 && body[2] >= 1 && body[2] <= byte(n) {
 					slot := int(body[2])
 					u.Patch.FilterSlot = &slot
 				}
@@ -165,16 +169,18 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 // decodeMode fills in the mode and, when the rig included it, the filter slot.
 // The filter byte is optional in commands 01/04/06 and is absent when the rig
 // reports a mode it has no filter selection for.
-func decodeMode(p *radio.Patch, body []byte) {
+func (r *Rig) decodeMode(p *radio.Patch, body []byte) {
 	if len(body) < 1 {
 		return
 	}
-	m, ok := modeFromByte(body[0])
+	m, ok := r.model.modeFromByte(body[0])
 	if !ok {
 		return
 	}
 	p.Mode = &m
-	if len(body) >= 2 && body[1] >= 1 && body[1] <= filterSlots {
+	// A radio with no filter selection (IC-718, IC-910H) reports FilterSlots 0,
+	// and then any trailing byte is not a slot and must not be read as one.
+	if n := r.model.FilterSlots; n > 0 && len(body) >= 2 && body[1] >= 1 && body[1] <= byte(n) {
 		slot := int(body[1])
 		p.FilterSlot = &slot
 	}

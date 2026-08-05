@@ -455,29 +455,35 @@ Verified against each model's own CI-V documentation — the standalone referenc
 the current models, and the control-command section of the instruction manual for the older
 four:
 
-| `civ.model` | Address | Modes beyond the common set | CW buffer `17` | Filter `1A 03` | PTT | Keyer |
-|---|---|---|---|---|---|---|
-| `ic-718` | `0x5E` | **no FM**, no PSK | **absent** | **absent** | **`1C 01`** | 6–60 |
-| `ic-7300` | `0x94` | — | yes | yes | `1C 00` | 6–48 |
-| `ic-7300mk2` | `0xB6` | — | yes | yes | `1C 00` | 6–48 |
-| `ic-7600` | `0x7A` | PSK, PSK-R | yes | yes | `1C 00` | 6–48 |
-| `ic-7610` | `0x98` | PSK, PSK-R | yes | yes | `1C 00` | 6–48 |
-| `ic-7700` | `0x74` | PSK, PSK-R | yes | yes | `1C 00` | 6–48 |
-| `ic-7760` | `0xB2` | PSK, PSK-R | yes | yes | `1C 00` | 6–48 |
-| `ic-9700` | `0xA2` | DV, DD | yes | yes | `1C 00` | 6–48 |
-| `ic-905` | `0xAC` | DV, DD, ATV | yes | yes | `1C 00` | 6–48 |
-| `generic` | none | — | yes | yes | `1C 00` | 6–48 |
+| `civ.model` | Address | Modes beyond the common set | CW `17` | Filter `1A 03` | Data `1A 06` | FIL slots | PTT | Keyer |
+|---|---|---|---|---|---|---|---|---|
+| `ic-718` | `0x5E` | **no FM**, no PSK | **no** | **no** | **no** | **0** | **`1C 01`** | 6–60 |
+| `ic-7300` | `0x94` | — | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-7300mk2` | `0xB6` | — | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-7600` | `0x7A` | PSK, PSK-R | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-7610` | `0x98` | PSK, PSK-R | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-7700` | `0x74` | PSK, PSK-R | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-7760` | `0xB2` | PSK, PSK-R | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-7850` | `0x8E` | PSK, PSK-R | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-9100` | `0x7C` | DV | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-9700` | `0xA2` | DV, DD | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-905` | `0xAC` | DV, DD, ATV | yes | yes | yes | 3 | `1C 00` | 6–48 |
+| `ic-910h` | `0x60` | **own code table**, LSB/USB/CW/FM only | **no** | **no** | **no** | **0** | `1C 00` | 6–60 |
+| `generic` | none | — | yes | yes | no | 3 | `1C 00` | 6–48 |
+
+`ic-7850` covers the IC-7851 too: they are the same radio to CI-V and share an address.
 
 The common set is LSB, USB, AM, CW, CW-R, FM, FSK (the rig calls it RTTY) and FSK-R. The
 IC-905 additionally uses a **6-byte frequency field on its 10 GHz band**; everything else
-uses 5.
+uses 5. `generic` is the escape hatch for an Icom without a profile; it has no factory
+address, so `rig_address` must be given rather than guessed.
 
-Mode *codes* are shared — `0x03` is CW on every Icom — so there is one code table and each
-model records only which subset it accepts. `generic` is the escape hatch for an Icom without
-a profile; it has no factory address, so `rig_address` must be given rather than guessed.
+### The two outliers, and what they cost
 
-**The IC-718 is the reminder that the family is not uniform.** Most models are a table entry;
-it needs four real behaviours:
+Most models are a table entry. Two are not, and between them they broke three assumptions
+this backend had baked in as constants.
+
+**The IC-718:**
 
 - **PTT is `1C 01`, not `1C 00`.** Its command table has no `1C 00` row at all, and on the
   other radios `1C 01` is the antenna tuner — so a constant here would key the wrong command
@@ -489,11 +495,25 @@ it needs four real behaviours:
   looks to the operator like it was sent.
 - **No `1A 03`,** so no IF filter width. It is dropped from the slow poll rather than
   generating a rejection every tick.
-- **Keyer runs to 60 wpm**, where the rest stop at 48.
+- **Keyer runs to 60 wpm**, where most stop at 48.
 
 It also has a "CI-V 731 mode" (`1A 05 27`) that shortens the frequency field to four bytes.
 remoses never enables it, and since frequency decoding is length-driven a radio left in that
 mode is still read correctly.
+
+**The IC-910H** shares the missing `17` and `1A 03`, and adds the two worst kinds of
+difference — the ones where a command *succeeds* and means something else:
+
+- **Mode codes are not universal after all.** It puts FM on `0x04`, where every other radio
+  here has RTTY. Decoding with the family table would report RTTY for a radio sitting in FM:
+  a wrong answer rather than a missing one. `Model.Codes` therefore overrides the whole table,
+  and nothing outside `mode.go` may assume a fixed mapping.
+- **`1A 06` is RIT, not data mode.** Sending the usual "data mode off" after a mode change
+  would quietly switch the operator's RIT off. Data mode is now a per-model capability on
+  both the set and the decode path, and `generic` has it off too — on an unidentified radio,
+  changing an unrelated setting is worse than not offering the feature.
+- Its mode command carries **no filter byte**, so `FilterSlots` is 0 and a trailing byte must
+  not be read as a slot.
 
 **The IC-905's frequency field is not fixed width.** Its reference specifies ten digits
 (5 bytes) on 5.6 GHz and below, and twelve (6 bytes) when the 10 GHz band is selected.

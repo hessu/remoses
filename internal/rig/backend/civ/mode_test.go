@@ -23,13 +23,14 @@ func TestModeMapping(t *testing.T) {
 		{0x12, radio.ModePSK},  // a literal byte, not decimal 12
 		{0x13, radio.ModePSKR},
 	}
+	family := Model{} // no Codes override: the family table
 	for _, tc := range tests {
 		t.Run(tc.m.String(), func(t *testing.T) {
-			got, ok := modeFromByte(tc.b)
+			got, ok := family.modeFromByte(tc.b)
 			if !ok || got != tc.m {
 				t.Errorf("modeFromByte(%#02X) = %s, %v; want %s", tc.b, got, ok, tc.m)
 			}
-			b, ok := modeByte(tc.m)
+			b, ok := family.modeByte(tc.m)
 			if !ok || b != tc.b {
 				t.Errorf("modeByte(%s) = %#02X, %v; want %#02X", tc.m, b, ok, tc.b)
 			}
@@ -38,13 +39,14 @@ func TestModeMapping(t *testing.T) {
 }
 
 func TestModeMappingRejects(t *testing.T) {
-	// 06 and 09..11 are unassigned on this radio, as is anything above 13.
+	family := Model{}
+	// 06 and 09..11 are unassigned in the family table, as is anything above 13.
 	for _, b := range []byte{0x06, 0x09, 0x0A, 0x11, 0x14, 0xFF} {
-		if m, ok := modeFromByte(b); ok {
+		if m, ok := family.modeFromByte(b); ok {
 			t.Errorf("modeFromByte(%#02X) = %s; want not ok", b, m)
 		}
 	}
-	if b, ok := modeByte(radio.ModeUnknown); ok {
+	if b, ok := family.modeByte(radio.ModeUnknown); ok {
 		t.Errorf("modeByte(unknown) = %#02X; want not ok", b)
 	}
 }

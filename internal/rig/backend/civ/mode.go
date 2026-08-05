@@ -17,8 +17,6 @@ const (
 	// enough to interpolate an S value honestly, so radio.Meter.S is left nil
 	// and clients get the raw reading and its scale.
 	sMeterScale = 255
-
-	filterSlots = 3
 )
 
 // Keyer speed range for command 14 0C. The bottom is 6 wpm on every Icom here;
@@ -31,8 +29,13 @@ const (
 	defaultMaxWPM = 48
 )
 
-// Mode bytes of commands 01/04/06. These are literal byte values, so PSK and
-// PSK-R are 0x12 and 0x13 rather than decimal 12 and 13, and 0x06 is unused.
+// Mode bytes of commands 01/04/06, as used by almost the whole family. These
+// are literal byte values, so PSK and PSK-R are 0x12 and 0x13 rather than
+// decimal 12 and 13, and 0x06 is unused.
+//
+// "Almost" is doing real work: the IC-910H puts FM on 0x04, where every other
+// radio here has RTTY. A model may therefore override the whole table via
+// Model.Codes, and nothing outside this file may assume a fixed mapping.
 var modeBytes = map[byte]radio.Mode{
 	0x00: radio.ModeLSB,
 	0x01: radio.ModeUSB,
@@ -52,16 +55,25 @@ var modeBytes = map[byte]radio.Mode{
 	0x23: radio.ModeATV,
 }
 
+// codes returns the mode table this radio uses: its own if it has one, the
+// family table otherwise.
+func (m Model) codes() map[byte]radio.Mode {
+	if m.Codes != nil {
+		return m.Codes
+	}
+	return modeBytes
+}
+
 // modeFromByte maps a wire mode byte to a radio.Mode.
-func modeFromByte(b byte) (radio.Mode, bool) {
-	m, ok := modeBytes[b]
-	return m, ok
+func (m Model) modeFromByte(b byte) (radio.Mode, bool) {
+	x, ok := m.codes()[b]
+	return x, ok
 }
 
 // modeByte maps a radio.Mode to its wire byte.
-func modeByte(m radio.Mode) (byte, bool) {
-	for b, x := range modeBytes {
-		if x == m {
+func (m Model) modeByte(x radio.Mode) (byte, bool) {
+	for b, v := range m.codes() {
+		if v == x {
 			return b, true
 		}
 	}
