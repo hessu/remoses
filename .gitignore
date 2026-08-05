@@ -5,6 +5,10 @@
 *.out
 coverage.*
 
+# Editor backups.
+*~
+.#*
+
 # Local config may hold password hashes and TLS keys.
 /remoses.yaml
 /*.pem
