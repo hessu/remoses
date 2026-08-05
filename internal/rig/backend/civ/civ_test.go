@@ -280,7 +280,9 @@ func TestInitReadsFullState(t *testing.T) {
 	if err := s.backend.Init(context.Background(), s); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	s.wantConversation(t, "03", "04", "14/0A", "15/02", "1C/00")
+	// 19 is the identity cross-check, which runs first so that a mismatch is
+	// reported before any state is published.
+	s.wantConversation(t, "19", "03", "04", "14/0A", "15/02", "1C/00")
 }
 
 func TestInitFailsWhenTheRigRejects(t *testing.T) {

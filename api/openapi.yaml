@@ -434,7 +434,13 @@ components:
         UNKNOWN is reported for a radio that has not connected yet, or whose rig
         answered with a value it documents as a setting failure (Kenwood MD0/MD8).
         It is never accepted as input.
-      enum: [UNKNOWN, LSB, USB, CW, CW-R, AM, FM, FSK, FSK-R, PSK, PSK-R]
+
+        Not every radio has every mode: DV and DD are D-STAR modes on Icom's
+        VHF/UHF and microwave sets, ATV is IC-905 only, and PSK is absent from
+        those same radios. A radio's `caps.modes` lists what it will actually
+        accept, and a mode outside that list is rejected with 422.
+      enum:
+        [UNKNOWN, LSB, USB, CW, CW-R, AM, FM, FSK, FSK-R, PSK, PSK-R, DV, DD, ATV]
 
     VFO:
       type: string

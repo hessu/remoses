@@ -22,6 +22,16 @@ const (
 
 var backends = []string{BackendCIV, BackendKenwood, BackendRigctld}
 
+// CIVModels are the accepted values of civ.model.
+//
+// Duplicated from the civ backend's own registry rather than imported, for the
+// same reason as `backends`: config sits below rig/backend in the dependency
+// graph and asking the registry would be a cycle. The backend has a test that
+// fails if the two ever drift, which is the direction that can import both.
+var CIVModels = []string{
+	"generic", "ic-7300mk2", "ic-7610", "ic-7760", "ic-905", "ic-9700",
+}
+
 // idRe keeps radio ids usable unescaped in a URL path and in a cookie name.
 var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
@@ -214,6 +224,10 @@ func (m *PortMatch) set() bool {
 func validateCIV(civ *CIV, label string, add addFunc) {
 	if civ == nil {
 		return
+	}
+	if civ.Model != "" && !slices.Contains(CIVModels, strings.ToLower(civ.Model)) {
+		add("%s: civ.model %q, want one of %s",
+			label, civ.Model, strings.Join(CIVModels, ", "))
 	}
 	if civ.RigAddress < 0 || civ.RigAddress > 255 {
 		add("%s: civ.rig_address %d is out of range 0..255", label, civ.RigAddress)

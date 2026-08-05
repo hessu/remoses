@@ -42,6 +42,12 @@ var modeBytes = map[byte]radio.Mode{
 	0x08: radio.ModeFSKR, // RTTY-R
 	0x12: radio.ModePSK,
 	0x13: radio.ModePSKR,
+	// D-STAR and image modes on the VHF/UHF and microwave sets. Again literal
+	// bytes: DV is 0x17, not decimal 17. Which radios accept them is a model
+	// property, but the codes themselves are shared across the family.
+	0x17: radio.ModeDV,
+	0x22: radio.ModeDD,
+	0x23: radio.ModeATV,
 }
 
 // modeFromByte maps a wire mode byte to a radio.Mode.
@@ -112,6 +118,10 @@ func filterWidthIndex(m radio.Mode, hz int) (int, error) {
 		return ssbFamilyIndex(hz, 31), nil
 	case radio.ModeLSB, radio.ModeUSB, radio.ModeCW, radio.ModeCWR, radio.ModePSK, radio.ModePSKR:
 		return ssbFamilyIndex(hz, 40), nil
+	case radio.ModeDV, radio.ModeDD, radio.ModeATV:
+		// The digital and image modes have fixed channel bandwidths; no row of
+		// the IF filter table covers them.
+		return 0, fmt.Errorf("civ: filter width is not adjustable in %s", m)
 	}
 	return 0, fmt.Errorf("civ: filter width cannot be set in mode %s", m)
 }

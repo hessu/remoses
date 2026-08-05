@@ -24,6 +24,8 @@ package civ
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/radio"
@@ -43,7 +45,11 @@ func init() {
 type Rig struct {
 	rigAddr  byte
 	ctrlAddr byte
+	model    Model
 }
+
+// Model reports the configured radio model.
+func (r *Rig) Model() Model { return r.model }
 
 var (
 	_ backend.Rig         = (*Rig)(nil)
@@ -64,7 +70,18 @@ var (
 //     config schema because it documents the wiring for the operator.
 //   - CIV.Transceive. See Init.
 func New(r *config.Radio) (*Rig, error) {
-	rigAddr, ctrlAddr := byte(DefaultRigAddress), byte(DefaultControllerAddress)
+	name := ""
+	if r != nil && r.CIV != nil {
+		name = r.CIV.Model
+	}
+	model, err := LookupModel(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// The model's factory address is the default; an explicit rig_address wins,
+	// because the address is menu-configurable on every one of these radios.
+	rigAddr, ctrlAddr := model.Address, byte(DefaultControllerAddress)
 	if r != nil && r.CIV != nil {
 		if r.CIV.RigAddress != 0 {
 			if !validAddress(r.CIV.RigAddress) {
@@ -79,11 +96,17 @@ func New(r *config.Radio) (*Rig, error) {
 			ctrlAddr = byte(r.CIV.ControllerAddress)
 		}
 	}
+	if rigAddr == 0 {
+		// Only the generic profile has no factory address to fall back on.
+		// Guessing one would silently address the wrong radio on a shared bus.
+		return nil, fmt.Errorf("civ: model %q has no default bus address; set civ.rig_address, "+
+			"or name a specific model (%s)", model.Name, strings.Join(ModelNames(), ", "))
+	}
 	if rigAddr == ctrlAddr {
 		return nil, fmt.Errorf("civ: rig_address and controller_address are both 0x%02X; "+
 			"echo suppression cannot tell our frames from the rig's", rigAddr)
 	}
-	return &Rig{rigAddr: rigAddr, ctrlAddr: ctrlAddr}, nil
+	return &Rig{rigAddr: rigAddr, ctrlAddr: ctrlAddr, model: model}, nil
 }
 
 // validAddress reports whether a is usable as a CI-V bus address. 0x00 is the
@@ -99,13 +122,11 @@ func validAddress(a int) bool { return a >= 0x01 && a <= 0xEF }
 // rating, which would invite clients to treat the index as watts.
 func (r *Rig) Caps() radio.Caps {
 	return radio.Caps{
-		// Fresh slices per call: Caps is published through the API and a shared
-		// backing array would be one mutation away from a data race.
-		Modes: []radio.Mode{
-			radio.ModeLSB, radio.ModeUSB, radio.ModeCW, radio.ModeCWR,
-			radio.ModeAM, radio.ModeFM, radio.ModeFSK, radio.ModeFSKR,
-			radio.ModePSK, radio.ModePSKR,
-		},
+		// Fresh slice per call: Caps is published through the API and a shared
+		// backing array would be one mutation away from a data race. The set
+		// comes from the model, so a client is not offered PSK on an IC-9700 or
+		// DV on an IC-7610.
+		Modes: append([]radio.Mode(nil), r.model.Modes...),
 		// Only the operating (selected) VFO is addressable here: commands 03/05
 		// act on whatever the rig is tuned to. Main/sub and VFO A/B need the
 		// 25/29 command family, which is deferred with backend.SubReceiver.
@@ -140,6 +161,7 @@ func (r *Rig) Caps() radio.Caps {
 // enable as a bonus: Decode understands commands 00 and 01 and folds them into
 // state exactly like a solicited reply.
 func (r *Rig) Init(ctx context.Context, c backend.Conn) error {
+	r.checkIdentity(ctx, c)
 	return r.readAll(ctx, c,
 		request{KeyFrequency, r.frame(cmdReadFreq)},
 		request{KeyMode, r.frame(cmdReadMode)},
@@ -147,6 +169,48 @@ func (r *Rig) Init(ctx context.Context, c backend.Conn) error {
 		request{KeySMeter, r.frame(cmdMeter, subSMeter)},
 		request{KeyPTT, r.frame(cmdTransceiver, subPTT)},
 	)
+}
+
+// checkIdentity asks the radio who it is (command 19 00) and warns if the
+// answer disagrees with the configuration.
+//
+// It is a CROSS-CHECK, never model detection, because 19 00 does not report a
+// model. It reports the rig's CI-V bus address, which is a poor proxy for one:
+//
+//   - the address is menu-configurable on every supported radio — that is the
+//     entire reason config.CIV.RigAddress exists — so an operator who changed it
+//     breaks any identification based on it;
+//   - two different models set to the same address are indistinguishable;
+//   - a model remoses has no profile for still answers with something.
+//
+// So the configured model stays authoritative and this only catches the case
+// worth catching: a configuration naming one radio pointed at another. Failure
+// is deliberately silent — an older Icom that does not implement 19 00 must
+// still connect — and the address is logged either way, which is what an
+// operator needs when the answer is "not what you configured".
+func (r *Rig) checkIdentity(ctx context.Context, c backend.Conn) {
+	u, err := c.Do(ctx, r.frame(cmdReadID, subReadID), KeyID, KeyAck)
+	if err != nil || !u.OK || u.Key != KeyID {
+		return
+	}
+	// FE FE to from 19 00 <id> FD — the byte after the sub-command.
+	if len(u.Raw) < 7 {
+		return
+	}
+	reported := u.Raw[len(u.Raw)-2]
+	if reported == r.rigAddr {
+		return
+	}
+
+	detail := ""
+	if m, ok := ModelForAddress(reported); ok {
+		detail = fmt.Sprintf(" (the factory address of the %s)", m.Label)
+	}
+	slog.Warn("civ: the radio reports a different bus address than configured",
+		"configured_model", r.model.Name,
+		"configured_address", fmt.Sprintf("0x%02X", r.rigAddr),
+		"reported_address", fmt.Sprintf("0x%02X%s", reported, detail),
+		"note", "civ.model and civ.rig_address may not match this radio")
 }
 
 // Poll refreshes one tier of state.
@@ -231,11 +295,15 @@ func (r *Rig) SetFrequency(ctx context.Context, c backend.Conn, vfo radio.VFO, h
 	if vfo != radio.VFOCurrent {
 		return fmt.Errorf("civ: VFO %s is not addressable; this backend sets the operating VFO only", vfo)
 	}
-	f, err := encodeFrequency(hz)
+	// The six-byte field exists only on radios that have a 10 GHz band, and
+	// only above it: sending it to a radio expecting five bytes would be
+	// rejected, so the width follows the target frequency.
+	wide := r.model.WideFrequency && hz >= wideThresholdHz
+	f, err := encodeFrequency(hz, wide)
 	if err != nil {
 		return err
 	}
-	return r.set(ctx, c, "frequency", r.frame(cmdSetFreq, f[:]...))
+	return r.set(ctx, c, "frequency", r.frame(cmdSetFreq, f...))
 }
 
 // SetMode sets the operating mode (command 06) and then the data-mode setting
@@ -248,7 +316,10 @@ func (r *Rig) SetFrequency(ctx context.Context, c backend.Conn, vfo radio.VFO, h
 func (r *Rig) SetMode(ctx context.Context, c backend.Conn, m radio.Mode, dataMode bool) error {
 	mb, ok := modeByte(m)
 	if !ok {
-		return fmt.Errorf("civ: mode %s is not supported by this radio", m)
+		return fmt.Errorf("civ: mode %s has no CI-V code", m)
+	}
+	if !r.model.supportsMode(m) {
+		return fmt.Errorf("civ: %s does not have mode %s", r.model.Label, m)
 	}
 	if dataMode && !supportsDataMode(m) {
 		return fmt.Errorf("civ: data mode is not available in %s", m)

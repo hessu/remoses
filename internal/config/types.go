@@ -131,8 +131,18 @@ type PortMatch struct {
 
 // CIV configures the Icom backend.
 type CIV struct {
-	RigAddress        int `yaml:"rig_address"`        // IC-7610 default 0x98
-	ControllerAddress int `yaml:"controller_address"` // conventionally 0xE0
+	// Model names the radio, which sets the default bus address and the set of
+	// operating modes remoses will offer for it. CI-V opcodes are shared across
+	// the family, but which modes a radio has is not: an IC-9700 has DV and DD
+	// where an IC-7610 has PSK. Naming the model also gives later work a place
+	// to hang the differences that do need separate code paths.
+	//
+	// The rig cannot reliably be asked: command 19 00 reports its bus address,
+	// which is menu-configurable and shared between models, so remoses uses it
+	// only to warn about a mismatch. See civ.Rig.checkIdentity.
+	Model             string `yaml:"model"`
+	RigAddress        int    `yaml:"rig_address"`        // overrides the model default
+	ControllerAddress int    `yaml:"controller_address"` // conventionally 0xE0
 	// Echo is true when wired to the 13-pin CI-V bus jack, which echoes back
 	// everything we transmit. USB connections do not echo.
 	Echo bool `yaml:"echo"`

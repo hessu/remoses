@@ -217,7 +217,8 @@ radios:
       baud: 115200
       # tcp: "192.168.1.50:4001"       # or reach the port over the network; see §4.1
     civ:
-      rig_address: 0x98                 # IC-7610 default
+      model: ic-7610                    # see §5.4; sets the default address and mode set
+      rig_address: 0x98                 # optional, overrides the model default
       controller_address: 0xE0
       echo: false                       # true when wired to the CI-V bus jack
       transceive: true
@@ -399,8 +400,8 @@ Three consequences of the above that shaped the implementation:
 - **`FW` is also wrong for FM**, not just SSB and AM: there it selects modulation degree
   (`0000` normal / `0001` narrow), which would otherwise land in state as a 0 Hz passband.
 
-IC-7610 CW charset (command `17`) is restricted and the rig **silently mangles** anything
-outside it, so validate at the API boundary:
+The Icom CW charset (command `17`) is restricted and the rig **silently mangles** anything
+outside it, so validate at the API boundary. It is identical on all supported Icoms:
 
 ```
 0-9  A-Z  a-z  ' ( ) / = ? + . " - @ , :  and space
@@ -441,6 +442,61 @@ to prosigns rather than using Icom's `^` run-marker:
 remoses therefore defines **one canonical prosign syntax at the API — `^AR`, `^BT`, `^SK` —
 and translates per backend**: pass-through for Icom, symbol substitution for Kenwood, and
 direct Morse-table lookup for locally generated keying. Clients never learn a rig's dialect.
+
+### 5.4 Icom models
+
+CI-V is a family protocol. The opcodes and their encodings are shared, so one backend serves
+every Icom; what differs per model is the factory bus address, which operating modes exist,
+and — on one radio — the width of the frequency field. `civ.model` names the radio so remoses
+can publish honest capabilities and default the address correctly.
+
+Verified against each model's own CI-V reference guide:
+
+| `civ.model` | Address | Modes beyond the common set | Frequency field |
+|---|---|---|---|
+| `ic-7610` | `0x98` | PSK, PSK-R | 5 bytes |
+| `ic-7300mk2` | `0xB6` | — | 5 bytes |
+| `ic-7760` | `0xB2` | PSK, PSK-R | 5 bytes |
+| `ic-9700` | `0xA2` | DV, DD | 5 bytes |
+| `ic-905` | `0xAC` | DV, DD, ATV | 5 bytes, **6 on the 10 GHz band** |
+| `generic` | none | — | 5 bytes |
+
+The common set is LSB, USB, AM, CW, CW-R, FM, FSK (the rig calls it RTTY) and FSK-R.
+
+Everything else remoses uses is identical across all five: `03`/`05` frequency, `04`/`06`
+mode, `14 0A` RF power, `15 02` S-meter, `1A 03` filter width, `1C 00` PTT, `17` send CW
+(30 characters), `19 00` read ID. Mode *codes* are shared too — `0x03` is CW on every Icom —
+so there is one code table and each model records only which subset it accepts. `generic` is
+the escape hatch for an Icom without a profile; it has no factory address, so `rig_address`
+must be given rather than guessed.
+
+**The IC-905's frequency field is not fixed width.** Its reference specifies ten digits
+(5 bytes) on 5.6 GHz and below, and twelve (6 bytes) when the 10 GHz band is selected.
+Decoding is therefore driven by the length that arrived rather than by the model, which keeps
+the decoder a pure function and reads an unprofiled radio correctly; only encoding has to
+choose, and it chooses from the target frequency.
+
+#### Can the model be probed?
+
+Partly, and not reliably enough to be authoritative. Command `19 00` reads the transceiver
+ID — but what it returns is the rig's **CI-V bus address**, not a model number, and that is a
+poor proxy:
+
+- the address is menu-configurable on every one of these radios, which is the entire reason
+  `civ.rig_address` exists, so an operator who changed it defeats identification;
+- two different models set to the same address are indistinguishable;
+- a model remoses has no profile for still answers with something.
+
+So the configuration stays authoritative and `19 00` is used as a **cross-check**: remoses
+asks at connect and warns if the answer disagrees with the configured address, naming the
+model whose factory address it does match. That catches the mistake worth catching — a config
+naming one radio pointed at another — without silently deciding it knows better. The probe
+failing is not an error: an older Icom that does not implement `19 00` must still connect.
+
+There is a second probing trick remoses does **not** use: CI-V address `0x00` is a broadcast,
+so `FE FE 00 E0 19 00 FD` makes every rig on a shared bus answer with its address. That is
+how a bus is enumerated, but it is discovery rather than identification, and it adds a
+failure mode (two rigs answering at once) for a station that already knows what it owns.
 
 ---
 

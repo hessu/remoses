@@ -33,6 +33,7 @@ const (
 	cmdLevel       = 0x14 // analogue levels, sub-command selects which
 	cmdMeter       = 0x15 // meters and squelch status
 	cmdSendCW      = 0x17 // CW message, up to 30 characters
+	cmdReadID      = 0x19 // 19 00, reads the rig's own bus address
 	cmdMisc        = 0x1A // memories, filters, and the whole Set-mode menu
 	cmdTransceiver = 0x1C // transmitter status, tuner, XFC
 
@@ -42,6 +43,7 @@ const (
 	subFilterWidth = 0x03 // 1A 03, mode-dependent index
 	subDataMode    = 0x06 // 1A 06, data mode plus filter
 	subPTT         = 0x00 // 1C 00, 00 RX / 01 TX
+	subReadID      = 0x00 // 19 00, transceiver ID
 )
 
 const (

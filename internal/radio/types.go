@@ -28,6 +28,13 @@ const (
 	ModeFSKR // RTTY reverse
 	ModePSK
 	ModePSKR
+
+	// Digital and image modes carried by Icom's VHF/UHF and microwave sets.
+	// They are ordinary operating modes on the wire, selected by the same
+	// commands as SSB or CW, so they belong here rather than in a side channel.
+	ModeDV  // D-STAR digital voice; IC-9700, IC-905
+	ModeDD  // D-STAR digital data; IC-9700 (1200 MHz), IC-905
+	ModeATV // analogue television; IC-905 only
 )
 
 var modeNames = map[Mode]string{
@@ -42,6 +49,9 @@ var modeNames = map[Mode]string{
 	ModeFSKR:    "FSK-R",
 	ModePSK:     "PSK",
 	ModePSKR:    "PSK-R",
+	ModeDV:      "DV",
+	ModeDD:      "DD",
+	ModeATV:     "ATV",
 }
 
 func (m Mode) String() string {
@@ -75,6 +85,12 @@ func ParseMode(s string) (Mode, error) {
 		return ModePSK, nil
 	case "PSK-R", "PSKR":
 		return ModePSKR, nil
+	case "DV":
+		return ModeDV, nil
+	case "DD":
+		return ModeDD, nil
+	case "ATV":
+		return ModeATV, nil
 	}
 	return ModeUnknown, fmt.Errorf("radio: unknown mode %q", s)
 }

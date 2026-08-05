@@ -39,7 +39,10 @@ import (
 	_ "github.com/hessu/remoses/internal/rig/backend/kenwood"
 )
 
-const version = "0.1.0"
+// version is stamped at build time by the Makefile
+// (-ldflags "-X main.version=..."). It must stay a var: -X cannot write a
+// constant. The default is what a plain `go build` produces.
+var version = "dev"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "passwd" {

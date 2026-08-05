@@ -23,6 +23,7 @@ const (
 	KeyFilterWidth backend.Key = "1A/03"
 	KeyDataMode    backend.Key = "1A/06"
 	KeyPTT         backend.Key = "1C/00"
+	KeyID          backend.Key = "19/00"
 )
 
 // Decode turns one framed message into an Update.
@@ -66,6 +67,16 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		decodeMode(&u.Patch, body)
 		if cmd == cmdReadMode && u.Patch.Mode != nil {
 			u.Key = KeyMode
+		}
+		return u, nil
+
+	case cmdReadID:
+		// 19 00 answers with the rig's own bus address. It carries no state, so
+		// the patch stays empty and only the key is set; Init reads the value
+		// back out of Raw. See Rig.checkIdentity for why this is a cross-check
+		// and not model detection.
+		if len(body) >= 2 && body[0] == subReadID {
+			u.Key = KeyID
 		}
 		return u, nil
 

@@ -66,6 +66,17 @@ radios:
       parity: none
       stop_bits: "1"
     civ:
+      # Which Icom this is. Sets the default bus address and the modes remoses
+      # will offer, so a client is not shown PSK on a radio that has DV instead.
+      # One of: ic-7610, ic-7300mk2, ic-7760, ic-9700, ic-905, generic.
+      #
+      # remoses cannot ask the radio reliably: CI-V command 19 00 answers with
+      # the rig's bus address, which is menu-configurable and shared between
+      # models. It is used only to warn when the answer disagrees with this.
+      model: ic-7610
+      # Optional. Defaults to the model's factory address (0x98 here); set it
+      # only if the address was changed in the radio's menu. Required for
+      # model: generic, which has no factory default to fall back on.
       rig_address: 0x98
       controller_address: 0xE0
       # true only when wired to the 13-pin CI-V bus jack, which echoes back
@@ -124,6 +135,25 @@ radios:
       # Kenwood PC is in watts: 005..100, 005..025 in AM.
       max_power_w: 80
       tx_timeout: 120s
+
+  # Another Icom. Same backend, same opcodes; only the model line changes, and
+  # with it the default bus address (0xA2) and the mode set — an IC-9700 has
+  # D-STAR DV and DD where the IC-7610 has PSK.
+  # - id: ic9700
+  #   name: "Icom IC-9700"
+  #   backend: civ
+  #   port:
+  #     device: /dev/ttyACM0
+  #     baud: 115200
+  #   civ:
+  #     model: ic-9700
+  #   cw:
+  #     enabled: true
+  #     method: cat
+  #   limits:
+  #     max_power_pct: 100
+  #     tx_timeout: 120s
+  #     bands: ["144.0-146.0MHz", "430.0-440.0MHz", "1240.0-1300.0MHz"]
 
   # The Hamlib escape hatch, for rigs with no native backend. Uncomment and
   # adjust — rigctld.address is the only required field.
