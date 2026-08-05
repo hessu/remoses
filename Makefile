@@ -5,8 +5,14 @@
 
 BIN        := remoses
 CMD        := ./cmd/remoses
+CLI_BIN    := remoses-cli
+CLI_CMD    := ./cmd/remoses-cli
 BUILD_DIR  := build
 DIST_DIR   := dist
+
+# name:package pairs, so the build and cross targets iterate rather than
+# repeating themselves once per binary.
+TARGETS    := $(BIN):$(CMD) $(CLI_BIN):$(CLI_CMD)
 
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 GOFLAGS    ?=
@@ -22,10 +28,14 @@ PLATFORMS := linux/amd64 linux/arm64 linux/arm darwin/amd64 darwin/arm64 windows
 
 all: build ## Build the binaries
 
-build: ## Build remoses into build/
+build: ## Build remoses and remoses-cli into build/
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BUILD_DIR)/$(BIN) $(CMD)
-	@echo "built $(BUILD_DIR)/$(BIN) ($(VERSION))"
+	@for t in $(TARGETS); do \
+		name=$${t%:*}; pkg=$${t#*:}; \
+		CGO_ENABLED=0 go build $(GOFLAGS) -ldflags '$(LDFLAGS)' \
+			-o $(BUILD_DIR)/$$name $$pkg || exit 1; \
+		echo "built $(BUILD_DIR)/$$name ($(VERSION))"; \
+	done
 
 test: ## Run the test suite with the race detector
 	go test -race -count=1 ./...
@@ -57,10 +67,13 @@ cross: ## Build release binaries for every target platform into dist/
 	@for p in $(PLATFORMS); do \
 		os=$${p%/*}; arch=$${p#*/}; \
 		ext=''; [ "$$os" = windows ] && ext='.exe'; \
-		out=$(DIST_DIR)/$(BIN)-$(VERSION)-$$os-$$arch$$ext; \
 		echo "  $$os/$$arch"; \
-		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
-			go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $$out $(CMD) || exit 1; \
+		for t in $(TARGETS); do \
+			name=$${t%:*}; pkg=$${t#*:}; \
+			out=$(DIST_DIR)/$$name-$(VERSION)-$$os-$$arch$$ext; \
+			GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
+				go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $$out $$pkg || exit 1; \
+		done; \
 	done
 	@echo "release binaries in $(DIST_DIR)/"
 

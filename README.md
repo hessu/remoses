@@ -135,17 +135,74 @@ dial/backoff/reconnect path:
   ser2net or a hardware terminal server;
 - **`rigctld`** over TCP.
 
+## remoses-cli
+
+`remoses-cli` is a **read-only** terminal monitor for one radio. It fetches the
+current state over REST so there is something on screen at once, then follows
+the WebSocket stream. It never issues a `PATCH`, `POST` or `DELETE` and never
+takes a lock — a monitor that took the lock would lock out the operator actually
+working the radio.
+
+```sh
+remoses-cli ic7610                       # watch the local instance
+remoses-cli -url https://radio.example.net ic7610
+remoses-cli -once ic7610                 # print the state once and exit
+remoses-cli ic7610 | tee ic7610.log      # timestamped lines instead of a redraw
+```
+
+```
+remoses  ic7610 - IC-7610 - civ                                      CONNECTED
+------------------------------------------------------------------------------
+
+  14.025.000 MHz    CW                                          PTT   >> TX <<
+
+  S ██████████████████░░  S9+21 dB  230/255
+
+  passband  500 Hz   filter 2                                power  40 %  40 W
+  cw        sending  queued 14  28 wpm  ~4.3 s                   lock   oh2abc
+
+  seq 4471   updated 0.0 s ago                                    stream  live
+```
+
+**Where it connects.** With no `-url`, the server address is read from the
+daemon's own configuration file (`remoses.yaml` by default, `-config` to point
+elsewhere): `server.listen` and `server.base_path` give the URL, and whether
+`server.tls` is set decides `http` or `https`. A wildcard bind such as
+`0.0.0.0:8080` is not an address a client can dial, so it resolves to loopback.
+If the default configuration file is not there, the daemon's built-in defaults
+are assumed — `http://127.0.0.1:8080/api/v1`. `-url` overrides all of it, and
+fills in `/api/v1` when the URL has no path of its own.
+
+**Credentials.** The username comes from `-user` or `$REMOSES_USER`, the password
+from `$REMOSES_PASSWORD`, `-password-file` (`-` for stdin) or a prompt with echo
+off. There is deliberately **no password flag**: a password on the command line
+is visible in the process table and lands in shell history. The configuration
+file is no help either — it holds bcrypt hashes, not passwords.
+
+**What it does about failure.** A radio that is unplugged is shown as such, with
+the last known state and how old it is, because that is a normal state rather
+than an error. A dropped stream reconnects with exponential backoff and says so
+while it is trying. A `resync` — the server's way of saying this client fell
+behind — refetches the state over REST rather than guessing what was missed.
+Bad credentials and an unknown radio id are reported and are not retried.
+
+**Output adapts.** On a terminal the display is redrawn in place; anywhere else
+it becomes one timestamped `key=value` line per change, so `| tee log` produces
+something readable. Meter-only changes are throttled there (`-interval`,
+default 1s) — the S meter moves on every poll, and twenty lines a second of
+nothing else is not a log.
+
 ## Building
 
 ```sh
-make          # build into build/
+make          # build remoses and remoses-cli into build/
 make test     # go test -race ./...
 make check    # fmt-check + vet + test, the pre-commit target
 make cross    # release binaries for linux, darwin and windows into dist/
 ```
 
-Single static binary, no cgo. Cross-compiles to linux/amd64, linux/arm64,
-linux/arm, darwin/amd64, darwin/arm64 and windows/amd64.
+Single static binary per command, no cgo. Cross-compiles to linux/amd64,
+linux/arm64, linux/arm, darwin/amd64, darwin/arm64 and windows/amd64.
 
 ## Configuration
 
