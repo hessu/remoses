@@ -225,6 +225,7 @@ radios:
     poll:
       interval: 500ms                   # freq, mode, ptt, s-meter
       slow_interval: 5s                 # power, filter — rarely change
+    # debug_wire: true                  # trace every CAT frame, hex + text; §6.1
     cw:
       enabled: true
       method: cat                       # rig has a CAT CW buffer (cmd 0x17)
@@ -593,6 +594,10 @@ so `FE FE 00 E0 19 00 FD` makes every rig on a shared bus answer with its addres
 how a bus is enumerated, but it is discovery rather than identification, and it adds a
 failure mode (two rigs answering at once) for a station that already knows what it owns.
 
+Every column of the table above came out of a manual and none of it has been seen on a wire.
+`debug_wire` (§6.1) is how that changes: it prints the frame the radio actually answered
+`1A 03` with, next to the one remoses sent.
+
 ### 5.5 Kenwood models
 
 The Kenwood family splits in two, and the split is deeper than Icom's. The TS-480 and TS-590
@@ -647,6 +652,9 @@ thing that does not vary.
   every write means the operator still sees what the rig actually took.
 - The TS-480 is profiled at 100 W. The 200 W TS-480HX answers the same `ID020`, so an HX would
   be capped at half its output until the profile learns to tell them apart.
+
+Both are answerable in one session with `debug_wire` on (§6.1), which is the point of it: the
+`PC` the rig accepts and the `PC` it reports back appear as bytes, side by side.
 
 ### 5.6 Yaesu models
 
@@ -827,6 +835,10 @@ once. It decodes as transmitting, like `1` and `2`.
   is fitted and `0583` means it is not, so both match the same profile and neither warns. remoses
   does not act on the difference: nothing it controls depends on the FFT-1.
 
+Every one of these is a question one radio can settle in a minute with `debug_wire` on (§6.1) —
+including the ones that would otherwise be silent, since a Yaesu refusing a command answers with
+nothing and the trace is the only place the sent frame and the missing answer are both visible.
+
 ---
 
 ## 6. Session lifecycle
@@ -883,6 +895,93 @@ serve the range of Icom models rather than only the one it was written against.
 Enumeration uses `enumerator.GetDetailedPortsList()`. This is the one call requiring cgo on
 macOS (IOKit); gate it behind a build tag if a cgo-free macOS build is wanted, falling back to
 device-path matching.
+
+### 6.1 CAT wire logging
+
+Every rig fact in §5 was read out of a manual. When a radio is first plugged in and something
+is wrong, the only question worth asking is **what actually went down the wire** — and the
+ordinary logs cannot answer it, because they show decoded state, which is exactly the layer
+where a wrong assumption is invisible. A mode table transcribed from the wrong column, a
+manual that draws eleven digits where its own range needs eight, a command the documentation
+lists and the radio does not implement: all three look identical from above, and all three are
+obvious in one line of hex. `debug_wire` logs the bytes.
+
+Two ways in, per radio, because they are for different moments:
+
+```yaml
+radios:
+  - id: ic7610
+    debug_wire: true        # leave it on at a site
+```
+
+```sh
+remoses -debug-wire=ic7610,ts590sg -log-level=debug   # what you reach for at 2am
+remoses -debug-wire=all -log-level=debug
+```
+
+The flag **only ever enables**, and it is merged into the configuration before anything reads
+it, so there is one source of truth and the file cannot countermand the command line. An id
+naming no configured radio is a startup error rather than a no-op, because the failure mode of
+a mistyped id is silence, and silence is also what a broken radio looks like.
+
+It is **off by default and per radio, because it is genuinely noisy.** Polling runs at 2 Hz per
+radio, so a connected rig with nothing happening still produces several frames a second — a
+Kenwood fast poll alone is `IF;` plus `SM0;` and their answers — and a station with three
+radios traced at once is unreadable. Trace the radio in question.
+
+Every request written and every frame decoded is logged at **debug** level under the message
+`cat wire`, with the radio, the direction, the length, and the bytes as **hex** — always,
+since CI-V is binary and reading it as text would be useless:
+
+```
+level=DEBUG msg="cat wire" radio=ic7610 dir=to-rig len=6 hex="FE FE 98 E0 03 FD"
+level=DEBUG msg="cat wire" radio=ic7610 dir=from-rig len=11 hex="FE FE E0 98 03 00 50 02 14 00 FD" key=03 ok=true
+```
+
+A frame that is mostly printable ASCII carries a `text` rendering alongside, because Kenwood
+and Yaesu frames are meant to be read by a human and hex alone would make diagnosing them
+miserable:
+
+```
+level=DEBUG msg="cat wire" radio=ts590sg dir=to-rig len=3 hex="46 41 3B" text=FA;
+level=DEBUG msg="cat wire" radio=ts590sg dir=from-rig len=13 hex="46 41 30 30 30 31 34 30 32 35 30 30 30" text=FA00014025000 key=FA ok=true
+level=DEBUG msg="cat wire" radio=ts590sg dir=from-rig len=1 hex=3F text=? key=? ok=false
+```
+
+Details that matter when reading a trace:
+
+- **`key` is how remoses correlated the frame**, in the backend's own key space (`FA` on
+  Kenwood, `03` or `1A/03` on CI-V). It is the decoder's interpretation printed next to the
+  bytes it interpreted, which is the comparison the whole feature exists to make.
+- **`key=unsolicited` marks a frame that answered no request** — an Icom Transceive broadcast,
+  a Kenwood or Yaesu AI push. These arrive on the same path as replies (§3, invariant B), and
+  they are what a trace is most often opened for: a rig pushing traffic nobody expected is
+  otherwise only visible as state changing for no reason.
+- **`ok=false` is a rejection**, an Icom `FA` or a Kenwood `?;`.
+- **Control and high bytes are escaped** (`\r`, `\x1B`) rather than written into the log, so a
+  rig emitting a CR cannot break a line in two and a NUL cannot vanish silently.
+- **An inbound frame is logged as the decoder received it.** On Kenwood and Yaesu that is one
+  byte shorter than the wire, because their splitter consumes the `;` terminator; a CI-V frame
+  keeps its whole `FE FE … FD` envelope. Frame granularity is the point — logging raw read
+  chunks would tear frames across lines and make them uncorrelatable — and what is being
+  checked is what the decoder saw.
+- **Undecodable frames are logged too**, with the decode error attached. A rig powering up
+  emits noise, and that noise is evidence.
+
+**It costs nothing when off.** The switch is a bool copied onto the connection at dial, tested
+before anything is formatted, hex-encoded or allocated. That guard is not decoration: `slog`
+evaluates its arguments eagerly, so an unguarded trace would format every frame of every radio
+whatever the log level, and the reader goroutine is in the CW timing path (§11.1). Nothing is
+logged under the mutex the reader contends for either — the reader traces a frame before it
+touches the state cache or looks for a waiter.
+
+Nothing is redacted, because there is nothing to redact: CAT carries frequencies and mode
+codes, never credentials. A trace can be pasted into a bug report as it stands.
+
+The questions this is built to answer are already written down: the assumptions marked "worth
+revisiting on hardware" at the end of §5.4, §5.5 and §5.6. Does the FT-891 really report `1`
+as LSB. Does this Icom actually answer `1A 03`. Does the FTdx9000 answer `ID;` at all, or does
+it sit there until the timeout. Each is one session with the trace on.
 
 ---
 

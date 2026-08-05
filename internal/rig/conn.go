@@ -30,6 +30,11 @@ type conn struct {
 	t   transport.Transport
 	log *slog.Logger
 
+	// wire enables the CAT byte trace for this radio. Copied at construction
+	// rather than read from the session on every frame: it is checked once per
+	// frame in the reader goroutine, which is in the CW timing path.
+	wire bool
+
 	timeout time.Duration
 
 	// cmdMu serialises transactions. A backend may assume its own request and
@@ -66,6 +71,7 @@ func newConn(s *Session, t transport.Transport) *conn {
 		s:       s,
 		t:       t,
 		log:     s.log,
+		wire:    s.wireDebug,
 		timeout: s.cmdTimeout,
 		done:    make(chan struct{}),
 	}
@@ -104,8 +110,19 @@ func (c *conn) readLoop() {
 			// A backend is required not to error on unknown frames, so this is
 			// a real protocol fault. Log and resynchronise rather than dropping
 			// the connection: a rig powering up emits noise.
+			if c.wire {
+				c.logWire(wireFromRig, frame, "err", err)
+			}
 			c.log.Debug("undecodable frame", "frame", fmt.Sprintf("%q", frame), "err", err)
 			continue
+		}
+
+		// Traced before the patch is applied and before a waiter is looked for,
+		// so the log reads in arrival order and no lock is held while it is
+		// written. Solicited or not: an unsolicited frame is the one a trace is
+		// most often opened for.
+		if c.wire {
+			c.logWire(wireFromRig, frame, "key", wireKey(up.Key), "ok", up.OK)
 		}
 
 		c.s.applyUpdate(up)
@@ -304,6 +321,13 @@ func (c *conn) writeLocked(req []byte) error {
 		c.fail(err)
 		return err
 	}
-	c.log.Debug("tx", "bytes", fmt.Sprintf("%q", req))
+	// Traced after the write, so the line means "these bytes are on the wire"
+	// rather than "these bytes were about to be". The guard is what keeps the
+	// unconditional cost at zero: slog evaluates its arguments eagerly, so
+	// formatting here without it would run on every command of every radio
+	// whatever the log level.
+	if c.wire {
+		c.logWire(wireToRig, req)
+	}
 	return nil
 }

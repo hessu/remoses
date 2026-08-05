@@ -3,9 +3,67 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 )
+
+// WireDebugAll is the -debug-wire value selecting every configured radio.
+const WireDebugAll = "all"
+
+// ApplyWireDebug turns on CAT wire logging for the radios named in spec: a
+// comma-separated list of radio ids, or the single word "all".
+//
+// It only ever enables. The command line is what somebody reaches for at two in
+// the morning with a misbehaving rig in front of them, so the file must not be
+// able to countermand it; leaving debug_wire on permanently is what the file is
+// for. An empty spec changes nothing.
+//
+// An id that names no configured radio is an error rather than a no-op: the
+// flag would otherwise be silent about a typo, and silence is exactly what it
+// looks like when the trace is aimed at the wrong radio.
+func (c *Config) ApplyWireDebug(spec string) error {
+	var unknown []string
+	for _, name := range strings.Split(spec, ",") {
+		name = strings.TrimSpace(name)
+		switch {
+		case name == "":
+			continue
+		case strings.EqualFold(name, WireDebugAll):
+			for i := range c.Radios {
+				c.Radios[i].DebugWire = true
+			}
+		default:
+			// Matched case-insensitively. Validation constrains ids to
+			// lower-case, so folding cannot make two radios ambiguous, and
+			// rejecting "IC7610" for its capitals would be a papercut at
+			// exactly the moment this flag gets typed.
+			r := c.radioFold(name)
+			if r == nil {
+				unknown = append(unknown, name)
+				continue
+			}
+			r.DebugWire = true
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	return fmt.Errorf("unknown radio %s (configured: %s)",
+		strings.Join(unknown, ", "), strings.Join(c.RadioIDs(), ", "))
+}
+
+// radioFold finds a radio by id, ignoring case. Only the command line needs
+// this; everywhere else an id comes from the file or a URL path and must match
+// exactly.
+func (c *Config) radioFold(id string) *Radio {
+	for i := range c.Radios {
+		if strings.EqualFold(c.Radios[i].ID, id) {
+			return &c.Radios[i]
+		}
+	}
+	return nil
+}
 
 // Load reads, defaults and validates the configuration file at path.
 func Load(path string) (*Config, error) {

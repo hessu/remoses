@@ -58,7 +58,10 @@ func main() {
 		cfgPath   = flag.String("config", "remoses.yaml", "path to the configuration file")
 		checkOnly = flag.Bool("check", false, "validate the configuration and exit")
 		logLevel  = flag.String("log-level", "info", "debug, info, warn or error")
-		showVer   = flag.Bool("version", false, "print the version and exit")
+		debugWire = flag.String("debug-wire", "",
+			"trace raw CAT bytes for these radios: comma-separated ids, or "+
+				config.WireDebugAll+" (needs -log-level=debug)")
+		showVer = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -71,7 +74,7 @@ func main() {
 	log := newLogger(*logLevel)
 	slog.SetDefault(log)
 
-	if err := run(*cfgPath, *checkOnly, log); err != nil {
+	if err := run(*cfgPath, *debugWire, *checkOnly, log); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
@@ -97,15 +100,21 @@ func newLogger(level string) *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l}))
 }
 
-func run(cfgPath string, checkOnly bool, log *slog.Logger) error {
+func run(cfgPath, debugWire string, checkOnly bool, log *slog.Logger) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
+	}
+	// Merged into the configuration before anything reads it, so the sessions
+	// have one source of truth for whether a radio is being traced.
+	if err := cfg.ApplyWireDebug(debugWire); err != nil {
+		return fmt.Errorf("-debug-wire: %w", err)
 	}
 	if checkOnly {
 		fmt.Printf("%s: ok — %d radio(s), %d user(s)\n", cfgPath, len(cfg.Radios), len(cfg.Auth.Users))
 		return nil
 	}
+	announceWireDebug(cfg, log)
 
 	authn, err := auth.New(cfg.Auth)
 	if err != nil {
@@ -162,6 +171,32 @@ func run(cfgPath string, checkOnly bool, log *slog.Logger) error {
 	go hub.Run(ctx)
 
 	return serve(ctx, cfg, handler, log)
+}
+
+// announceWireDebug says which radios will have their CAT traffic traced, and
+// warns when the trace has nowhere to go.
+//
+// Wire lines are logged at debug level, so -debug-wire without -log-level=debug
+// produces complete silence — which, to somebody debugging a rig at two in the
+// morning, is indistinguishable from a radio that is not answering.
+func announceWireDebug(cfg *config.Config, log *slog.Logger) {
+	var on []string
+	for i := range cfg.Radios {
+		if cfg.Radios[i].DebugWire {
+			on = append(on, cfg.Radios[i].ID)
+		}
+	}
+	if len(on) == 0 {
+		return
+	}
+	radios := strings.Join(on, ",")
+	if !log.Enabled(context.Background(), slog.LevelDebug) {
+		log.Warn("CAT wire logging is enabled but the log level hides it; pass -log-level=debug",
+			"radios", radios)
+		return
+	}
+	log.Info("CAT wire logging enabled; expect a few frames per second per radio from polling alone",
+		"radios", radios)
 }
 
 func spawnRigctld(ctx context.Context, cfg *config.Config, log *slog.Logger) error {

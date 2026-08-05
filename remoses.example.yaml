@@ -96,6 +96,22 @@ radios:
     poll:
       interval: 500ms # frequency, mode, PTT, S-meter
       slow_interval: 5s # power, filter — these rarely move
+    # Log the exact bytes to and from this radio: hex always, plus a readable
+    # rendering for the ASCII dialects. This is the thing to turn on the first
+    # time a rig misbehaves, because the ordinary logs show decoded state, which
+    # is the one layer where a wrong assumption about a radio is invisible.
+    #
+    # Off by default and per radio because it is noisy: polling alone puts a few
+    # frames a second on the wire per rig. The lines come out at debug level, so
+    # this needs -log-level=debug to be visible at all.
+    #
+    # For a one-off there is no need to edit this file:
+    #
+    #   remoses -debug-wire=ic7610 -log-level=debug
+    #   remoses -debug-wire=all -log-level=debug
+    #
+    # The flag only ever turns tracing on, so it cannot be countermanded here.
+    # debug_wire: true
     cw:
       enabled: true
       # The rig has a CAT CW buffer (CI-V command 0x17, 30 characters).

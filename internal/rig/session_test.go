@@ -24,8 +24,10 @@ type harness struct {
 	dl  *fakeDialer
 }
 
-// newHarness builds an unstarted session wired to the fakes.
-func newHarness(t *testing.T, mutate func(*config.Radio)) *harness {
+// newHarness builds an unstarted session wired to the fakes. Trailing options
+// are applied last, so a test can override one — the logger, typically — while
+// keeping the fast timings the rest of the file depends on.
+func newHarness(t *testing.T, mutate func(*config.Radio), opts ...Option) *harness {
 	t.Helper()
 	dev := newFakeDevice()
 	dl := newFakeDialer(dev)
@@ -44,10 +46,11 @@ func newHarness(t *testing.T, mutate func(*config.Radio)) *harness {
 		mutate(&rc)
 	}
 
-	s, err := NewSession(rc, r, dl,
+	s, err := NewSession(rc, r, dl, append([]Option{
 		WithLogger(testLogger()),
-		WithCommandTimeout(150*time.Millisecond),
-		WithEventQueue(256))
+		WithCommandTimeout(150 * time.Millisecond),
+		WithEventQueue(256),
+	}, opts...)...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -70,9 +73,9 @@ func (h *harness) start(t *testing.T) *harness {
 	return h
 }
 
-func startedHarness(t *testing.T, mutate func(*config.Radio)) *harness {
+func startedHarness(t *testing.T, mutate func(*config.Radio), opts ...Option) *harness {
 	t.Helper()
-	return newHarness(t, mutate).start(t)
+	return newHarness(t, mutate, opts...).start(t)
 }
 
 func TestSessionConnectsRunsInitAndFillsState(t *testing.T) {

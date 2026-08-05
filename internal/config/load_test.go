@@ -150,3 +150,113 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("Load of a missing file succeeded")
 	}
 }
+
+// twoRadioYAML has one radio tracing its CAT traffic and one not, which is the
+// arrangement the -debug-wire flag has to interact correctly with.
+const twoRadioYAML = `
+auth: { users: [{username: op, password_bcrypt: "` + testHash + `"}] }
+radios:
+  - id: rig1
+    backend: civ
+    port: { device: /dev/ttyUSB0 }
+    debug_wire: true
+  - id: rig2
+    backend: kenwood
+    port: { device: /dev/ttyUSB1 }
+`
+
+func TestDebugWireFromConfig(t *testing.T) {
+	c, err := Parse([]byte(twoRadioYAML))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !c.Radio("rig1").DebugWire {
+		t.Error("debug_wire: true did not reach the radio")
+	}
+	if c.Radio("rig2").DebugWire {
+		t.Error("debug_wire defaulted to on")
+	}
+}
+
+func TestApplyWireDebugFromTheCommandLine(t *testing.T) {
+	tests := []struct {
+		name    string
+		spec    string
+		want    map[string]bool
+		wantErr string
+	}{
+		{
+			// The flag turns a radio on; it never turns one off, so the rig
+			// already tracing in the file keeps tracing.
+			name: "one radio by id",
+			spec: "rig2",
+			want: map[string]bool{"rig1": true, "rig2": true},
+		},
+		{
+			name: "empty spec changes nothing",
+			spec: "",
+			want: map[string]bool{"rig1": true, "rig2": false},
+		},
+		{
+			name: "all",
+			spec: WireDebugAll,
+			want: map[string]bool{"rig1": true, "rig2": true},
+		},
+		{
+			name: "list tolerates spaces and case",
+			spec: " rig2 , RIG2 ",
+			want: map[string]bool{"rig1": true, "rig2": true},
+		},
+		{
+			// Silence is what a trace aimed at the wrong radio looks like, so a
+			// name that matches nothing has to be reported rather than ignored.
+			name:    "unknown radio is refused",
+			spec:    "rig3",
+			wantErr: "unknown radio rig3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Parse([]byte(twoRadioYAML))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+
+			err = c.ApplyWireDebug(tt.spec)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ApplyWireDebug(%q) = %v, want an error containing %q",
+						tt.spec, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ApplyWireDebug(%q): %v", tt.spec, err)
+			}
+			for id, want := range tt.want {
+				if got := c.Radio(id).DebugWire; got != want {
+					t.Errorf("radio %s debug_wire = %v, want %v", id, got, want)
+				}
+			}
+		})
+	}
+}
+
+// The error names the radios that do exist: whoever mistyped an id at two in
+// the morning needs the right one, not a lecture.
+func TestApplyWireDebugErrorListsConfiguredRadios(t *testing.T) {
+	c, err := Parse([]byte(twoRadioYAML))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	err = c.ApplyWireDebug("ic7610")
+	if err == nil {
+		t.Fatal("ApplyWireDebug with an unknown radio succeeded")
+	}
+	for _, want := range []string{"rig1", "rig2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name the configured radio %s", err, want)
+		}
+	}
+}

@@ -137,6 +137,12 @@ type Session struct {
 	backoffMin time.Duration
 	backoffMax time.Duration
 
+	// wireDebug traces every frame to and from this radio. It belongs to the
+	// session rather than to a backend because the session is the only layer
+	// that sees the bytes of all four of them — backends never touch the
+	// transport. See wirelog.go.
+	wireDebug bool
+
 	// state is read by the API and the WebSocket layer without ever touching a
 	// mutex; stateMu serialises only the read-modify-write of publishers, so
 	// that Seq stays monotonic and no update is lost.
@@ -190,6 +196,7 @@ func NewSession(rc config.Radio, r backend.Rig, d transport.Dialer, opts ...Opti
 		pollSlow:   orDefault(rc.Poll.SlowInterval.D(), defaultPollSlow),
 		backoffMin: defaultBackoffMin,
 		backoffMax: defaultBackoffMax,
+		wireDebug:  rc.DebugWire,
 		subs:       newSubscribers(o.queue),
 	}
 	st := radio.State{UpdatedAt: time.Now()}

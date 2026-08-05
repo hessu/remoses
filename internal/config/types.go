@@ -94,6 +94,25 @@ type Radio struct {
 	Poll   Poll   `yaml:"poll"`
 	CW     CW     `yaml:"cw"`
 	Limits Limits `yaml:"limits"`
+
+	// DebugWire logs every CAT frame to and from this radio at debug level:
+	// raw hex, plus a printable rendering for the ASCII dialects.
+	//
+	// Per radio and off by default because it is noisy — polling alone puts a
+	// few frames a second on the wire per rig — and because the question it
+	// answers is nearly always about one radio. The -debug-wire flag turns it
+	// on without editing this file. See DESIGN.md §6.1.
+	DebugWire bool `yaml:"debug_wire"`
+}
+
+// RadioIDs lists the configured radio ids in file order, which is the order
+// everything else presents them in.
+func (c *Config) RadioIDs() []string {
+	ids := make([]string, len(c.Radios))
+	for i := range c.Radios {
+		ids[i] = c.Radios[i].ID
+	}
+	return ids
 }
 
 // Port describes where a radio's control interface lives: a local serial
