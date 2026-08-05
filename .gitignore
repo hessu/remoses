@@ -1,0 +1,9 @@
+/remoses
+/dist/
+*.test
+*.out
+coverage.*
+
+# Local config may hold password hashes and TLS keys.
+/remoses.yaml
+/*.pem

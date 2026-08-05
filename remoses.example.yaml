@@ -1,0 +1,182 @@
+# remoses example configuration.
+#
+# Copy to /etc/remoses/remoses.yaml (or wherever you like) and edit.
+# Unknown keys are a startup error, not a silent default, so a typo here will
+# be reported with its line and column rather than quietly ignored.
+#
+# The two password hashes below are real bcrypt hashes of the password
+# "changeme". Replace them before this goes anywhere near a network:
+#
+#   remoses passwd
+
+server:
+  # Loopback needs no TLS. Any other address does, because HTTP Basic replays
+  # the password on every request — see server.insecure below.
+  listen: "0.0.0.0:8080"
+  base_path: /api/v1
+  tls:
+    cert_file: /etc/remoses/cert.pem
+    key_file: /etc/remoses/key.pem
+  # Terminating TLS at a reverse proxy is fine: drop the tls block and bind to
+  # 127.0.0.1 instead. Only set insecure when you genuinely mean cleartext.
+  # insecure: false
+
+auth:
+  realm: remoses
+  # 4..31. Low by choice: this is a trusted station, and every polling request
+  # pays the KDF unless it hits cache_ttl below.
+  bcrypt_cost: 8
+  cache_ttl: 60s
+  users:
+    - username: oh7lzb
+      password_bcrypt: "$2a$08$boRz/m7HqlHYSduBcNDLOOoJQoEut/wmkD.Mq98XiDINpdOiQ61iC"
+    - username: guest
+      password_bcrypt: "$2a$08$4GkhmsOc9tmY2bbjOaCvwuIf0mAqoQQvwGdghFc9cO.eaXYvlCrFK"
+
+lock:
+  # Exclusive control is per radio, so one operator can work the IC-7610 while
+  # another works the TS-590SG.
+  enabled: true
+  # Sliding: every accepted command resets it. A client that dies mid-over
+  # loses the lock, which drops PTT and flushes the CW queue.
+  ttl: 30s
+  allow_steal: false
+
+ws:
+  # Spinning a VFO knob with Transceive on can emit hundreds of updates a
+  # second; state events are coalesced to at most one per radio per interval.
+  min_interval: 50ms
+  ping_interval: 30s
+  send_queue: 256
+
+radios:
+  - id: ic7610
+    name: "Icom IC-7610"
+    backend: civ
+    port:
+      device: /dev/tty.usbmodem14201
+      # match wins over device when both are given. Prefer it: /dev/ttyUSB0 is
+      # not stable across a replug.
+      match:
+        vid: "10C4"
+        pid: "EA60"
+        serial: "IC7610-001"
+      baud: 115200
+      data_bits: 8
+      parity: none
+      stop_bits: "1"
+    civ:
+      rig_address: 0x98
+      controller_address: 0xE0
+      # true only when wired to the 13-pin CI-V bus jack, which echoes back
+      # everything we send. USB does not echo.
+      echo: false
+      # Unsolicited state broadcasts: front-panel changes arrive without polling.
+      transceive: true
+    poll:
+      interval: 500ms # frequency, mode, PTT, S-meter
+      slow_interval: 5s # power, filter — these rarely move
+    cw:
+      enabled: true
+      # The rig has a CAT CW buffer (CI-V command 0x17, 30 characters).
+      method: cat
+      default_wpm: 28
+      # Chunks queued in the rig beyond the one being sent. Command 0x17 cannot
+      # be asked how full it is, so this trades gap-free sending against abort
+      # latency. Raise it only if you hear gaps between chunks.
+      chunks_in_flight: 1
+    limits:
+      # Icom reports power on a relative 0..255 scale with no watt meaning, so
+      # the limit is a percentage. max_power_pct and max_power_w are mutually
+      # exclusive.
+      max_power_pct: 80
+      # Dead-man timer: forces RX regardless of what the client is doing.
+      tx_timeout: 120s
+      bands:
+        - 1.8-2.0MHz
+        - 3.5-3.8MHz
+        - 7.0-7.2MHz
+        - 14.0-14.35MHz
+
+  - id: ts590sg
+    name: "Kenwood TS-590SG"
+    backend: kenwood
+    port:
+      device: COM7
+      baud: 115200
+    kenwood:
+      model: ts590sg
+      # AI2 pushes state changes and reverts to off at rig power-down, so it
+      # does not permanently alter the operator's menu settings. 0 disables it.
+      auto_information: 2
+      # Use IF; for the fast poll — one 38-character reply covering frequency,
+      # RIT/XIT, TX/RX, mode and split. The poller falls back to discrete
+      # queries in Data mode, where IF; does not answer.
+      bulk_poll: true
+    poll:
+      interval: 500ms
+      slow_interval: 5s
+    cw:
+      enabled: true
+      method: cat # KY, fixed 24-character blocks
+      default_wpm: 25
+    limits:
+      # Kenwood PC is in watts: 005..100, 005..025 in AM.
+      max_power_w: 80
+      tx_timeout: 120s
+
+  # The Hamlib escape hatch, for rigs with no native backend. Uncomment and
+  # adjust — rigctld.address is the only required field.
+  #
+  # - id: ft857
+  #   name: "Yaesu FT-857 (hamlib)"
+  #   backend: rigctld
+  #   rigctld:
+  #     address: "127.0.0.1:4532"
+  #     spawn: true          # remoses launches and supervises rigctld itself
+  #     model: 1035
+  #     device: /dev/ttyUSB1
+  #   cw:
+  #     enabled: true
+  #     # No usable CAT CW buffer, so remoses generates the Morse itself and
+  #     # keys a modem control line. Viable only because remoses runs next to
+  #     # the radio: the network is never in the timing path.
+  #     method: serial_key
+  #     default_wpm: 22
+  #     serial_key:
+  #       device: /dev/ttyUSB2   # a separate port from CAT is strongly preferred
+  #       key_line: dtr          # dtr | rts
+  #       ptt_line: rts          # omit for full break-in
+  #       ptt_lead_ms: 15
+  #       ptt_tail_ms: 150
+  #       weight: 50             # dit/dah weighting, %; 20..80
+  #   limits:
+  #     max_power_pct: 100
+  #     tx_timeout: 120s
+
+  # A rig whose serial port lives on the network, published by a terminal
+  # server (ser2net, a Digi/Moxa device server, an ESP32 bridge). Works for
+  # every serial backend, so a rig across the shack LAN is configured just like
+  # a local one.
+  #
+  # port.tcp is mutually exclusive with device and match, and carries bytes
+  # only -- plain TCP, not RFC 2217. So the line settings (baud, parity,
+  # stop_bits) belong to the terminal server and are ignored here, and there
+  # are no modem control lines, which rules out cw.method: serial_key on this
+  # port. Keying such a rig needs its own local cw.serial_key.device.
+  # - id: ts590-remote
+  #   name: "TS-590SG in the other building"
+  #   backend: kenwood
+  #   port:
+  #     tcp: "192.168.1.50:4001"
+  #   kenwood:
+  #     model: ts590sg
+  #     auto_information: 2
+  #     bulk_poll: true
+  #   cw:
+  #     enabled: true
+  #     method: cat            # the rig's own KY buffer generates the timing
+  #     default_wpm: 25
+  #   limits:
+  #     max_power_w: 80
+  #     tx_timeout: 120s

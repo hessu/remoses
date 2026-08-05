@@ -1,0 +1,630 @@
+openapi: 3.0.3
+
+info:
+  title: remoses
+  version: 0.1.0
+  description: |
+    Remote control of amateur radio transceivers.
+
+    remoses runs next to the radios and exposes frequency, mode, filter, power,
+    PTT and CW sending over HTTP, with a WebSocket stream of state changes.
+
+    ## Authentication
+
+    HTTP Basic on every request, over TLS. Authorisation is per instance: any
+    authenticated user may use any radio.
+
+    ## Locking
+
+    Exclusive control is per radio. Acquire a lock, then pass its token in the
+    `X-Remoses-Lock` header on every state-changing request. The lease slides:
+    any accepted command renews it. Reads and the WebSocket need no lock.
+
+    If a lock expires or is released while the radio is transmitting, remoses
+    drops PTT and flushes the CW queue. A client that crashes mid-transmission
+    must not leave a carrier up.
+
+servers:
+  - url: /api/v1
+
+security:
+  - basicAuth: []
+
+tags:
+  - name: radios
+  - name: control
+  - name: cw
+  - name: lock
+  - name: stream
+
+paths:
+  /radios:
+    get:
+      tags: [radios]
+      operationId: listRadios
+      summary: List configured radios
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Radio" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /radios/{radioId}:
+    parameters:
+      - $ref: "#/components/parameters/RadioId"
+    get:
+      tags: [radios]
+      operationId: getRadio
+      summary: Radio descriptor, capabilities and configured limits
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Radio" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /radios/{radioId}/state:
+    parameters:
+      - $ref: "#/components/parameters/RadioId"
+    get:
+      tags: [control]
+      operationId: getState
+      summary: Cached state snapshot
+      description: |
+        Served from the session's state cache, so it never blocks on the serial
+        port and always succeeds for a configured radio. A disconnected radio is
+        reported through `connected: false` rather than an error status — the
+        last known state is still useful, and the client needs to distinguish
+        "no such radio" from "radio unplugged". `age_ms` says how old the
+        snapshot is; `stale` is set when the poller has not refreshed it within
+        the expected interval.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/State" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      tags: [control]
+      operationId: patchState
+      summary: Set one or more state fields atomically
+      description: |
+        The primary control verb. Fields are applied in a rig-safe order — mode
+        before frequency, because mode selection can change the filter and
+        carrier offset — so "14.025 CW" is one transaction rather than two
+        racing requests.
+
+        After applying the write, remoses reads back from the rig before
+        responding, so the response reflects reality rather than intent. Rigs
+        silently clamp: per-band power limits, unsupported filter slots.
+      parameters:
+        - $ref: "#/components/parameters/LockToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StatePatch" }
+      responses:
+        "200":
+          description: Applied, with state as read back from the rig
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/State" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/LockConflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "423": { $ref: "#/components/responses/Locked" }
+        "503": { $ref: "#/components/responses/Disconnected" }
+        "504": { $ref: "#/components/responses/RigTimeout" }
+
+  /radios/{radioId}/cw:
+    parameters:
+      - $ref: "#/components/parameters/RadioId"
+    get:
+      tags: [cw]
+      operationId: getCW
+      summary: CW queue status
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CWStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    post:
+      tags: [cw]
+      operationId: sendCW
+      summary: Enqueue CW text
+      description: |
+        Text is in remoses canonical form, which is rig-neutral: a prosign is
+        `^` followed by the letters to be keyed with no inter-character spacing,
+        such as `^AR` or `^SK`. remoses translates that into whatever the target
+        rig speaks — Icom's `^` marker, Kenwood's single-symbol substitutions, or
+        a local element table.
+
+        Returns as soon as the text is queued; it does not wait for it to be
+        sent. Characters the radio cannot key are rejected with 422 rather than
+        silently mangled by the rig.
+      parameters:
+        - $ref: "#/components/parameters/LockToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CWRequest" }
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CWAccepted" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/LockConflict" }
+        "422":
+          description: |
+            Unsendable character, or CW not supported by this radio. The problem
+            document names the offending character, its offset, and the accepted
+            charset.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "423": { $ref: "#/components/responses/Locked" }
+        "503": { $ref: "#/components/responses/Disconnected" }
+
+    delete:
+      tags: [cw]
+      operationId: abortCW
+      summary: Abort sending
+      description: |
+        Drops the local queue and tells the rig to stop. Both halves matter: up
+        to a full buffer may already be inside the radio.
+      parameters:
+        - $ref: "#/components/parameters/LockToken"
+      responses:
+        "204": { description: Aborted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/LockConflict" }
+        "423": { $ref: "#/components/responses/Locked" }
+
+  /radios/{radioId}/lock:
+    parameters:
+      - $ref: "#/components/parameters/RadioId"
+    get:
+      tags: [lock]
+      operationId: getLock
+      summary: Who holds the lock
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LockState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    post:
+      tags: [lock]
+      operationId: acquireLock
+      summary: Acquire exclusive control
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LockRequest" }
+      responses:
+        "201":
+          description: Acquired
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lock" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Steal requested but disabled by configuration
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/LockConflict" }
+
+    delete:
+      tags: [lock]
+      operationId: releaseLock
+      summary: Release
+      description: |
+        Releasing while transmitting drops PTT and flushes the CW queue.
+      parameters:
+        - $ref: "#/components/parameters/LockToken"
+      responses:
+        "204": { description: Released }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "423": { $ref: "#/components/responses/Locked" }
+
+  /radios/{radioId}/lock/renew:
+    parameters:
+      - $ref: "#/components/parameters/RadioId"
+    post:
+      tags: [lock]
+      operationId: renewLock
+      summary: Heartbeat the lease
+      description: |
+        Any accepted command renews the lease already. This exists for a client
+        holding the radio while its operator thinks, without issuing commands.
+      parameters:
+        - $ref: "#/components/parameters/LockToken"
+      responses:
+        "200":
+          description: Renewed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lock" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/LockConflict" }
+        "423": { $ref: "#/components/responses/Locked" }
+
+  /ws-ticket:
+    post:
+      tags: [stream]
+      operationId: createWSTicket
+      summary: Single-use ticket for browser WebSocket clients
+      description: |
+        Browsers cannot set headers on a WebSocket handshake, so Basic auth is
+        unavailable to them. Programmatic clients should send the normal
+        `Authorization` header on the upgrade and skip this entirely.
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WSTicket" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /ws:
+    get:
+      tags: [stream]
+      operationId: stream
+      summary: WebSocket state stream (all radios)
+      description: |
+        One connection carries state changes for every radio. Many concurrent
+        clients are supported. The stream is read-only and needs no lock; all
+        control stays on REST, so the socket has no authorisation surface.
+
+        On connect the server sends `hello`, then one `state` snapshot per
+        radio, then `delta` messages. `seq` is monotonic per radio so clients
+        can detect gaps.
+
+        Backpressure: state is last-value-wins and is coalesced for a slow
+        client, then rate-limited per radio. Discrete `cw`, `lock` and `conn`
+        events are not coalesced; if that queue overflows the server emits
+        `resync` and the client should refetch state.
+      parameters:
+        - name: radios
+          in: query
+          required: false
+          description: Comma-separated radio ids to subscribe to. Default all.
+          schema: { type: string }
+        - name: ticket
+          in: query
+          required: false
+          description: Ticket from /ws-ticket, for browser clients.
+          schema: { type: string }
+      responses:
+        "101": { description: Switching protocols }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /healthz:
+    get:
+      tags: [radios]
+      operationId: health
+      summary: Liveness
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, example: ok }
+                  radios_connected: { type: integer }
+                  radios_total: { type: integer }
+
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+
+  parameters:
+    RadioId:
+      name: radioId
+      in: path
+      required: true
+      description: Stable radio identifier from the configuration file.
+      schema: { type: string, example: ic7610 }
+
+    LockToken:
+      name: X-Remoses-Lock
+      in: header
+      required: false
+      description: |
+        Lock token from POST /radios/{radioId}/lock. Required for every
+        state-changing request when locking is enabled. A `remoses_lock_{id}`
+        cookie is accepted as a fallback for browsers; the header wins.
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials
+      headers:
+        WWW-Authenticate:
+          schema: { type: string }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: No such radio
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    LockConflict:
+      description: The lock is held by another user
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Locked:
+      description: No lock held, or the token is expired or invalid
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unprocessable:
+      description: Out of band, or unsupported by this radio
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Disconnected:
+      description: The radio is not currently connected
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    RigTimeout:
+      description: The rig did not answer within the timeout
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      description: RFC 9457 problem detail, with a radio_id extension member.
+      type: object
+      required: [title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        radio_id: { type: string }
+        locked_by: { type: string }
+        expires_at: { type: string, format: date-time }
+        character: { type: string }
+        offset: { type: integer }
+        charset: { type: string }
+
+    Mode:
+      type: string
+      description: |
+        UNKNOWN is reported for a radio that has not connected yet, or whose rig
+        answered with a value it documents as a setting failure (Kenwood MD0/MD8).
+        It is never accepted as input.
+      enum: [UNKNOWN, LSB, USB, CW, CW-R, AM, FM, FSK, FSK-R, PSK, PSK-R]
+
+    VFO:
+      type: string
+      enum: [current, A, B, main, sub]
+
+    Power:
+      description: |
+        Transmit power in every form the backend can supply. The target rigs
+        disagree about units and normalising that away would lose information:
+        Kenwood PC is watts, Icom 14 0A is a relative index.
+      type: object
+      required: [pct, native]
+      properties:
+        watts:
+          type: number
+          nullable: true
+          description: Absolute watts, null when the rig has no watt-accurate scale.
+        pct:
+          type: number
+          description: Normalised 0..100 against the rig's maximum for the current mode.
+        native:
+          type: integer
+          description: The value as it appears on the wire.
+
+    PowerSet:
+      description: Exactly one of watts or pct.
+      type: object
+      properties:
+        watts: { type: number }
+        pct: { type: number, minimum: 0, maximum: 100 }
+
+    Meter:
+      description: |
+        An uncalibrated meter reading. Neither target rig reports dBm: Kenwood
+        SM returns 0..30 meter dots, Icom 15 02 returns 0..255. `s` is present
+        only where a per-model calibration table exists.
+      type: object
+      required: [raw, scale]
+      properties:
+        raw: { type: integer }
+        scale: { type: integer }
+        s: { type: number, nullable: true }
+
+    CWStatus:
+      type: object
+      required: [busy, queued, wpm]
+      properties:
+        busy: { type: boolean }
+        queued: { type: integer, description: Characters not yet keyed }
+        wpm: { type: integer }
+        est_remaining_ms: { type: integer }
+
+    State:
+      type: object
+      required: [frequency, mode, ptt, connected, seq, updated_at]
+      properties:
+        frequency: { type: integer, format: int64, description: Hz }
+        mode: { $ref: "#/components/schemas/Mode" }
+        data_mode:
+          type: boolean
+          description: |
+            Orthogonal to mode. Kenwood models it separately (MD + DA), so
+            remoses does too rather than inventing DATA-U style pseudo-modes.
+        passband_hz: { type: integer }
+        filter_slot: { type: integer }
+        power: { $ref: "#/components/schemas/Power" }
+        ptt: { type: boolean }
+        s_meter: { $ref: "#/components/schemas/Meter" }
+        swr: { $ref: "#/components/schemas/Meter" }
+        alc: { $ref: "#/components/schemas/Meter" }
+        cw: { $ref: "#/components/schemas/CWStatus" }
+        connected: { type: boolean }
+        seq: { type: integer, format: int64 }
+        updated_at: { type: string, format: date-time }
+        age_ms: { type: integer }
+        stale: { type: boolean }
+
+    StatePatch:
+      description: |
+        Every field is optional. Applied in rig-safe order, mode before
+        frequency. Supplying both power_w and power_pct is a 422.
+      type: object
+      properties:
+        frequency: { type: integer, format: int64 }
+        mode: { $ref: "#/components/schemas/Mode" }
+        data_mode: { type: boolean }
+        vfo: { $ref: "#/components/schemas/VFO" }
+        passband_hz: { type: integer }
+        filter_slot: { type: integer }
+        power_w: { type: number }
+        power_pct: { type: number, minimum: 0, maximum: 100 }
+        ptt: { type: boolean }
+
+    Caps:
+      type: object
+      properties:
+        modes:
+          type: array
+          items: { $ref: "#/components/schemas/Mode" }
+        vfos:
+          type: array
+          items: { $ref: "#/components/schemas/VFO" }
+        power_watt_accurate:
+          type: boolean
+          description: True when the rig's power scale is real watts.
+        max_power_w: { type: number }
+        filter_width: { type: boolean }
+        filter_slots: { type: integer }
+        s_meter_scale: { type: integer }
+        sub_receiver: { type: boolean }
+        cw_method:
+          type: string
+          enum: [none, cat, serial_key]
+        cw_charset:
+          type: string
+          description: Characters this radio will key. Clients should validate against it.
+        cw_min_wpm: { type: integer }
+        cw_max_wpm: { type: integer }
+
+    Limits:
+      type: object
+      properties:
+        max_power_w: { type: number }
+        max_power_pct: { type: number }
+        tx_timeout_s: { type: integer }
+        bands:
+          type: array
+          items: { type: string, example: 14.0-14.35MHz }
+
+    Radio:
+      type: object
+      required: [id, name, backend, connected]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        backend: { type: string, enum: [civ, kenwood, rigctld] }
+        connected: { type: boolean }
+        caps: { $ref: "#/components/schemas/Caps" }
+        limits: { $ref: "#/components/schemas/Limits" }
+        lock: { $ref: "#/components/schemas/LockState" }
+
+    LockRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          description: Steal a held lock. Permitted only when enabled in configuration.
+
+    Lock:
+      type: object
+      required: [token, expires_at, ttl_seconds]
+      properties:
+        token: { type: string }
+        expires_at: { type: string, format: date-time }
+        ttl_seconds: { type: integer }
+
+    LockState:
+      type: object
+      required: [held]
+      properties:
+        held: { type: boolean }
+        holder: { type: string }
+        expires_at: { type: string, format: date-time }
+        is_mine: { type: boolean }
+
+    CWRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: Canonical form; `^AR` style prosigns.
+          example: CQ TEST DE OH2XYZ ^AR
+        wpm: { type: integer }
+        mode:
+          type: string
+          enum: [append, replace]
+          default: append
+
+    CWAccepted:
+      type: object
+      required: [queued_chars]
+      properties:
+        queued_chars: { type: integer }
+        position: { type: integer }
+        est_duration_ms: { type: integer }
+
+    WSTicket:
+      type: object
+      required: [ticket, expires_at]
+      properties:
+        ticket: { type: string }
+        expires_at: { type: string, format: date-time }
