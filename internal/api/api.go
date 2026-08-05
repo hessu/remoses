@@ -232,12 +232,28 @@ type healthDTO struct {
 // authenticates itself: a browser cannot put Basic credentials on a WebSocket
 // handshake, so this route accepts a ticket instead and cannot sit behind the
 // normal middleware.
+//
+// A programmatic client does send the header, though, and both the OpenAPI
+// document and DESIGN.md §9 say it is the path for one. The middleware being
+// skipped is what makes the check belong here: credentials that are present are
+// verified, and a request carrying none still falls through to the ticket, so
+// the browser path is untouched. Verifying rather than passing through also
+// means a wrong password is answered with a 401 and a Basic challenge instead
+// of the stream handler's "or a ticket" message, which is not advice a
+// programmatic client can act on.
 func (s *server) wsUpgrade(w http.ResponseWriter, r *http.Request) {
 	if s.ws == nil {
 		problem(w, http.StatusServiceUnavailable, "Service Unavailable",
 			"the WebSocket stream is not enabled on this instance",
 			kv("instance", r.URL.Path))
 		return
+	}
+	if user, pass, ok := r.BasicAuth(); ok && s.auth != nil {
+		if !s.auth.Verify(user, pass) {
+			s.auth.Unauthorized(w)
+			return
+		}
+		r = r.WithContext(auth.WithUser(r.Context(), user))
 	}
 	s.ws.ServeHTTP(w, r)
 }
