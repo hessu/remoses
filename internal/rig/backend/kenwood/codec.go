@@ -14,6 +14,7 @@ const (
 	keyFA backend.Key = "FA"
 	keyFB backend.Key = "FB"
 	keyMD backend.Key = "MD"
+	keyOM backend.Key = "OM"
 	keyDA backend.Key = "DA"
 	keyPC backend.Key = "PC"
 	keySM backend.Key = "SM"
@@ -44,10 +45,6 @@ const (
 
 // errorKeys is appended to every read transaction's want list.
 var errorKeys = []backend.Key{keyErrSyntax, keyErrComm, keyErrBusy}
-
-// smeterScale is the full-scale SM reading: the parameter is a count of meter
-// dots, 0000 to 0030, not a signal level.
-const smeterScale = 30
 
 // Split is a bufio.SplitFunc over the inbound stream.
 //
@@ -169,6 +166,14 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 			}
 		}
 
+	case keyOM:
+		// Both mode commands are decoded on every model. Only one of them can
+		// arrive from a given radio, and keeping the decoder independent of the
+		// configured model means a misconfigured station still reads correctly
+		// instead of silently ignoring its rig's mode.
+		u.Key = keyOM
+		k.decodeOM(&u, arg)
+
 	case keyDA:
 		u.Key = keyDA
 		if len(arg) >= 1 && (arg[0] == '0' || arg[0] == '1') {
@@ -186,19 +191,21 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 	case keyPC:
 		u.Key = keyPC
 		if w, err := strconv.Atoi(string(arg)); err == nil && len(arg) == 3 {
-			p := powerFromWatts(w, k.lastMode())
+			p := k.profile.powerFromWatts(w, k.lastMode())
 			u.Patch.Power = &p
 		}
 
 	case keySM:
 		u.Key = keySM
-		// SM0 + 4 digits. P2 counts meter dots, and reads the RF power meter
-		// while transmitting rather than the S-meter, so this single field
-		// means two different things depending on PTT. State keeps it in SMeter
-		// either way; the scale is the same 30 dots.
-		if len(arg) == 5 {
-			if n, err := strconv.Atoi(string(arg[1:])); err == nil {
-				m := radio.Meter{Raw: n, Scale: smeterScale}
+		// The meter selector, where the model has one, plus four digits. The
+		// digits count meter dots, and read the RF power meter while
+		// transmitting rather than the S-meter, so this single field means two
+		// different things depending on PTT. State keeps it in SMeter either
+		// way. Both the field width and the full-scale count are per model —
+		// 20, 30 or 70 dots — so neither may be assumed here.
+		if n := k.profile.smeterArgLen(); len(arg) == n {
+			if v, err := strconv.Atoi(string(arg[n-4:])); err == nil {
+				m := radio.Meter{Raw: v, Scale: k.profile.SMeterScale}
 				u.Patch.SMeter = &m
 			}
 		}
@@ -213,9 +220,15 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 
 	case keyFL:
 		u.Key = keyFL
-		if len(arg) >= 1 && (arg[0] == '1' || arg[0] == '2') {
-			slot := int(arg[0] - '0')
-			u.Patch.FilterSlot = &slot
+		// Which character carries the selection is per model. On the TS-590 the
+		// command is FL1/FL2 and the argument starts with the selection; on the
+		// TS-890S it is FL0 followed by A/B/C; on the TS-990S an FL0 answer puts
+		// the band first and the selection second. Reading the wrong character
+		// would report the band as a filter slot.
+		if sel, ok := k.profile.filterSelectionChar(arg); ok {
+			if slot, ok := k.profile.FilterSelect.decode(sel); ok {
+				u.Patch.FilterSlot = &slot
+			}
 		}
 
 	case keyIF:
@@ -282,6 +295,31 @@ func upperASCII(s string) string {
 		}
 	}
 	return string(b)
+}
+
+// decodeOM parses the TS-890S/TS-990S mode answer, OM P1 P2.
+//
+// P1 is the display area: 0 is the left one, which is the main receiver, and 1
+// is the right one. Frames for the right area complete their transaction but
+// change nothing, because radio.State publishes a single mode and folding the
+// second receiver into it would let a change over there overwrite the mode the
+// operator is actually working. remoses does not model a sub receiver
+// (Caps.SubReceiver is false), so the alternative is not "publish both".
+//
+// P2 carries the DATA flag inside the mode code, so a well-formed answer always
+// settles both — unlike the MD models, where DATA needs its own DA.
+func (k *Rig) decodeOM(u *backend.Update, arg []byte) {
+	if len(arg) < 2 || arg[0] != '0' {
+		return
+	}
+	m, data, ok := decodeOMMode(arg[1])
+	if !ok {
+		return
+	}
+	u.Patch.Mode = &m
+	k.mode.Store(uint32(m))
+	u.Patch.DataMode = &data
+	k.dataMode.Store(data)
 }
 
 // Field offsets within an IF answer, zero-based and with the ';' already

@@ -1,10 +1,11 @@
 // Package kenwood implements the Kenwood ASCII CAT protocol as spoken by the
-// TS-590S and TS-590SG.
+// TS-480, TS-590S, TS-590SG, TS-890S and TS-990S.
 //
-// Everything here is verified against the manufacturer's *TS-590S/TS-590SG PC
-// Control Command Reference Guide* (B5A-0316-00). Where the two models differ
-// the difference is noted at the command; almost nothing this backend uses is
-// model-specific.
+// Everything here is verified against the manufacturers' own PC Control Command
+// Reference Guides, one per radio. The framing and most parameter encodings are
+// family-wide; what differs per model lives in one place, model.go, and is
+// selected by `kenwood.model` in the configuration. See Model for why that is a
+// table rather than a run-time probe.
 //
 // # Shape
 //
@@ -13,7 +14,7 @@
 // backend.Conn, and every inbound frame goes through the same Decode, whether it
 // answers a request or arrives unbidden because Auto Information is on.
 //
-// # Two quirks drive the design
+// # Three quirks drive the design
 //
 // The first is that IF; — the one command that returns most of State in a single
 // 38-byte answer — is simply refused while the rig is in Data mode. That is not
@@ -30,20 +31,29 @@
 // the keyer speed, so what was asked for and what the rig took are routinely
 // different numbers.
 //
+// The third belongs to the newest radios. The TS-890S and TS-990S have no IF;
+// at all, and IF; is the only query on this protocol that carries the TX/RX
+// flag: TX;/RX; are set-only and answer nothing unless AI is on. On those two
+// models PTT therefore CANNOT BE POLLED — it is observable only through the AI
+// push frames Decode already handles, which makes leaving AI on a requirement
+// rather than a preference there. It is a genuine limitation of the command set,
+// not an omission here. See Poll.
+//
 // # Mutable state
 //
 // Two values are carried between calls — the last decoded mode and the Data-mode
 // flag. They are atomics, not fields: Decode runs on the session's reader
 // goroutine while Poll and the setters run on the command goroutine, and the
 // contract forbids a lock. Both are hints. Mode scales the PC watt-to-percent
-// conversion (AM tops out at 25 W, everything else at 100) and gates FW; the
-// Data-mode flag picks the poll shape. Neither is authoritative state — that
+// conversion (AM tops out at a quarter of the rig's nominal power) and gates FW;
+// the Data-mode flag picks the poll shape. Neither is authoritative state — that
 // lives in the session's cache.
 package kenwood
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 
 	"github.com/hessu/remoses/internal/config"
@@ -71,22 +81,34 @@ const (
 	reqFA = "FA;"
 	reqFB = "FB;"
 	reqMD = "MD;"
+	reqOM = "OM0;" // P1 selects the display area: 0 is the left one, the main receiver
 	reqDA = "DA;"
 	reqPC = "PC;"
-	reqFL = "FL;"
 	reqFW = "FW;"
 	reqIF = "IF;"
-	reqSM = "SM0;" // P1 is the meter selector and is always 0 on this rig
-	reqKY = "KY;"
+	reqSM = "SM0;" // P1 is the meter selector, 0 for the main receiver's meter
+	// reqSMNoSelector is the TS-890S form. Its SM has no meter selector at all,
+	// so asking with SM0; would be a syntax error and the answer is one
+	// character shorter. See Model.SMeterRequest.
+	reqSMNoSelector = "SM;"
+	reqKY           = "KY;"
 )
 
 // Rig is the Kenwood ASCII CAT backend. Construct it with New.
 type Rig struct {
 	// ai is the AI parameter to send at Init: 0 off, 2 on, 4 on with backup.
 	ai int
-	// bulkPoll enables the IF; fast poll. Config default is on.
+	// bulkPoll enables the IF; fast poll. Config default is on. It is an upper
+	// bound, not a promise: profile.BulkPoll can veto it for a radio that has no
+	// IF; at all.
 	bulkPoll bool
-	// model is the configured model name, used only in messages.
+	// profile is the model's capability table, and the only thing in this
+	// backend that knows one radio from another.
+	profile Model
+	// model is the configured model name in display form, used only in
+	// messages. It stays empty when the configuration named none, so Model()
+	// does not claim an identity the operator never asserted — the profile still
+	// falls back to DefaultModel.
 	model string
 
 	// mode is the last mode decoded from MD; or from the mode digit inside an
@@ -98,20 +120,29 @@ type Rig struct {
 	// a good IF answer or by a DA; that reports Data mode off, which gives the
 	// bulk poll a retry cadence of one slow poll rather than never.
 	ifBlocked atomic.Bool
-	// id is the numeric ID; answer: 21 for a TS-590S, 23 for a TS-590SG.
+	// id is the numeric ID; answer, e.g. 21 for a TS-590S. See ModelForID.
 	id atomic.Uint32
 }
 
 // New builds the backend from a radio's configuration. A missing kenwood block
-// is not an error: the defaults (AI2, bulk polling on) are the ones the config
-// package would have filled in.
+// is not an error: the defaults (AI2, bulk polling on, DefaultModel) are the
+// ones the config package would have filled in.
 func New(r *config.Radio) (*Rig, error) {
 	k := &Rig{ai: 2, bulkPoll: true}
+	name := ""
 	if r != nil && r.Kenwood != nil {
 		k.ai = r.Kenwood.AutoInformation
 		k.bulkPoll = r.Kenwood.BulkPoll
-		k.model = normaliseModel(r.Kenwood.Model)
+		name = r.Kenwood.Model
+		k.model = normaliseModel(name)
 	}
+
+	profile, err := LookupModel(name)
+	if err != nil {
+		return nil, err
+	}
+	k.profile = profile
+
 	// config.validate already rejects other values, but a backend built
 	// directly in a test or by a future caller should not put a bad AI
 	// parameter on the wire and desynchronise the stream.
@@ -125,10 +156,14 @@ func New(r *config.Radio) (*Rig, error) {
 
 // Model reports the rig identified by ID; at Init, falling back to the
 // configured model name before Init has run.
+//
+// What the rig says wins here because ID; really does name a model — it is fixed
+// in firmware, unlike an Icom's menu-configurable bus address. It does not
+// change the profile, though: see checkIdentity.
 func (k *Rig) Model() string {
 	if n := k.id.Load(); n != 0 {
-		if s, ok := modelNames[int(n)]; ok {
-			return s
+		if m, ok := ModelForID(int(n)); ok {
+			return m.Label
 		}
 		return fmt.Sprintf("Kenwood ID %03d", n)
 	}
@@ -139,25 +174,34 @@ func (k *Rig) Model() string {
 // first MD; or IF; comes back.
 func (k *Rig) lastMode() radio.Mode { return radio.Mode(k.mode.Load()) }
 
-// Caps describes the TS-590 family.
+// Caps describes the configured radio, not the family.
+//
+// Every field that differs between models comes from the profile, because a
+// capability list is a promise to the client: advertising a filter width on a
+// TS-890S, or a 30-dot meter on a rig whose meter has 70, produces a UI that
+// looks right and reads wrong.
 func (k *Rig) Caps() radio.Caps {
 	return radio.Caps{
-		Modes: []radio.Mode{
-			radio.ModeLSB, radio.ModeUSB, radio.ModeCW, radio.ModeCWR,
-			radio.ModeAM, radio.ModeFM, radio.ModeFSK, radio.ModeFSKR,
-		},
-		VFOs: []radio.VFO{radio.VFOCurrent, radio.VFOA, radio.VFOB},
+		// Fresh slice per call: Caps is published through the API and a shared
+		// backing array would be one mutation away from a data race.
+		Modes: append([]radio.Mode(nil), k.profile.Modes...),
+		VFOs:  []radio.VFO{radio.VFOCurrent, radio.VFOA, radio.VFOB},
 
 		// PC is in real watts, which is unusual enough to be worth advertising:
 		// clients can show a watt slider instead of a meaningless percentage.
 		PowerWattAccurate: true,
-		MaxPowerW:         nominalMaxPowerW,
+		MaxPowerW:         float64(k.profile.MaxPowerW),
 
-		FilterWidth: true,
-		FilterSlots: 2,
-		SMeterScale: smeterScale,
+		FilterWidth: k.profile.FilterWidth,
+		FilterSlots: k.profile.FilterSelect.slots(),
+		SMeterScale: k.profile.SMeterScale,
+		// False even on the TS-990S, which has a second receiver: this backend
+		// reads and writes one of them, so claiming otherwise would promise
+		// control it does not implement.
 		SubReceiver: false,
 
+		// KY and KS are family-wide, so CW is not per model: a 24-character
+		// buffer and a 4-60 wpm keyer on every radio here.
 		CWMethod:  radio.CWViaCAT,
 		CWCharset: Charset,
 		CWMinWPM:  minWPM,
@@ -165,37 +209,59 @@ func (k *Rig) Caps() radio.Caps {
 	}
 }
 
+// read is one query and the key its answer arrives under. The poll and Init
+// lists are built rather than written out, because which reads apply is a
+// property of the model.
+type read struct {
+	req string
+	key backend.Key
+}
+
 // Init enables push updates and reads enough of the rig to fill State.
 //
 // AI is written without waiting for an answer: the rig answers a set command
 // only when AI is already on, so the reply is present exactly when it is not
-// needed. ID; immediately after doubles as the link check, and its answer tells
-// the two models apart.
+// needed. ID; immediately after doubles as the link check, and its answer says
+// which radio this is.
+//
+// On a model without IF; there is no PTT read at all, here or later, so State
+// starts with PTT false and only an AI push can correct it. See Poll.
 func (k *Rig) Init(ctx context.Context, c backend.Conn) error {
 	if err := send(ctx, c, fmt.Sprintf("AI%d;", k.ai)); err != nil {
 		return fmt.Errorf("kenwood: setting auto-information: %w", err)
 	}
 
-	reads := []struct {
-		req string
-		key backend.Key
-	}{
+	reads := []read{
 		{reqID, keyID},
 		{reqFA, keyFA},
-		{reqMD, keyMD},
-		{reqDA, keyDA}, // must precede IF;: it decides whether IF; will answer
-		{reqPC, keyPC}, // must follow MD;: the watt ceiling depends on the mode
-		{reqFL, keyFL},
+		{k.profile.modeReq(), k.profile.modeKey()},
 	}
+	// DA; must precede IF;: it decides whether IF; will answer at all. On the OM
+	// models there is nothing to ask — the mode read above already settled DATA
+	// — and on the TS-480 there is no DA command to ask with.
+	if k.profile.DataMode == DataModeCommand {
+		reads = append(reads, read{reqDA, keyDA})
+	}
+	// PC; must follow the mode read: the watt ceiling depends on the mode.
+	reads = append(reads, read{reqPC, keyPC})
+	if fl := k.profile.filterSlotRead(); fl != "" {
+		reads = append(reads, read{fl, keyFL})
+	}
+
 	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err
 		}
 	}
+	k.checkIdentity()
 
 	// IF; is read here regardless of the bulk_poll setting — it is the only way
-	// to learn PTT at startup — but never in Data mode, where the rig would
-	// simply not answer and the transaction would burn a full timeout.
+	// to learn PTT at startup — but never on a radio that does not have it, and
+	// never in Data mode, where the rig would simply not answer and the
+	// transaction would burn a full timeout.
+	if !k.profile.BulkPoll {
+		return nil
+	}
 	if k.dataMode.Load() {
 		k.ifBlocked.Store(true)
 		return nil
@@ -210,17 +276,43 @@ func (k *Rig) Init(ctx context.Context, c backend.Conn) error {
 	return nil
 }
 
-// useBulkPoll reports whether the IF; fast poll is available right now.
+// checkIdentity warns when the rig's ID; answer names a different radio than the
+// configuration does.
+//
+// It is a cross-check, never model detection. The ID is trustworthy, but acting
+// on it would mean silently switching command sets under an operator who wrote
+// something specific, and a radio remoses has no profile for answers with an ID
+// too. Naming the mismatch is what an operator needs; the configuration stays
+// authoritative.
+func (k *Rig) checkIdentity() {
+	reported := int(k.id.Load())
+	if reported == 0 || k.profile.ID == 0 || reported == k.profile.ID {
+		return
+	}
+	detail := fmt.Sprintf("%03d", reported)
+	if m, ok := ModelForID(reported); ok {
+		detail = fmt.Sprintf("%03d (a %s)", reported, m.Label)
+	}
+	slog.Warn("kenwood: the radio identifies itself as a different model than configured",
+		"configured_model", k.profile.Name,
+		"configured_id", fmt.Sprintf("%03d", k.profile.ID),
+		"reported_id", detail,
+		"note", "kenwood.model may not match this radio; remoses keeps using the configured command set")
+}
+
+// useBulkPoll reports whether the IF; fast poll is available right now. The
+// profile has the final say: on a radio without IF; there is nothing for the
+// bulk_poll setting to enable.
 func (k *Rig) useBulkPoll() bool {
-	return k.bulkPoll && !k.dataMode.Load() && !k.ifBlocked.Load()
+	return k.profile.BulkPoll && k.bulkPoll && !k.dataMode.Load() && !k.ifBlocked.Load()
 }
 
 // Poll refreshes one tier of state.
 //
 // # The fast tier and the Data-mode fallback
 //
-// The preferred fast poll is IF; plus SM0; — two transactions, of which the
-// first returns frequency, RX/TX and mode in one 38-byte answer.
+// The preferred fast poll is IF; plus the S-meter — two transactions, of which
+// the first returns frequency, RX/TX and mode in one 38-byte answer.
 //
 // It is not always available. The reference states plainly that "the IF command
 // cannot read the transceiver status while it is in Data mode", and the rig does
@@ -241,6 +333,18 @@ func (k *Rig) useBulkPoll() bool {
 // A failed IF; is not retried inside the same call. One skipped fast poll is
 // cheaper than three stacked timeouts on a link that has gone quiet, and the
 // next poll takes the discrete path.
+//
+// # The TS-890S and TS-990S have no bulk poll and no PTT at all
+//
+// Neither radio implements IF;. Their fast poll is therefore permanently the
+// discrete one — FA; + OM0; + the S-meter — and since IF; is the only query in
+// this protocol that carries the TX/RX flag, PTT IS NEVER POLLED ON THEM. It is
+// not that this backend chooses not to: TX; and RX; are set commands that answer
+// nothing unless AI is on, and there is no read form to ask with. PTT reaches
+// State only as an AI push frame, which Decode handles, so a station running
+// AI0 on one of these radios will see PTT stuck at whatever it was last told.
+// That is a property of the command set, and the reason the configuration
+// default is AI2.
 func (k *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) error {
 	switch tier {
 	case backend.PollFast:
@@ -257,39 +361,43 @@ func (k *Rig) pollFast(ctx context.Context, c backend.Conn) error {
 			k.ifBlocked.Store(true)
 			return err
 		}
-		_, err := do(ctx, c, reqSM, keySM)
+		_, err := do(ctx, c, k.profile.SMeterRequest, keySM)
 		return err
 	}
 
 	if _, err := do(ctx, c, reqFA, keyFA); err != nil {
 		return err
 	}
-	if _, err := do(ctx, c, reqMD, keyMD); err != nil {
+	if _, err := do(ctx, c, k.profile.modeReq(), k.profile.modeKey()); err != nil {
 		return err
 	}
-	_, err := do(ctx, c, reqSM, keySM)
+	_, err := do(ctx, c, k.profile.SMeterRequest, keySM)
 	return err
 }
 
 func (k *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
-	for _, r := range []struct {
-		req string
-		key backend.Key
-	}{
-		{reqPC, keyPC},
-		{reqFL, keyFL},
-		{reqDA, keyDA},
-	} {
+	reads := []read{{reqPC, keyPC}}
+	if fl := k.profile.filterSlotRead(); fl != "" {
+		reads = append(reads, read{fl, keyFL})
+	}
+	// DATA has a command of its own only where MD does the mode: the OM models
+	// carry it in the mode code the fast poll already read, and the TS-480 has
+	// no DATA mode to read.
+	if k.profile.DataMode == DataModeCommand {
+		reads = append(reads, read{reqDA, keyDA})
+	}
+	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err
 		}
 	}
 
-	// FW carries a bandwidth only in CW and FSK. In SSB and AM the rig refuses
-	// it outright, and in FM it answers with a modulation-degree switch that
-	// would land in State as a 0 Hz passband, so it is skipped in both cases
-	// rather than asked and discarded.
-	if !filterWidthLegal(k.lastMode()) {
+	// FW carries a bandwidth only on the models that have it as a width command
+	// at all, and there only in CW and FSK. In SSB and AM the rig refuses it
+	// outright, and in FM it answers with a modulation-degree switch that would
+	// land in State as a 0 Hz passband, so it is skipped in both cases rather
+	// than asked and discarded.
+	if !k.profile.FilterWidth || !filterWidthLegal(k.lastMode()) {
 		return nil
 	}
 	_, err := do(ctx, c, reqFW, keyFW)
@@ -325,30 +433,35 @@ func (k *Rig) SetFrequency(ctx context.Context, c backend.Conn, vfo radio.VFO, h
 	return err
 }
 
-// SetMode writes MD; and, where the mode allows it, DA;.
+// SetMode writes the model's mode command and, where DATA is a command of its
+// own and the mode allows it, DA;.
 //
-// DA is rejected in CW and FSK, so it is sent only in LSB, USB, FM and AM.
-// Skipping it elsewhere is safe rather than sloppy: the reference notes that
-// "when used in any mode other than DATA mode, the P1 parameter response is
+// The two arrangements are genuinely different. On MD the DATA flag is a second
+// command, rejected in CW and FSK, so it is sent only in LSB, USB, FM and AM;
+// skipping it elsewhere is safe rather than sloppy, because the reference notes
+// that "when used in any mode other than DATA mode, the P1 parameter response is
 // always 0", so a rig switched from USB-DATA to CW reports Data mode off by
-// itself and the next slow poll picks that up.
+// itself and the next slow poll picks that up. On OM the flag is already inside
+// the code just written and there is nothing to follow up with.
 func (k *Rig) SetMode(ctx context.Context, c backend.Conn, m radio.Mode, dataMode bool) error {
-	digit, err := encodeMode(m)
+	if dataMode {
+		if err := k.profile.checkDataMode(m); err != nil {
+			return err
+		}
+	}
+	set, err := k.profile.modeSet(m, dataMode)
 	if err != nil {
 		return err
 	}
-	if dataMode && !supportsDataMode(m) {
-		return fmt.Errorf("kenwood: %s has no DATA mode on the TS-590; DA is accepted only in LSB, USB, FM and AM", m)
-	}
 
-	if err := send(ctx, c, fmt.Sprintf("MD%c;", digit)); err != nil {
+	if err := send(ctx, c, set); err != nil {
 		return err
 	}
-	if _, err := do(ctx, c, reqMD, keyMD); err != nil {
+	if _, err := do(ctx, c, k.profile.modeReq(), k.profile.modeKey()); err != nil {
 		return err
 	}
 
-	if !supportsDataMode(m) {
+	if k.profile.DataMode != DataModeCommand || !supportsDataMode(m) {
 		return nil
 	}
 	on := 0
@@ -369,7 +482,7 @@ func (k *Rig) SetMode(ctx context.Context, c backend.Conn, m radio.Mode, dataMod
 // setting is off, and there is no command to ask which it is. The read-back
 // reports whatever the rig actually took.
 func (k *Rig) SetPower(ctx context.Context, c backend.Conn, p radio.PowerSet) error {
-	w, err := wattsFromSet(p, k.lastMode())
+	w, err := k.profile.wattsFromSet(p, k.lastMode())
 	if err != nil {
 		return err
 	}
@@ -401,7 +514,17 @@ func (k *Rig) SetPTT(ctx context.Context, c backend.Conn, on bool) error {
 // uses for the current mode. It fails rather than guessing in SSB and AM, where
 // FW is not the right command, and in FM, where FW means something else
 // entirely. See filterWidths.
+//
+// On the TS-890S and TS-990S it fails outright, whatever the mode. FW exists on
+// those radios but is the FM narrow/normal switch throughout, so sending it
+// would not be refused — it would change the operator's FM deviation while
+// remoses reported a passband it never set. Refusing a request is the only
+// honest answer when the command that looks right does something else.
 func (k *Rig) SetFilterWidth(ctx context.Context, c backend.Conn, hz int) error {
+	if !k.profile.FilterWidth {
+		return fmt.Errorf("kenwood: the %s has no IF filter width command: FW selects FM modulation "+
+			"(normal/narrow) there, and the passband is shaped with SH/SL", k.profile.Label)
+	}
 	snapped, err := snapFilterWidth(hz, k.lastMode())
 	if err != nil {
 		return err
@@ -413,15 +536,24 @@ func (k *Rig) SetFilterWidth(ctx context.Context, c backend.Conn, hz int) error 
 	return err
 }
 
-// SetFilterSlot writes FL;: 1 selects IF Filter A, 2 selects IF Filter B.
+// SetFilterSlot writes FL;. Slot numbering is the API's, 1-based: on the TS-590
+// generation slots 1 and 2 are IF Filter A and B and go out as FL1 and FL2, and
+// on the TS-890S and TS-990S slots 1 to 4 go out as FL0 to FL3. See
+// FilterStyle.param.
 func (k *Rig) SetFilterSlot(ctx context.Context, c backend.Conn, slot int) error {
-	if slot != 1 && slot != 2 {
-		return fmt.Errorf("kenwood: filter slot must be 1 (IF Filter A) or 2 (IF Filter B), have %d", slot)
-	}
-	if err := send(ctx, c, fmt.Sprintf("FL%d;", slot)); err != nil {
+	set, err := k.profile.filterSlotSet(slot)
+	if err != nil {
 		return err
 	}
-	_, err := do(ctx, c, reqFL, keyFL)
+	if err := send(ctx, c, set); err != nil {
+		return err
+	}
+	read := k.profile.filterSlotRead()
+	if read == "" {
+		// No form that reads without also setting; see Model.filterSlotRead.
+		return nil
+	}
+	_, err = do(ctx, c, read, keyFL)
 	return err
 }
 

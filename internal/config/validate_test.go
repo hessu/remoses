@@ -142,6 +142,30 @@ func TestValidate(t *testing.T) {
 			},
 		},
 		{
+			name: "unknown kenwood model",
+			mutate: func(c *Config) {
+				c.Radios[0].Backend = BackendKenwood
+				c.Radios[0].Kenwood = &Kenwood{Model: "ts2000", AutoInformation: 2}
+			},
+			wantErr: `kenwood.model "ts2000", want one of generic, ts480, ts590s, ts590sg, ts890s, ts990s`,
+		},
+		{
+			// The name is hyphenated on the front panel and hyphen-free in the
+			// registry; both spellings have to work.
+			name: "kenwood model as it is printed on the radio",
+			mutate: func(c *Config) {
+				c.Radios[0].Backend = BackendKenwood
+				c.Radios[0].Kenwood = &Kenwood{Model: "TS-890S", AutoInformation: 2}
+			},
+		},
+		{
+			name: "kenwood model lower case",
+			mutate: func(c *Config) {
+				c.Radios[0].Backend = BackendKenwood
+				c.Radios[0].Kenwood = &Kenwood{Model: "ts990s", AutoInformation: 2}
+			},
+		},
+		{
 			name: "rigctld without an address",
 			mutate: func(c *Config) {
 				c.Radios[0].Backend = BackendRigctld

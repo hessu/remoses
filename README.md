@@ -64,12 +64,16 @@ deliberately empty: see the status note above.
 
 | Model | `kenwood.model` | Notes | Tested |
 |---|---|---|---|
+| TS-480 | `ts480` | No DATA mode, no filter selection | — |
 | TS-590S | `ts590s` | | — |
 | TS-590SG | `ts590sg` | | — |
+| TS-890S | `ts890s` | PTT cannot be polled, only pushed | — |
+| TS-990S | `ts990s` | 200 W; PTT cannot be polled, only pushed | — |
+| other Kenwood | `generic` | TS-590 shape | — |
 
-Support for the TS-480, TS-890S and TS-990S is in progress. The TS-890S and
-TS-990S are a noticeably different dialect — no `IF;` bulk status, `OM` in place
-of `MD`, and data mode folded into the mode code.
+The TS-890S and TS-990S are a noticeably different dialect: `OM` in place of
+`MD`, data mode folded into the mode code, no `IF;` bulk status — and with it no
+way to poll PTT at all, so it arrives only through auto-information pushes.
 
 ### Anything else (`rigctld` backend)
 

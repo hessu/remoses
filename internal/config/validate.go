@@ -34,6 +34,23 @@ var CIVModels = []string{
 	"ic-7760", "ic-7850", "ic-905", "ic-910h", "ic-9100", "ic-9700",
 }
 
+// KenwoodModels are the accepted values of kenwood.model.
+//
+// Duplicated from the kenwood backend's own registry rather than imported, for
+// the same reason as CIVModels: config sits below rig/backend in the dependency
+// graph and asking the registry would be a cycle. The backend has a test that
+// fails if the two ever drift, which is the direction that can import both.
+var KenwoodModels = []string{
+	"generic",
+	"ts480", "ts590s", "ts590sg", "ts890s", "ts990s",
+}
+
+// kenwoodModelKey folds a configured model name into a KenwoodModels entry. It
+// is the same folding the backend's own LookupModel does.
+func kenwoodModelKey(s string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "-", "")
+}
+
 // idRe keeps radio ids usable unescaped in a URL path and in a cookie name.
 var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
@@ -242,6 +259,14 @@ func validateCIV(civ *CIV, label string, add addFunc) {
 func validateKenwood(k *Kenwood, label string, add addFunc) {
 	if k == nil {
 		return
+	}
+	// Hyphens are stripped before comparing, unlike civ.model. The registry keys
+	// are hyphen-free, but the name is printed on the radio's front panel with
+	// one and the backend has always accepted either spelling; rejecting
+	// "TS-590SG" here would break a configuration that works today.
+	if k.Model != "" && !slices.Contains(KenwoodModels, kenwoodModelKey(k.Model)) {
+		add("%s: kenwood.model %q, want one of %s",
+			label, k.Model, strings.Join(KenwoodModels, ", "))
 	}
 	if k.AutoInformation != 0 && k.AutoInformation != 2 && k.AutoInformation != 4 {
 		add("%s: kenwood.auto_information %d, want 0 (off), 2 or 4",

@@ -543,6 +543,61 @@ so `FE FE 00 E0 19 00 FD` makes every rig on a shared bus answer with its addres
 how a bus is enumerated, but it is discovery rather than identification, and it adds a
 failure mode (two rigs answering at once) for a station that already knows what it owns.
 
+### 5.5 Kenwood models
+
+The Kenwood family splits in two, and the split is deeper than Icom's. The TS-480 and TS-590
+generation is what §5.2 describes. The TS-890S and TS-990S are a **different dialect** that
+happens to share a terminator.
+
+Verified against each radio's own PC Control Command Reference Guide:
+
+| `kenwood.model` | `ID;` | Mode | Data mode | `IF;` | S-meter | Filter width | Filter select | Max W |
+|---|---|---|---|---|---|---|---|---|
+| `ts480` | 020 | `MD` | **none** | yes | `SM0;` scale **20** | `FW` Hz | **none** | 100 |
+| `ts590s` | 021 | `MD` | `DA` | yes | `SM0;` scale 30 | `FW` Hz | `FL1`/`FL2` | 100 |
+| `ts590sg` | 023 | `MD` | `DA` | yes | `SM0;` scale 30 | `FW` Hz | `FL1`/`FL2` | 100 |
+| `ts890s` | 024 | **`OM`** | **in mode code** | **none** | **`SM;`** scale **70** | **none** | `FL0` A/B/C | 100 |
+| `ts990s` | 022 | **`OM`** | **in mode code** | **none** | `SM0;` scale **70** | **none** | `FL0` band + A/B/C | **200** |
+| `generic` | — | `MD` | `DA` | yes | `SM0;` scale 30 | `FW` Hz | `FL1`/`FL2` | 100 |
+
+`KS` is `004`–`060` and the `KY` buffer is 24 characters everywhere, so CW sending is the one
+thing that does not vary.
+
+**What the TS-890S and TS-990S change:**
+
+- **No `MD`.** Mode is `OM P1 P2;`, where P1 selects the display area (`0` left/main, `1`
+  right/sub — ignored on a set) and P2 is the mode. remoses addresses the main area only.
+- **DATA is folded into the mode code.** There is no `DA` command: `C`, `D`, `E` and `F`
+  *are* LSB-D, USB-D, FM-D and AM-D. Encoding USB with DATA has to produce `D`, and decoding
+  `C` has to report LSB with the DATA flag set, or a radio in LSB-D is published as plain LSB
+  and the operator's data path is invisible. `A` and `B` add PSK and PSK-R.
+- **No `IF;` at all** — the bulk status command this backend was built around. Combined with
+  `TX;`/`RX;` being set-only, that means **PTT on these radios can never be polled**: it
+  arrives only through AI push frames. remoses enables `AI2` at connect, so it works in
+  practice, but it is a permanent limitation rather than the TS-590's data-mode-only one.
+- **`FW` is not a filter width.** There it selects FM narrow/normal, so sending a width would
+  change modulation. remoses refuses `SetFilterWidth` on these models.
+- **`FL0` is one command, not four slots.** `FL0`, `FL1`, `FL2` and `FL3` are *unrelated*
+  commands — Select the Receive Filter, Roofing Filter, IF Filter Shape, AF Filter Type — so
+  treating them as filter slots would set the roofing filter when the operator asked for slot
+  2. The selection is `FL0`'s parameter: A, B or C, three slots. On the TS-990S a band
+  parameter comes first (`FL0` + band + selection), so the selection is the *third* character
+  of the argument, not the first.
+- **The TS-890S has no safe read of its filter selection.** Its manual prints the read form of
+  `FL0` as `FL0 P1 ;`, indistinguishable from the set form: there is no way to ask without
+  also telling. remoses does not read it back there and relies on the AI echo of the set
+  instead. This is documented ambiguity, not an assumption — it is the one place the two
+  manuals disagree about a command they otherwise share.
+
+**Assumptions worth revisiting on hardware:**
+
+- The AM power ceiling is taken as a quarter of the model maximum — 25 W at 100 W, 50 W at
+  200 W — which matches every documented `PC` range. Per-*band* ceilings are not modelled: a
+  TS-890S on 70 MHz caps at 50 W (13 W AM) where remoses would allow 100. The read-back after
+  every write means the operator still sees what the rig actually took.
+- The TS-480 is profiled at 100 W. The 200 W TS-480HX answers the same `ID020`, so an HX would
+  be capped at half its output until the profile learns to tell them apart.
+
 ---
 
 ## 6. Session lifecycle

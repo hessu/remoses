@@ -19,7 +19,7 @@ func initAnswers() map[string]string {
 		reqMD: "MD3",
 		reqDA: "DA0",
 		reqPC: "PC050",
-		reqFL: "FL1",
+		"FL;": "FL1", // the TS-590 read form; other models differ
 		reqIF: sampleIF,
 		reqSM: "SM00000",
 		reqFW: "FW0500",
@@ -568,7 +568,7 @@ func TestSetFilterSlot(t *testing.T) {
 		{2, "FL2;"},
 	} {
 		k := newRig(t, 2, true)
-		c := newTestConn(t, k, map[string]string{reqFL: "FL1"})
+		c := newTestConn(t, k, map[string]string{"FL;": "FL1"})
 		if err := k.SetFilterSlot(context.Background(), c, tt.slot); err != nil {
 			t.Fatalf("SetFilterSlot(%d): %v", tt.slot, err)
 		}

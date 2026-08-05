@@ -142,9 +142,10 @@ func TestPowerFromWatts(t *testing.T) {
 		{"AM ten watts", 10, radio.ModeAM, 40},
 		{"AM full", 25, radio.ModeAM, 100},
 	}
+	mdl := modelNamed(t, DefaultModel)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := powerFromWatts(tt.watts, tt.mode)
+			p := mdl.powerFromWatts(tt.watts, tt.mode)
 			if p.Watts == nil {
 				t.Fatal("Watts is nil; the TS-590 scale is watt-accurate")
 			}
@@ -183,9 +184,10 @@ func TestWattsFromSet(t *testing.T) {
 		{"zero percent clamps to the floor", p(0), radio.ModeUSB, minPowerW},
 		{"unknown mode uses the 100 W scale", p(50), radio.ModeUnknown, 50},
 	}
+	mdl := modelNamed(t, DefaultModel)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := wattsFromSet(tt.set, tt.mode)
+			got, err := mdl.wattsFromSet(tt.set, tt.mode)
 			if err != nil {
 				t.Fatalf("wattsFromSet: %v", err)
 			}
@@ -207,9 +209,10 @@ func TestWattsFromSetErrors(t *testing.T) {
 		{"percent above 100", radio.PowerSet{Pct: &over}},
 		{"negative percent", radio.PowerSet{Pct: &under}},
 	}
+	mdl := modelNamed(t, DefaultModel)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := wattsFromSet(tt.set, radio.ModeUSB); err == nil {
+			if _, err := mdl.wattsFromSet(tt.set, radio.ModeUSB); err == nil {
 				t.Fatal("accepted an invalid PowerSet")
 			}
 		})
@@ -219,13 +222,14 @@ func TestWattsFromSetErrors(t *testing.T) {
 // TestPowerRoundTrip checks that what SetPower would send comes back out of
 // Decode as the same watts.
 func TestPowerRoundTrip(t *testing.T) {
+	mdl := modelNamed(t, DefaultModel)
 	for _, mode := range []radio.Mode{radio.ModeUSB, radio.ModeCW, radio.ModeAM} {
 		for _, pct := range []float64{20, 40, 60, 80, 100} {
-			w, err := wattsFromSet(radio.PowerSet{Pct: &pct}, mode)
+			w, err := mdl.wattsFromSet(radio.PowerSet{Pct: &pct}, mode)
 			if err != nil {
 				t.Fatalf("wattsFromSet: %v", err)
 			}
-			got := powerFromWatts(w, mode)
+			got := mdl.powerFromWatts(w, mode)
 			if diff := got.Pct - pct; diff > 2 || diff < -2 {
 				t.Errorf("%s %.0f%% -> %d W -> %.2f%%, drifted by more than rounding explains",
 					mode, pct, w, got.Pct)

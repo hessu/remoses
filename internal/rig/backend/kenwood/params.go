@@ -81,6 +81,9 @@ func encodeMode(m radio.Mode) (byte, error) {
 // supportsDataMode reports whether DA may be set in this mode. The reference is
 // explicit: "You can use this command in LSB, USB, FM, and AM mode. When used in
 // CW, FSK, an error occurs."
+//
+// This is about the mode, not the radio: whether the radio has a DATA mode at
+// all is Model.DataMode, and Model.checkDataMode asks both questions.
 func supportsDataMode(m radio.Mode) bool {
 	switch m {
 	case radio.ModeLSB, radio.ModeUSB, radio.ModeFM, radio.ModeAM:
@@ -89,38 +92,96 @@ func supportsDataMode(m radio.Mode) bool {
 	return false
 }
 
+// --- Mode (OM, on the TS-890S and TS-990S) ----------------------------------
+
+// omMode is one row of the OM P2 table: a mode and whether the code is its DATA
+// variant.
+type omMode struct {
+	mode radio.Mode
+	data bool
+}
+
+// omCodes maps the OM P2 parameter to a mode and its DATA flag.
+//
+// The reason this table exists rather than a translation to MD is the last four
+// rows: OM has no separate DATA command, so C, D, E and F *are* LSB-D, USB-D,
+// FM-D and AM-D. Encoding USB with DATA has to produce D, and decoding C has to
+// report LSB with the DATA flag set, or a radio in LSB-D would be published as
+// plain LSB and the operator's data path would be invisible.
+//
+// Codes 0 and 8 are "Unused" in the reference, exactly like MD's setting-failure
+// values, so they decode to nothing and are never encoded.
+var omCodes = map[byte]omMode{
+	'1': {radio.ModeLSB, false},
+	'2': {radio.ModeUSB, false},
+	'3': {radio.ModeCW, false},
+	'4': {radio.ModeFM, false},
+	'5': {radio.ModeAM, false},
+	'6': {radio.ModeFSK, false},
+	'7': {radio.ModeCWR, false},
+	'9': {radio.ModeFSKR, false},
+	'A': {radio.ModePSK, false},
+	'B': {radio.ModePSKR, false},
+	'C': {radio.ModeLSB, true},
+	'D': {radio.ModeUSB, true},
+	'E': {radio.ModeFM, true},
+	'F': {radio.ModeAM, true},
+}
+
+// decodeOMMode reports the mode and DATA flag a P2 code names, and false for the
+// two unused values and anything unrecognised. Lower case is accepted because
+// the whole protocol is case-insensitive.
+func decodeOMMode(c byte) (radio.Mode, bool, bool) {
+	if c >= 'a' && c <= 'z' {
+		c -= 32
+	}
+	v, ok := omCodes[c]
+	return v.mode, v.data, ok
+}
+
+// encodeOMMode is decodeOMMode's inverse.
+func encodeOMMode(m radio.Mode, data bool) (byte, error) {
+	for c, v := range omCodes {
+		if v.mode == m && v.data == data {
+			return c, nil
+		}
+	}
+	if data {
+		return 0, fmt.Errorf("kenwood: OM has no DATA code for mode %s", m)
+	}
+	return 0, fmt.Errorf("kenwood: OM has no value for mode %s", m)
+}
+
 // --- Power (PC) -------------------------------------------------------------
 
 // minPowerW is the PC floor in every mode.
 const minPowerW = 5
 
-// nominalMaxPowerW is the rig's headline maximum, published in Caps. The
-// per-mode ceiling below can be lower.
-const nominalMaxPowerW = 100
-
-// maxPowerW is the PC ceiling for a mode: "005 ~ 100: SSB/CW/FM/FSK,
-// 005 ~ 025: AM". AM is carrier power, so the ceiling really is a quarter of the
-// others and the percentage scale has to follow it — reporting 50 W as 50% while
-// the rig is in AM would be a lie by a factor of two.
+// maxPowerW is the PC ceiling for a mode: on a 100 W radio "005 ~ 100:
+// SSB/CW/FM/FSK, 005 ~ 025: AM". AM is carrier power, so the ceiling really is a
+// quarter of the nominal rating and the percentage scale has to follow it —
+// reporting 50 W as 50% while the rig is in AM would be a lie by a factor of
+// two. The quarter holds on the 200 W TS-990S too, where AM stops at 50 W.
 //
-// An unknown mode is treated as the 100 W case, which is the conservative
+// An unknown mode is treated as the full-power case, which is the conservative
 // direction for a *reported* percentage but not for a *requested* one; callers
-// that set power should have polled MD; first, which Init and PollSlow both do.
-func maxPowerW(m radio.Mode) int {
+// that set power should have polled the mode first, which Init and PollSlow both
+// do.
+func (mdl Model) maxPowerW(m radio.Mode) int {
 	if m == radio.ModeAM {
-		return 25
+		return mdl.MaxPowerW / 4
 	}
-	return nominalMaxPowerW
+	return mdl.MaxPowerW
 }
 
-// powerFromWatts turns a decoded PC value into the three-way radio.Power. The
-// TS-590 is one of the few rigs whose power control is in real watts, so Watts
-// is always populated and Native carries the same number the wire did.
-func powerFromWatts(w int, m radio.Mode) radio.Power {
+// powerFromWatts turns a decoded PC value into the three-way radio.Power. These
+// rigs are among the few whose power control is in real watts, so Watts is
+// always populated and Native carries the same number the wire did.
+func (mdl Model) powerFromWatts(w int, m radio.Mode) radio.Power {
 	watts := float64(w)
 	return radio.Power{
 		Watts:  &watts,
-		Pct:    watts / float64(maxPowerW(m)) * 100,
+		Pct:    watts / float64(mdl.maxPowerW(m)) * 100,
 		Native: w,
 	}
 }
@@ -132,11 +193,11 @@ func powerFromWatts(w int, m radio.Mode) radio.Power {
 // which it is. Sending the exact request lets a Power Fine rig honour it to the
 // watt, and a coarse rig round it down itself — which is why every SetPower
 // reads PC; back afterwards rather than assuming what was accepted.
-func wattsFromSet(p radio.PowerSet, m radio.Mode) (int, error) {
+func (mdl Model) wattsFromSet(p radio.PowerSet, m radio.Mode) (int, error) {
 	if err := p.Validate(); err != nil {
 		return 0, err
 	}
-	ceiling := maxPowerW(m)
+	ceiling := mdl.maxPowerW(m)
 
 	var want float64
 	if p.Watts != nil {
@@ -222,22 +283,19 @@ func snapFilterWidth(hz int, m radio.Mode) (int, error) {
 
 // --- Model identification (ID) ----------------------------------------------
 
-// modelNames maps the ID; answer to a human-readable model name.
-var modelNames = map[int]string{
-	21: "TS-590S",
-	23: "TS-590SG",
-}
-
 // normaliseModel folds the configured model string into the form used in
 // messages, so "TS-590SG", "ts590sg" and "ts-590sg" all read the same.
+//
+// A name the registry does not know is passed through rather than rejected:
+// this is only ever a display string, and New has already refused to build a
+// backend for an unknown model.
 func normaliseModel(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.ReplaceAll(s, "-", "")
-	switch s {
-	case "ts590s":
-		return "TS-590S"
-	case "ts590sg":
-		return "TS-590SG"
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
 	}
-	return strings.TrimSpace(s)
+	if m, ok := models[modelKey(s)]; ok {
+		return m.Label
+	}
+	return s
 }
