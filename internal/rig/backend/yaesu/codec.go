@@ -24,18 +24,38 @@ const (
 	keyAI backend.Key = "AI"
 )
 
-// There are deliberately no error keys here.
+// keyBusy is the one answer that is not a command: a bare '?', which real
+// radios emit and no manual mentions.
 //
-// None of the six CAT manuals documents any error, NAK or busy response — there
-// is no Yaesu equivalent of Kenwood's ?; / E; / O;. Inventing one and waiting
-// for it would be worse than not having it: the wait list is what completes a
-// transaction, so a key the rig never sends buys nothing, and a key it sends
-// with a different meaning would complete the wrong transaction. The cost is
-// real and is a property of the protocol rather than of this code: a command the
-// rig refuses produces silence, so it burns the session's full per-command
-// timeout where a Kenwood fails in one round trip. Poll and Init are therefore
-// conservative about sending anything that might be refused, and every value
-// with a range is range-checked here before it goes out.
+// The manuals are the reason there is only one. None of them documents an
+// error, NAK or busy response at all, so nothing here is transcribed; what is
+// recorded instead is that radios in the field do answer '?' — an FT-450 to
+// IF;, an FTdx3000 to FB; — and that a command answered that way would
+// otherwise produce silence and burn the session's full per-command timeout.
+// Giving it a key lets every transaction wait for "my answer OR ?", which is
+// exactly what the kenwood backend does with its three error keys.
+//
+// What ?; means is treated as "busy, ask again", never as a permanent
+// rejection. In the wild it covers both "not now" and "not allowed in the state
+// the rig is in", and remoses does not try to tell them apart: the recovery is
+// the same — the next poll tick — and the alternative, disabling a command or a
+// capability on the strength of one answer, would lose a working feature over a
+// momentary condition. So nothing here remembers a '?'. See backend.ErrBusy.
+//
+// N, O and E are known to exist and are deliberately NOT handled here. N is
+// reported to mean invalid data — a genuine rejection of what was sent, not a
+// "try again" — and treating it as busy would hide a command remoses is
+// spelling wrongly behind an endless retry. Each of the three wants its own
+// decision about what it means to a caller, which is a separate change; until
+// then they arrive as one-letter frames, which splitCommand discards as line
+// noise, and cost a timeout apiece.
+const keyBusy backend.Key = "?"
+
+// The rest of the protocol still has no rejection. ?; is a fast-fail path for
+// the commands a rig happens to answer that way, not a general one: an
+// out-of-range frequency or an unsupported mode is answered with silence, so
+// Poll and Init stay conservative about sending anything that might be refused,
+// and every value with a documented range is checked here before it goes out.
 
 // smeterScale is the full-scale SM reading, and it is family-wide: SM0; answers
 // three digits, 000-255, on every model. The parameter is an uncalibrated meter
@@ -47,10 +67,12 @@ const smeterScale = 255
 //
 // Yaesu framing is Kenwood's: everything ends in ';', so the only real work is
 // resynchronisation. A rig that has just been powered on, or a port opened
-// mid-frame, emits leading rubbish; since every command begins with an ASCII
-// letter, anything before the first letter of a frame can be discarded without
-// ambiguity. Empty frames (a stray ';', or ";;") are swallowed here so Decode
-// never has to reason about them.
+// mid-frame, emits leading rubbish; every command begins with an ASCII letter,
+// so anything before the first letter of a frame can be discarded without
+// ambiguity. The single exception is the busy answer, a bare '?' with no
+// command letter at all — see trimFrame, which lets that one frame through and
+// still discards a '?' sitting in front of a real answer. Empty frames (a stray
+// ';', or ";;") are swallowed here so Decode never has to reason about them.
 func (y *Rig) Split(data []byte, atEOF bool) (int, []byte, error) {
 	return splitFrames(data, atEOF)
 }
@@ -78,15 +100,24 @@ func splitFrames(data []byte, atEOF bool) (int, []byte, error) {
 	}
 }
 
-// trimFrame discards leading bytes that cannot begin a command and trailing
+// trimFrame discards leading bytes that cannot begin a frame and trailing
 // whitespace. Interior bytes are left alone: IF; legitimately carries spaces
 // and signs.
+//
+// Trailing first, so that a busy answer followed by a line ending is still
+// recognisable as the single character it is. A lone '?' is the one frame that
+// does not start with a command letter; a '?' with anything after it is noise
+// in front of a real answer, and is dropped rather than allowed to swallow the
+// frame behind it.
 func trimFrame(b []byte) []byte {
-	for len(b) > 0 && !isLetter(b[0]) {
-		b = b[1:]
-	}
 	for len(b) > 0 && (b[len(b)-1] == '\r' || b[len(b)-1] == '\n' || b[len(b)-1] == 0) {
 		b = b[:len(b)-1]
+	}
+	for len(b) > 0 {
+		if isLetter(b[0]) || (b[0] == '?' && len(b) == 1) {
+			break
+		}
+		b = b[1:]
 	}
 	return b
 }
@@ -112,6 +143,16 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 	// or a logger holding onto an Update would print the next frame.
 	u := backend.Update{Key: backend.KeyUnsolicited, OK: true, Raw: bytes.Clone(frame)}
 	f := u.Raw
+
+	// The busy answer is one character and carries no parameters, so it is
+	// recognised before anything tries to read a command out of it. OK is false
+	// because the rig did not take the command; what that means to the caller is
+	// decided in do(), which turns it into backend.ErrBusy rather than letting
+	// it be reported as a permanent rejection.
+	if len(f) == 1 && f[0] == '?' {
+		u.Key, u.OK = keyBusy, false
+		return u, nil
+	}
 
 	cmd, arg, ok := splitCommand(f)
 	if !ok {

@@ -685,8 +685,9 @@ where the byte goes.
 The `IF` column is the answer length **including** the terminator, as the manuals count it.
 
 Common to all twelve: `MD<sel><code>;` with DATA folded into the code, `SM0;` → three digits on
-a **255** scale, `TX;` read / `TX1;` key / `TX0;` unkey, and **no documented error response of
-any kind**. `AI1;` for push updates is common to eleven — see the FTdx9000 below.
+a **255** scale, `TX;` read / `TX1;` key / `TX0;` unkey, `AI1;` for push updates, and **no
+documented error response of any kind** — which is where the manuals and the radios part
+company; see the `?;` note below.
 
 **Mode code `E` is the reason the code table is per model.** It is PSK on five radios, C4FM on
 the FT-991A, and does not exist at all on the FT-891 or on any radio of the FT-950 generation —
@@ -715,13 +716,38 @@ AM where it exists, so its absence only means an AM-N frame reports nothing rath
   is Yaesu's CTCSS field. The fast poll is `IF;` + `TX;` + `SM0;`, three transactions. In
   exchange `IF;` answers in *every* mode, so none of the Kenwood backend's data-mode fallback
   machinery has an analogue, and `TX;` has a read form, which Kenwood's has not.
-- **Fail fast.** No manual documents an error, NAK or busy response, so there is no `errorKeys`
-  equivalent: a refused command answers with silence and costs a full session timeout. The
-  backend therefore range-checks frequency and power itself, never sends speculatively, and
-  records which commands a model lacks in its profile instead of probing for them.
+- **Say why it refused.** No manual documents an error, NAK or busy response, so most refusals
+  are silence and cost a full session timeout: an out-of-range parameter, a command the model
+  does not implement, a mode the rig will not take. The backend therefore range-checks frequency
+  and power itself, never sends speculatively, and records which commands a model lacks in its
+  profile instead of probing for them. The one exception is `?;`, below.
 - **Select an IF filter.** No `FL` equivalent exists; `FilterSlots` is 0. The FT-950 generation
   does have an `RF` roofing-filter command, but its parameter mixes `AUTO` with fixed widths and
   is not the numbered bank of IF filters `FilterSlots` describes, so remoses does not model it.
+
+**`?;` exists, and means "busy".** No Yaesu manual mentions it, but the radios send it: an
+FT-450 answering `IF;` with `?;` and an FTdx3000 answering `FB;` the same way are both on
+record. These are field reports rather than transcribed facts, which is why the table above
+still says the manuals document no error response. remoses waits for it on every read and on
+every set's read-back, alongside the reply key — the same `errorKeys` trick the `kenwood`
+backend uses — so a command refused that way fails in **one round trip** instead of burning the
+session's full per-command timeout. That speed is the entire point of handling it.
+
+It is treated as **transient, never as a rejection**. `?;` is genuinely ambiguous in the wild: it
+covers "I am busy" and "not allowed in the state I am in", and remoses does not try to tell them
+apart, because the recovery is identical and the alternative — deciding a command or a
+capability is gone on the strength of one answer — would lose a working feature over a momentary
+condition. So a `?;` never disables a poll item, never marks a capability absent, never tears
+down the connection, and is never cached or remembered. The next poll tick simply asks again.
+It travels as `backend.ErrBusy` (aliased `rig.ErrBusy`), which `isFatalPollErr` deliberately
+treats as non-fatal, and the API answers **503** with a detail saying the radio was busy and the
+request can be retried — never **422**, which would tell a client to rewrite a request that was
+already correct.
+
+`N`, `O` and `E` are reported in the field too and are **not** handled. `N` means invalid data —
+a genuine rejection of what was sent, not a "try again" — so treating it as busy would retry a
+command remoses is spelling wrongly for ever. Each wants its own decision about what it means to
+a caller; until then they are ignored as line noise and cost a timeout apiece.
 
 **Three models change the wire, not just the table.** The FTX-1's `IF` is 30 bytes because its
 memory-channel field is five characters rather than three, shifting every field after it by two.
@@ -759,16 +785,13 @@ needed for twelve radios; the FTdx1200 and FTdx3000 share one to the digit, and 
 differs from theirs in three places, one of which is an index its manual prints `- - - -` and
 defines for no width at all.
 
-**The FTdx9000 is missing four things the rest of the family has**, and they are capability gaps
+**The FTdx9000 is missing three things the rest of the family has**, and they are capability gaps
 worth stating plainly rather than implementation gaps:
 
 - **No `ID`.** Its command list has no row for it, so there is no identity cross-check to make
   on that radio at all. remoses does not send it: on a protocol with no error response an
   unimplemented command answers with silence, so asking would burn the session's full
   per-command timeout and then fail the connect. `FA;` is its link check instead.
-- **No `AI`.** It can never push a change, so it is **permanently poll-only** — a front-panel
-  knob movement is invisible until the next poll tick. This is the FTdx10's USB-only `AI`
-  restriction made absolute.
 - **No `NA`.** Nothing is lost, because it also has no bandwidth table for `NA` to choose a
   column of.
 - **`SH` is not a bandwidth.** Its parameter is the position of the WIDTH knob — `00` fully
@@ -806,20 +829,11 @@ once. It decodes as transmitting, like `1` and `2`.
   a `TX` frame. remoses sends `TX;`, as on every other model. If the manual is literal rather
   than mistaken, PTT on that radio would read as a timeout — which is visible and safe, where
   the reverse mistake would not be.
-- **A cross-check of another implementation disagrees about the FTdx9000's `ID` and `AI`.** A
-  widely used third-party control library marks both as present on that radio and even records
-  three ID numbers for its variants, while the manual's command list has no row for either.
-  Its evidence is weaker than it looks, though, because on that radio neither claim is ever
-  exercised: it sends `ID;` at open with a 100 ms timeout and *discards the result*, and it
-  turns `AI` **off** at open and back on at close rather than using it, so a radio that answers
-  neither would look identical. The same table does record per-model absences where somebody
-  found one — `NA` is marked missing for that radio and no other — which is consistent with
-  these two being the gaps that never announce themselves.
-
-  Not sending them is the asymmetric choice regardless: if the radio does have them, remoses
-  loses only the cross-check and the push updates; if it does not, `ID;` would answer with
-  silence and fail every connect. The manual is the primary source here and this is an inference
-  from it, not a transcribed fact.
+- **The FTdx9000 has no `ID` because its command list has no row for one.** That is an absence
+  rather than a documented refusal, so it is worth a minute on hardware. Not asking is the
+  asymmetric choice either way: if the radio does answer `ID;`, remoses loses only the identity
+  cross-check, where sending it to a radio that does not would answer with silence and fail
+  every connect.
 - **On the FT-991A remoses can see C4FM but not which sub-mode will transmit.** DN versus VW is
   `EX` menu item 090 there, a persistent setting orthogonal to the mode, and remoses does not
   write `EX` for the same reason it does not write `KM`. On the FTX-1 the sub-mode *is* the mode
@@ -840,8 +854,9 @@ once. It decodes as transmitting, like `1` and `2`.
   does not act on the difference: nothing it controls depends on the FFT-1.
 
 Every one of these is a question one radio can settle in a minute with `debug_wire` on (§6.1) —
-including the ones that would otherwise be silent, since a Yaesu refusing a command answers with
-nothing and the trace is the only place the sent frame and the missing answer are both visible.
+including the ones that would otherwise be silent, since a Yaesu refusing a command usually
+answers with nothing at all, and the trace is the only place the sent frame and the missing
+answer are both visible.
 
 ---
 
@@ -880,8 +895,10 @@ poll into the void indefinitely and keep reporting a stale snapshot as live.
 **But a rig that refuses a command is not a broken link.** Rigs differ in which of the
 optional commands they implement, and they decline in protocol-specific ways: an Icom
 acknowledges an unimplemented command with `FB` instead of returning data, a Kenwood answers
-`?;`. Only transport loss and outright silence are treated as fatal — anything else means the
-radio replied, which proves it is still there. Concretely:
+`?;`, and a Yaesu that will not run a command just now answers `?;` too — which remoses reads
+as *busy* and retries on the next tick (§5.6), never as a reason to disable anything. Only
+transport loss and outright silence are treated as fatal — anything else means the radio
+replied, which proves it is still there. Concretely:
 
 - a **slow-tier** poll failure is never fatal. Power and filter width are nice-to-have, and
   losing them must not put a radio whose frequency, mode, PTT and meters all work into a
@@ -961,7 +978,8 @@ Details that matter when reading a trace:
   a Kenwood or Yaesu AI push. These arrive on the same path as replies (§3, invariant B), and
   they are what a trace is most often opened for: a rig pushing traffic nobody expected is
   otherwise only visible as state changing for no reason.
-- **`ok=false` is a rejection**, an Icom `FA` or a Kenwood `?;`.
+- **`ok=false` is the rig declining**, an Icom `FA`, a Kenwood `?;`, or a Yaesu `?;` — which the
+  yaesu backend reads as *busy* and retries rather than as a refusal (§5.6).
 - **Control and high bytes are escaped** (`\r`, `\x1B`) rather than written into the log, so a
   rig emitting a CR cannot break a line in two and a NUL cannot vanish silently.
 - **An inbound frame is logged as the decoder received it.** On Kenwood and Yaesu that is one

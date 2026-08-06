@@ -186,8 +186,8 @@ radios:
       # AI1 pushes state changes and reverts to off at rig power-down, so it
       # does not permanently alter the operator's menu settings. Yaesu has no
       # AI2 — the parameter is 0 or 1. On an FTdx10 it works only over the USB
-      # CAT port, and the FTdx9000 has no AI command at all: that radio is
-      # poll-only whatever this is set to.
+      # CAT port, so a rig reached through the RS-232C jack or a serial-to-TCP
+      # bridge is poll-only whatever this is set to.
       auto_information: true
     poll:
       interval: 500ms

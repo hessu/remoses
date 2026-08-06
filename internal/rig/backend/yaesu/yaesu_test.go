@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/radio"
@@ -100,11 +101,12 @@ func TestInitPerModel(t *testing.T) {
 	// The order is load-bearing at the end: MD0; settles the mode and NA0; the
 	// narrow setting, and neither SH; answer means anything without both.
 	want := []string{"AI1;", "ID;", "FA;", "MD0;", "PC;", "TX;", "NA0;", "SH0;"}
-	// The FTdx9000 has no AI, ID or NA command at all, and no bandwidth table
-	// for SH to index, so four of the eight are simply not sent. Asking anyway
-	// would cost a full per-command timeout each — and the ID; read would then
-	// fail the connect outright.
-	wantFTdx9000 := []string{"FA;", "MD0;", "PC;", "TX;"}
+	// The FTdx9000 has no ID and no NA command, and no bandwidth table for SH
+	// to index, so three of the eight are simply not sent. Asking anyway would
+	// cost a full per-command timeout each — and the ID; read would then fail
+	// the connect outright. AI it does have, so push updates are enabled there
+	// like everywhere else.
+	wantFTdx9000 := []string{"AI1;", "FA;", "MD0;", "PC;", "TX;"}
 
 	for _, name := range ModelNames() {
 		t.Run(name, func(t *testing.T) {
@@ -143,22 +145,31 @@ func TestInitAutoInformationOff(t *testing.T) {
 	}
 }
 
-// TestInitNeverSendsAIToTheFTdx9000 covers the capability gap that matters most
-// to an operator: that radio's command list has no AI row, so it can never push
-// a change and is permanently poll-only. Neither setting of the configuration
-// flag may put an AI on the wire.
-func TestInitNeverSendsAIToTheFTdx9000(t *testing.T) {
-	for _, ai := range []bool{true, false} {
+// TestInitFTdx9000UsesAIButNotIDOrNA covers that radio's capability list where
+// it differs from the family: it takes AI, so it pushes changes and is not
+// poll-only, and it has neither ID nor NA, so neither may ever reach the wire —
+// a Yaesu answers a command it does not implement with silence, and the ID;
+// read would fail the connect after a full per-command timeout.
+func TestInitFTdx9000UsesAIButNotIDOrNA(t *testing.T) {
+	for _, tt := range []struct {
+		ai   bool
+		want string
+	}{
+		{true, "AI1;"},
+		{false, "AI0;"},
+	} {
 		y := newModelRig(t, "ftdx9000")
-		y.ai = ai
+		y.ai = tt.ai
 		c := newTestConn(t, y, answersFor(y.profile))
 		if err := y.Init(context.Background(), c); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
+		if len(c.sent) == 0 || c.sent[0] != tt.want {
+			t.Errorf("Init(ai=%v) sent %q, want %q first", tt.ai, c.sent, tt.want)
+		}
 		for _, req := range c.sent {
-			if strings.HasPrefix(req, "AI") || strings.HasPrefix(req, "ID") ||
-				strings.HasPrefix(req, "NA") {
-				t.Errorf("Init(ai=%v) sent %q; the FTdx9000 has no such command", ai, req)
+			if strings.HasPrefix(req, "ID") || strings.HasPrefix(req, "NA") {
+				t.Errorf("Init(ai=%v) sent %q; the FTdx9000 has no such command", tt.ai, req)
 			}
 		}
 	}
@@ -781,6 +792,103 @@ func TestReadBackFailurePropagates(t *testing.T) {
 				t.Errorf("sent %q, want the write and its read-back", c.sent)
 			}
 		})
+	}
+}
+
+// TestBusyFailsFast is what the busy key is for. A rig that answers '?' has
+// said "not now", and every read and every set's read-back has to hear it in
+// one round trip instead of sitting out the session's per-command timeout.
+//
+// The speed is the feature, so it is asserted: the fake conn charges the full
+// timeout for a transaction whose wait list did not include the busy key, which
+// is exactly what this backend cost before the key existed.
+func TestBusyFailsFast(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name string
+		call func(*Rig, backend.Conn) error
+	}{
+		{"Init", func(y *Rig, c backend.Conn) error { return y.Init(ctx, c) }},
+		{"PollFast", func(y *Rig, c backend.Conn) error { return y.Poll(ctx, c, backend.PollFast) }},
+		{"PollSlow", func(y *Rig, c backend.Conn) error { return y.Poll(ctx, c, backend.PollSlow) }},
+		{"SetFrequency", func(y *Rig, c backend.Conn) error {
+			return y.SetFrequency(ctx, c, radio.VFOA, 14_025_000)
+		}},
+		{"SetMode", func(y *Rig, c backend.Conn) error { return y.SetMode(ctx, c, radio.ModeCW, false) }},
+		{"SetPower", func(y *Rig, c backend.Conn) error {
+			return y.SetPower(ctx, c, radio.PowerSet{Pct: ptr(50.0)})
+		}},
+		{"SetFilterWidth", func(y *Rig, c backend.Conn) error { return y.SetFilterWidth(ctx, c, 500) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			y := newModelRig(t, "ft-710")
+			y.mode.Store(uint32(radio.ModeCW))
+			c := newBusyConn(t, y)
+
+			start := time.Now()
+			err := tt.call(y, c)
+			elapsed := time.Since(start)
+
+			if err == nil {
+				t.Fatal("succeeded although the rig answered ?; to everything")
+			}
+			if !errors.Is(err, backend.ErrBusy) {
+				t.Errorf("error %v is not backend.ErrBusy; the caller cannot tell it is worth retrying", err)
+			}
+			// A busy answer must never arrive as the session's permanent
+			// rejection: that is the error the API turns into 422, which tells
+			// the client to rewrite a request that was perfectly correct.
+			if errors.Is(err, errFakeNAK) {
+				t.Errorf("error %v is a rejection; ?; means busy, not no", err)
+			}
+			if elapsed > testCmdTimeout/3 {
+				t.Errorf("took %s of a %s timeout; the busy key is not on the wait list",
+					elapsed, testCmdTimeout)
+			}
+		})
+	}
+
+	// SetPTT is the one command with nothing to fail fast. It is written with
+	// Send and answered by nothing, so a '?' it provokes matches no transaction
+	// and is dropped; the next fast poll's TX; is what notices. Keying must not
+	// report an error it cannot have observed.
+	y := newModelRig(t, "ft-710")
+	if err := y.SetPTT(ctx, newBusyConn(t, y), true); err != nil {
+		t.Errorf("SetPTT: %v, want success: the rig answers nothing at all to TX1;", err)
+	}
+}
+
+// TestBusyIsNotRemembered is the other half of treating ?; as transient. It may
+// not disable a poll item, mark a capability absent or be cached anywhere: the
+// next tick asks for exactly the same things, and that retry is the whole
+// recovery mechanism.
+func TestBusyIsNotRemembered(t *testing.T) {
+	ctx := context.Background()
+	y := newModelRig(t, "ftdx101d")
+	mustDecode(t, y, "MD03") // CW, so SH carries a bandwidth
+
+	busy := newBusyConn(t, y)
+	if err := y.Poll(ctx, busy, backend.PollSlow); !errors.Is(err, backend.ErrBusy) {
+		t.Fatalf("PollSlow against a busy rig = %v, want backend.ErrBusy", err)
+	}
+	if err := y.Poll(ctx, busy, backend.PollFast); !errors.Is(err, backend.ErrBusy) {
+		t.Fatalf("PollFast against a busy rig = %v, want backend.ErrBusy", err)
+	}
+
+	c := newTestConn(t, y, answersFor(y.profile))
+	if err := y.Poll(ctx, c, backend.PollFast); err != nil {
+		t.Fatalf("PollFast after a busy one: %v", err)
+	}
+	if err := y.Poll(ctx, c, backend.PollSlow); err != nil {
+		t.Fatalf("PollSlow after a busy one: %v", err)
+	}
+	c.wantSent(t, "IF;", "TX;", "SM0;", "PC;", "NA0;", "SH0;")
+
+	// Capabilities are untouched too: a busy answer says nothing about what the
+	// radio can do.
+	if !y.Caps().FilterWidth {
+		t.Error("a busy answer cleared FilterWidth; ?; is not a statement about the command set")
 	}
 }
 

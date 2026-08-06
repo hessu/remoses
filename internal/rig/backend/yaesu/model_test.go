@@ -156,29 +156,37 @@ func TestModelIDs(t *testing.T) {
 	}
 }
 
-// TestFTdx9000MissingCommands pins the three commands that radio simply does
-// not have. They are capability gaps rather than omissions here: a Yaesu
-// answers a command it does not implement with silence, so asking would cost
-// the session's full per-command timeout and return nothing.
+// TestFTdx9000MissingCommands pins the two commands that radio does not have,
+// and the one it does. They are capability gaps rather than omissions here: a
+// Yaesu answers a command it does not implement with silence, so asking would
+// cost the session's full per-command timeout and return nothing.
 func TestFTdx9000MissingCommands(t *testing.T) {
 	m := modelNamed(t, "ftdx9000")
-	if m.HasID || m.HasAI || m.HasNarrow {
-		t.Errorf("the FTdx9000 claims ID=%v AI=%v NA=%v; its command list has none of them",
-			m.HasID, m.HasAI, m.HasNarrow)
+	if m.HasID || m.HasNarrow {
+		t.Errorf("the FTdx9000 claims ID=%v NA=%v; it has neither command",
+			m.HasID, m.HasNarrow)
+	}
+	// AI is the difference between a radio that reports a front-panel knob
+	// movement and one that is poll-only, so it is pinned in its own right.
+	if !m.HasAI {
+		t.Error("the FTdx9000 claims no AI; it pushes changes like the rest of the family")
 	}
 	// Its SH is the WIDTH knob's position, 00-31 with 16 centred, and no table
 	// in its manual turns that into Hz.
 	if m.hasFilterWidth() {
 		t.Error("the FTdx9000 claims a bandwidth table; its SH is a knob position")
 	}
-	// Everybody else has all four.
+	// Everybody else has all four, and every model has AI.
 	for _, other := range allModels(t) {
+		if !other.HasAI {
+			t.Errorf("%s claims no AI; every profiled radio here has it", other.Name)
+		}
 		if other.Name == "ftdx9000" {
 			continue
 		}
-		if !other.HasID || !other.HasAI || !other.HasNarrow || !other.hasFilterWidth() {
-			t.Errorf("%s: ID=%v AI=%v NA=%v width=%v, want all true",
-				other.Name, other.HasID, other.HasAI, other.HasNarrow, other.hasFilterWidth())
+		if !other.HasID || !other.HasNarrow || !other.hasFilterWidth() {
+			t.Errorf("%s: ID=%v NA=%v width=%v, want all true",
+				other.Name, other.HasID, other.HasNarrow, other.hasFilterWidth())
 		}
 	}
 }

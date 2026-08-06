@@ -29,9 +29,9 @@ import (
 //   - The FTX-1's PC carries a head selector, so the plain three-digit form is
 //     malformed there — and on the FTdx5000 and FTdx9000 the three digits are
 //     an uncalibrated 000-255 index rather than watts.
-//   - The FTdx9000 has no ID, no AI and no NA command at all, so three reads
-//     the rest of the family makes unconditionally would cost it a full
-//     per-command timeout each.
+//   - The FTdx9000 has no ID and no NA command at all, so two reads the rest of
+//     the family makes unconditionally would cost it a full per-command timeout
+//     each.
 //
 // What is deliberately NOT per-model:
 //
@@ -53,15 +53,19 @@ type Model struct {
 	// HasID, which is the flag that decides whether the command is sent.
 	IDs []int
 
-	// HasID, HasAI and HasNarrow are the three commands the FTdx9000's command
-	// list simply does not have. They are recorded rather than probed because a
-	// Yaesu answers a command it does not implement with silence, so asking
-	// costs the session's full per-command timeout and returns nothing.
+	// HasID and HasNarrow are the two commands the FTdx9000 does not have. They
+	// are recorded rather than probed because a Yaesu answers a command it does
+	// not implement with silence, so asking costs the session's full
+	// per-command timeout and returns nothing.
 	//
-	// Missing AI is the one an operator feels: that radio can never push a
-	// change and is permanently poll-only. Missing ID means there is no
-	// identity cross-check to make. Missing NA means nothing here, since the
-	// same radio has no bandwidth table for NA to choose a column of.
+	// Missing ID means there is no identity cross-check to make on that radio.
+	// Missing NA means nothing here, since the same radio has no bandwidth
+	// table for NA to choose a column of.
+	//
+	// HasAI is true on every profiled model, the FTdx9000 included, so no radio
+	// here is poll-only. It stays a per-model field rather than becoming a
+	// constant because push updates are the one capability an operator feels
+	// directly, and a model that lacked AI would have to be able to say so.
 	HasID     bool
 	HasAI     bool
 	HasNarrow bool
@@ -263,9 +267,11 @@ func older(name, label string, ids ...int) Model {
 //
 // Every field is transcribed from that radio's own CAT Operation Reference
 // Manual. Where a model lacks a command the manual simply has no row for it,
-// which is why capabilities are recorded here rather than probed: no Yaesu
-// documents an error response at all, so a rejected command does not come back
-// as a rejection, it comes back as silence and costs a full timeout.
+// which is why capabilities are recorded here rather than probed: a command a
+// Yaesu does not implement is not refused, it is answered with silence, and
+// silence costs a full timeout. The ?; busy answer is no help there — it comes
+// back from commands the rig knows and will not run just now, not from ones it
+// has never heard of.
 var models = map[string]Model{
 	// generic is the escape hatch for a Yaesu remoses has no profile for. It
 	// claims the FTdx101 shape, which four of the profiled models share, and no
@@ -429,13 +435,13 @@ var models = map[string]Model{
 		return m
 	}(),
 
-	// The FTdx9000 is the only radio in the registry that cannot be identified
-	// and cannot push. Its command list has no ID row and no AI row at all —
-	// not a different spelling, no row — so there is nothing to cross-check the
-	// configuration against and the radio is permanently poll-only. Both are
-	// capability gaps rather than implementation gaps, and Init sends neither
-	// command: a Yaesu answers one it does not implement with silence, so ID;
-	// would cost a full per-command timeout and then fail the connect.
+	// The FTdx9000 is the only radio in the registry that cannot be identified.
+	// It has no ID command — its manual's command list has no row for one — so
+	// there is nothing to cross-check the configuration against, and Init does
+	// not send it: a Yaesu answers a command it does not implement with
+	// silence, so ID; would cost a full per-command timeout and then fail the
+	// connect. FA; is its link check. It does have AI, so it pushes changes
+	// like the rest of the family.
 	//
 	// It has no NA either, and its SH is not a bandwidth at all: the parameter
 	// is the WIDTH knob's position, 00 fully anticlockwise to 31 fully
@@ -449,7 +455,6 @@ var models = map[string]Model{
 	"ftdx9000": func() Model {
 		m := older("ftdx9000", "Yaesu FTdx9000")
 		m.HasID = false
-		m.HasAI = false
 		m.HasNarrow = false
 		delete(m.Codes, 'D') // no AM-N
 		m.PowerRaw = true

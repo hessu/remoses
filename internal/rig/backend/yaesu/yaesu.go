@@ -51,19 +51,26 @@
 //
 // # Three quirks drive the rest of the design
 //
-// The first is that no manual documents any error, NAK or busy response. There
-// is nothing to fast-fail on, so a refused command costs the session's full
-// per-command timeout where a Kenwood costs one round trip. Nothing speculative
-// is sent, and values with a documented range are checked here before they go
-// out. See codec.go. It is also why a command a model does not have is recorded
-// in its profile rather than probed: the FTdx9000 has no ID, AI or NA at all,
-// and asking would cost a timeout apiece and answer nothing.
+// The first is that no manual documents any error, NAK or busy response, while
+// the radios do send one: a bare '?'. It is handled — every transaction waits
+// for it alongside its own answer, so a command refused that way fails in one
+// round trip instead of the session's full per-command timeout — and it is
+// handled as TRANSIENT. A '?' means "busy, ask again"; it never disables a
+// poll item, never marks a capability absent and is never remembered. See
+// keyBusy in codec.go and backend.ErrBusy.
+//
+// Everything the manuals do not cover still answers with silence, so nothing
+// speculative is sent, values with a documented range are checked here before
+// they go out, and a command a model does not have is recorded in its profile
+// rather than probed: the FTdx9000 has no ID and no NA at all, and asking would
+// cost a timeout apiece and answer nothing.
 //
 // The second is that the IF answer carries no TX/RX flag — Kenwood's P8 is
 // Yaesu's CTCSS field — so PTT cannot come out of the bulk poll and needs its
 // own TX;. The fast poll is three transactions. In exchange, PTT is readable in
 // every mode, which the Kenwood backend cannot manage in Data mode, and IF; is
-// never refused because data mode is just another mode code.
+// never refused for being in data mode the way a TS-590's is, because data mode
+// is just another mode code here.
 //
 // The third is that a set command produces no answer unless AI happens to be
 // on. Waiting for one would stall until the timeout, so sets are written with
@@ -267,11 +274,11 @@ type read struct {
 // notes it reverts to off when the transceiver is switched off — so it does not
 // permanently alter the operator's settings.
 //
-// Three of the reads are conditional, and all three are the FTdx9000, whose
-// command list has no AI, no ID and no NA row at all. Skipping them is not an
-// optimisation: a Yaesu answers a command it does not implement with silence,
-// so ID; there would burn the session's full per-command timeout and then fail
-// the connect. That radio's link check is FA; instead, which every model has.
+// Two of the reads are conditional, and both are the FTdx9000, which has no ID
+// and no NA. Skipping them is not an optimisation: a Yaesu answers a command it
+// does not implement with silence, so ID; there would burn the session's full
+// per-command timeout and then fail the connect. That radio's link check is
+// FA; instead, which every model has.
 //
 // The order matters at the end: MD0; settles the mode and its DATA flag and
 // NA0; the narrow setting, and SH; cannot be turned into a bandwidth in Hz
@@ -559,14 +566,28 @@ func (y *Rig) SetFilterSlot(ctx context.Context, c backend.Conn, slot int) error
 		"there is no FL-equivalent command, and the roofing filter is not exposed", y.profile.Label)
 }
 
-// do runs a read transaction.
+// do runs a read transaction, waiting for the command's own answer or for the
+// busy answer.
 //
-// The wait list is the command's own key and nothing else. Every other backend
-// here adds the rig's rejection answers so a refused command fails in one round
-// trip; no Yaesu manual documents one, so there is nothing to add and a refusal
-// costs the full timeout. See codec.go.
+// The busy key is on every wait list for the same reason kenwood's error keys
+// are on its: it is what turns a refusal into one round trip instead of the
+// session's full per-command timeout. It also covers the sets, which are
+// written with Send and answered by nothing — a ?; provoked by a set arrives
+// while the read-back that follows it is waiting, and fails that instead.
+//
+// It carries kenwood's blind spot too: a late ?; belonging to a command that
+// has already timed out can complete the next transaction. That costs one
+// retry, against a full timeout on every refusal for not looking.
+//
+// The busy answer is checked before err, because the session reports any
+// not-OK update as rig.ErrNAK — a permanent rejection, which is precisely what
+// ?; is not. See keyBusy and backend.ErrBusy.
 func do(ctx context.Context, c backend.Conn, req string, want backend.Key) (backend.Update, error) {
-	u, err := c.Do(ctx, []byte(req), want)
+	u, err := c.Do(ctx, []byte(req), want, keyBusy)
+	if u.Key == keyBusy {
+		return u, fmt.Errorf("yaesu: %s: the rig answered ?; (busy, or refused in its current state): %w",
+			req, backend.ErrBusy)
+	}
 	if err != nil {
 		return u, fmt.Errorf("yaesu: %s: %w", req, err)
 	}

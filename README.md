@@ -83,7 +83,7 @@ way to poll PTT at all, so it arrives only through auto-information pushes.
 | FTdx1200 | `ftdx1200` | 8-digit; two `ID` values; no PSK, no DATA-FM, no AM-N | — |
 | FTdx3000 | `ftdx3000` | 8-digit; no PSK | — |
 | FTdx5000 | `ftdx5000` | 8-digit; `PC` is a `000`–`255` index, **not watts** | — |
-| FTdx9000 | `ftdx9000` | 8-digit; **no `ID`, no `AI`** — poll-only and unidentifiable; `SH` is not a bandwidth; `PC` is an index | — |
+| FTdx9000 | `ftdx9000` | 8-digit; **no `ID`** — cannot be identified; `SH` is not a bandwidth; `PC` is an index | — |
 | FT-891 | `ft-891` | No PSK and no DATA-FM; narrow flag inside `SH` | — |
 | FT-991A | `ft-991a` | Mode code `E` is **C4FM**, not PSK; six-byte `SH` | — |
 | FT-710 | `ft-710` | | — |
@@ -104,11 +104,10 @@ Two of the older radios report **transmit power as an uncalibrated `000`–`255`
 than watts**, so remoses shows a percentage and refuses a request in watts on them: the FTdx5000
 and the FTdx9000.
 
-The **FTdx9000 has no `ID` and no `AI` command at all**. remoses cannot cross-check that the
-configuration names the right radio, and the rig can never push a change, so it is permanently
-poll-only — a front-panel knob movement is invisible until the next poll. Its `SH` is the
-position of the WIDTH knob rather than a bandwidth in Hz, so remoses reports no filter width for
-it and refuses to set one.
+The **FTdx9000 has no `ID` command**, so remoses cannot cross-check that the configuration names
+the right radio — it says which command set it is using and carries on. Its `SH` is the position
+of the WIDTH knob rather than a bandwidth in Hz, so remoses reports no filter width for it and
+refuses to set one.
 
 None of these radios can key arbitrary CW text over CAT — `KY` plays a stored keyer memory, and
 remoses will not overwrite the operator's saved messages to send one — so CW on a Yaesu means

@@ -2,12 +2,27 @@ package yaesu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/rig/backend"
 )
+
+// testCmdTimeout stands in for the session's per-command timeout, which is a
+// second in production. It is what a transaction costs when nothing on its wait
+// list ever arrives, and avoiding that cost is the entire point of the busy
+// key — so the fake charges it, shortened so a test that fails to fast-fail
+// still finishes.
+const testCmdTimeout = 300 * time.Millisecond
+
+// errFakeNAK is what the session makes of an Update whose OK is false: it
+// reports rig.ErrNAK, a permanent rejection that the API maps to 422. The fake
+// reproduces that rather than importing internal/rig, which a backend may not
+// do, so a test can prove that a busy answer does NOT reach the caller as one.
+var errFakeNAK = errors.New("testConn: rejected (what the session reports as rig.ErrNAK)")
 
 // testConn stands in for the session's transaction layer. It is deliberately
 // thin: requests are scripted to answers, answers go through the real Decode,
@@ -15,8 +30,8 @@ import (
 // conversation.
 //
 // A request with no scripted answer produces the error a silent rig produces —
-// a timeout — which is the only failure mode this protocol has, since no Yaesu
-// documents a rejection response.
+// a timeout — which is what an unimplemented or malformed command costs on this
+// protocol, since no Yaesu manual documents a rejection response.
 type testConn struct {
 	t *testing.T
 	y *Rig
@@ -24,6 +39,10 @@ type testConn struct {
 	// answers maps a request, terminator included, to the answer frame the rig
 	// would send back, without its terminator.
 	answers map[string]string
+
+	// busy makes the rig answer '?' to everything, the way a real one does when
+	// it will not run a command just now. See newBusyConn.
+	busy bool
 
 	// sent records every request written, Do and Send alike, in order.
 	sent []string
@@ -37,6 +56,14 @@ func newTestConn(t *testing.T, y *Rig, answers map[string]string) *testConn {
 	return &testConn{t: t, y: y, answers: answers}
 }
 
+// newBusyConn is a rig that answers '?' to every command.
+func newBusyConn(t *testing.T, y *Rig) *testConn {
+	t.Helper()
+	c := newTestConn(t, y, answersFor(y.profile))
+	c.busy = true
+	return c
+}
+
 func (c *testConn) Do(ctx context.Context, req []byte, want ...backend.Key) (backend.Update, error) {
 	s := string(req)
 	c.sent = append(c.sent, s)
@@ -45,6 +72,12 @@ func (c *testConn) Do(ctx context.Context, req []byte, want ...backend.Key) (bac
 	}
 
 	answer, ok := c.answers[s]
+	if c.busy {
+		// The busy answer is delivered only to a caller that asked for it. A
+		// transaction that did not put the key on its wait list gets what the
+		// session gives it: nothing, until the timeout runs out.
+		answer, ok = "?", true
+	}
 	if !ok {
 		return backend.Update{}, fmt.Errorf("testConn: timeout waiting for an answer to %q", s)
 	}
@@ -54,9 +87,23 @@ func (c *testConn) Do(ctx context.Context, req []byte, want ...backend.Key) (bac
 		return u, err
 	}
 	for _, w := range want {
-		if u.Key == w {
-			return u, nil
+		if u.Key != w {
+			continue
 		}
+		if !u.OK {
+			// The session hands back the update AND an error, which is what
+			// lets a backend classify the answer for itself.
+			return u, errFakeNAK
+		}
+		return u, nil
+	}
+	if c.busy {
+		// Nobody was waiting for it, so the frame is dropped and the
+		// transaction sits out the whole command timeout. This is the cost the
+		// busy key exists to avoid, and charging it here is what makes the
+		// fast-fail tests mean something.
+		time.Sleep(testCmdTimeout)
+		return backend.Update{}, fmt.Errorf("testConn: timeout waiting for an answer to %q", s)
 	}
 	return backend.Update{}, fmt.Errorf("testConn: answer %q keyed %q, none of %v", answer, u.Key, want)
 }

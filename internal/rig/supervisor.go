@@ -179,6 +179,11 @@ func jitter(d time.Duration) time.Duration {
 // The fatal set is enumerated rather than the tolerated set, because the
 // tolerated one is open: every backend spells "the rig said something I did not
 // expect" its own way, and those are all evidence the rig is alive.
+//
+// ErrBusy is in the tolerated set by construction, and must stay there. A rig
+// answering "not now" — Yaesu's ?; — is the clearest possible proof it is still
+// listening, and treating a momentary refusal as a lost link would reconnect a
+// perfectly good radio. The retry is the next poll tick, not a new connection.
 func isFatalPollErr(err error) bool {
 	switch {
 	case err == nil:

@@ -216,6 +216,19 @@ func TestPatchStateErrorMapping(t *testing.T) {
 			want: http.StatusServiceUnavailable,
 		},
 		{
+			// "Not now" is not "no". The radio answered, so the request was
+			// well formed and the link is fine — 503 tells the client to try
+			// again, where the 422 an outright rejection earns would tell it to
+			// rewrite a request that was already correct.
+			name: "rig was busy",
+			body: map[string]any{"frequency": 14100000},
+			inject: func(e *env) {
+				e.rigs[connectedRadio].failOn("frequency",
+					fmt.Errorf("yaesu: FA;: the rig answered ?: %w", rig.ErrBusy))
+			},
+			want: http.StatusServiceUnavailable,
+		},
+		{
 			name: "something nobody anticipated",
 			body: map[string]any{"frequency": 14100000},
 			inject: func(e *env) {
@@ -243,6 +256,30 @@ func TestPatchStateErrorMapping(t *testing.T) {
 				t.Errorf("radio_id = %v, want %s", doc["radio_id"], id)
 			}
 		})
+	}
+}
+
+// The status code is only half of it: a client that gets a 503 has to be able
+// to tell "the radio was busy, send it again" from "the radio is not connected"
+// without parsing an error string, so the detail says which it was.
+func TestBusyRigIsARetryable503(t *testing.T) {
+	e := newEnv(t)
+	e.rigs[connectedRadio].failOn("ptt",
+		fmt.Errorf("yaesu: TX;: the rig answered ?: %w", rig.ErrBusy))
+	token := e.acquire(connectedRadio)
+
+	rr := e.doLocked(http.MethodPatch, "/radios/"+connectedRadio+"/state",
+		map[string]any{"ptt": true}, token)
+	doc := e.problemOf(rr, http.StatusServiceUnavailable)
+
+	detail, _ := doc["detail"].(string)
+	if !strings.Contains(detail, "busy") || !strings.Contains(detail, "retried") {
+		t.Errorf("detail = %q, want it to say the radio was busy and the request can be retried", detail)
+	}
+	// Nothing here is the client's fault, so it must never be told to rewrite
+	// the request.
+	if rr.Code == http.StatusUnprocessableEntity {
+		t.Error("a busy radio was reported as an unprocessable request")
 	}
 }
 

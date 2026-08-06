@@ -19,6 +19,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -26,6 +27,27 @@ import (
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/radio"
 )
+
+// ErrBusy means the rig declined a command because it could not deal with it
+// just then, and that sending the identical command again is the recovery.
+//
+// It is TRANSIENT, and that is the whole point of it having a name. Nothing may
+// treat it as a persistent failure: it must not disable a poll item, must not
+// mark a capability absent, must not tear the connection down, and must not be
+// cached or remembered anywhere. The next poll tick retries by itself.
+//
+// It lives in this package rather than in one backend because two layers that
+// must not import a backend implementation have to recognise it: the session,
+// which decides whether a poll failure is fatal, and the API, which answers 503
+// "try again" rather than 422 "your request was wrong". internal/rig aliases it
+// as rig.ErrBusy so a caller needs only one check.
+//
+// Yaesu's ?; is what made it necessary, and it is ambiguous in the wild: it
+// means "not now" and also "not allowed in the state the rig is in". remoses
+// treats both as transient, because the recovery is identical either way and
+// the alternative — disabling a command permanently on the strength of one
+// answer — risks losing a capability over a momentary condition.
+var ErrBusy = errors.New("backend: rig busy, the command can be retried")
 
 // Key correlates a decoded frame with the request that asked for it.
 //

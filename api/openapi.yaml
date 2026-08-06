@@ -400,7 +400,10 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
     Disconnected:
-      description: The radio is not currently connected
+      description: |
+        The radio is not usable at the moment: either it is not connected, or it
+        answered "busy" and did not take the command. Both are transient and the
+        request can be retried; the problem document's detail says which it was.
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }

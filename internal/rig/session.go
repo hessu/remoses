@@ -53,6 +53,12 @@ var (
 	ErrUnsupported = errors.New("rig: unsupported by this radio")
 	// ErrNAK means the rig rejected the command.
 	ErrNAK = errors.New("rig: command rejected by radio")
+	// ErrBusy means the rig said "not now" rather than refusing outright —
+	// Yaesu's ?;. Maps to 503 and never to 422: the request was well formed and
+	// repeating it is the recovery, so it must not be confused with ErrNAK. It
+	// aliases the backend sentinel, the way ErrDisconnected aliases the
+	// transport one, so a caller needs only one check.
+	ErrBusy = backend.ErrBusy
 	// ErrNoKeys is a backend bug: Do was called with no reply keys. Send is the
 	// call for commands that are not answered.
 	ErrNoKeys = errors.New("rig: Do requires at least one reply key")

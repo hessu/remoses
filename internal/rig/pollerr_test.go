@@ -30,6 +30,10 @@ func TestIsFatalPollErr(t *testing.T) {
 		{"kenwood refuses", errors.New(`kenwood: read FW: rejected with "?;"`), false},
 		{"nak", fmt.Errorf("set: %w", ErrNAK), false},
 		{"unsupported", fmt.Errorf("set: %w", ErrUnsupported), false},
+		// Busy is the strongest evidence of all that the rig is alive: it
+		// answered. Reconnecting over it would drop a working radio because it
+		// was momentarily occupied.
+		{"busy", fmt.Errorf("yaesu: IF;: the rig answered ?: %w", ErrBusy), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,5 +106,58 @@ func TestSlowPollRefusalStillConnects(t *testing.T) {
 	// tier the rig declines.
 	if _, err := s.SetPower(context.Background(), radio.PowerSet{Pct: ptrTo(50.0)}); err != nil {
 		t.Errorf("SetPower: %v, want success despite the partial read-back", err)
+	}
+}
+
+// A busy answer is transient by definition, so the session must do nothing
+// durable about it: no reconnect, and no dropping the tier that reported it.
+// The next tick asking again is the entire recovery mechanism, and a rig that
+// stopped being polled would never take it.
+func TestBusyPollNeitherReconnectsNorStopsPolling(t *testing.T) {
+	dev := newFakeDevice()
+	dl := newFakeDialer(dev)
+	r := &pickyRig{
+		fakeRig: newFakeRig(),
+		slowErr: fmt.Errorf("yaesu: PC;: the rig answered ?: %w", ErrBusy),
+	}
+
+	s, err := NewSession(config.Radio{
+		ID:      "busy",
+		Backend: "fake",
+		Poll: config.Poll{
+			Interval:     config.Duration(20 * time.Millisecond),
+			SlowInterval: config.Duration(30 * time.Millisecond),
+		},
+	}, r, dl, WithLogger(testLogger()),
+		WithCommandTimeout(150*time.Millisecond), WithEventQueue(256))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	s.backoffMin = 2 * time.Millisecond
+	s.backoffMax = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); _ = s.Close() })
+	s.Start(ctx)
+
+	waitFor(t, "radio to connect despite a busy slow poll", s.Connected)
+
+	inits, polls := r.inits.Load(), r.pollSlow.Load()
+	time.Sleep(120 * time.Millisecond)
+
+	if !s.Connected() {
+		t.Fatal("session dropped the connection over a busy answer")
+	}
+	if got := r.inits.Load(); got != inits {
+		t.Errorf("reconnected %d time(s) because the rig said it was busy", got-inits)
+	}
+	if got := r.pollSlow.Load(); got <= polls {
+		t.Error("the slow tier stopped being polled; a busy answer must not disable anything")
+	}
+
+	// And a write still succeeds: its read-back touches the busy tier, which is
+	// not a reason to report a change that did happen as a failure.
+	if _, err := s.SetPower(context.Background(), radio.PowerSet{Pct: ptrTo(50.0)}); err != nil {
+		t.Errorf("SetPower: %v, want success despite the busy read-back", err)
 	}
 }

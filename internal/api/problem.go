@@ -136,6 +136,14 @@ func (s *server) classify(radioID string, err error) (status int, title, detail 
 			kv("charset", charErr.Charset),
 		}
 
+	case errors.Is(err, rig.ErrBusy):
+		// "Not now", not "no". The radio answered — so the link is fine and the
+		// request was well formed — but it would not take that command at that
+		// moment. It is checked before the 422s on purpose: a busy answer must
+		// never tell a client to rewrite a request that was correct.
+		return http.StatusServiceUnavailable, "Service Unavailable",
+			"the radio was busy and did not accept the command; the request can be retried", nil
+
 	case errors.Is(err, rig.ErrOutOfBand), errors.Is(err, rig.ErrUnsupported),
 		errors.Is(err, cw.ErrNotSupported), errors.Is(err, errUnprocessable),
 		// A NAK means the request was well formed but the radio refused it —

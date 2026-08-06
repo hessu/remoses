@@ -168,6 +168,32 @@ func TestSplit(t *testing.T) {
 			want:  []string{"MD03", "TX0"},
 		},
 		{
+			// The busy answer is the one frame that does not start with a
+			// command letter, so resynchronisation has to make an exception for
+			// it or it would be discarded as noise and cost a full timeout.
+			name:  "a busy answer survives resynchronisation",
+			reads: []string{"?;"},
+			want:  []string{"?"},
+		},
+		{
+			name:  "a busy answer between frames",
+			reads: []string{"MD03;?;TX0;"},
+			want:  []string{"MD03", "?", "TX0"},
+		},
+		{
+			name:  "a busy answer with a line ending",
+			reads: []string{"?\r\n;"},
+			want:  []string{"?"},
+		},
+		{
+			// A '?' in front of a real answer can only be noise: the two would
+			// be separate frames if both were real, so the answer behind it is
+			// what matters and must not be swallowed.
+			name:  "a stray ? does not swallow the frame behind it",
+			reads: []string{"?FA014025000;"},
+			want:  []string{"FA014025000"},
+		},
+		{
 			name:  "nothing at all",
 			reads: []string{""},
 			want:  nil,
@@ -207,14 +233,50 @@ func TestDecodeNeverErrors(t *testing.T) {
 	for _, f := range []string{
 		"", "F", "FA", "FA1", "FA0140250001", "MD0", "MD0Z", "MD12", "SM", "SM01234",
 		"TX", "TXX", "PC", "PC12", "PCxyz", "PC1xyz", "PC12345", "SH", "SH0", "NA0", "ID", "IDxyzw",
-		"IF", sampleIF[:12], sampleIF + "00", "ZZ99", "?", "123",
+		"IF", sampleIF[:12], sampleIF + "00", "ZZ99", "123",
 	} {
 		u, err := y.Decode([]byte(f))
 		if err != nil {
 			t.Errorf("Decode(%q): %v", f, err)
 		}
 		if !u.OK {
-			t.Errorf("Decode(%q) reported a rejection; this protocol documents none", f)
+			t.Errorf("Decode(%q) reported a rejection; ?; is the only one", f)
+		}
+	}
+}
+
+// TestDecodeBusy pins the one answer that is not a command. No manual documents
+// it, but radios send it — an FT-450 to IF;, an FTdx3000 to FB; — and a
+// transaction that does not recognise it sits out the session's whole
+// per-command timeout instead of failing in one round trip.
+func TestDecodeBusy(t *testing.T) {
+	y := newModelRig(t, "ft-991a")
+
+	u, err := y.Decode([]byte("?"))
+	if err != nil {
+		t.Fatalf("Decode(%q): %v", "?", err)
+	}
+	if u.Key != keyBusy {
+		t.Errorf("Decode(%q) keyed %q, want %q", "?", u.Key, keyBusy)
+	}
+	if u.OK {
+		t.Error("Decode(\"?\") reported OK; the rig did not take the command")
+	}
+	if !u.Patch.Empty() {
+		t.Errorf("Decode(\"?\") published %+v; a busy answer says nothing about state", u.Patch)
+	}
+
+	// N, O and E exist too and are deliberately not handled: N is reported to
+	// mean invalid data, a genuine rejection rather than a "try again", and
+	// treating it as busy would retry a command remoses is spelling wrongly for
+	// ever. They stay unrecognised traffic until each has a decided meaning.
+	for _, f := range []string{"N", "O", "E"} {
+		u, err := y.Decode([]byte(f))
+		if err != nil {
+			t.Errorf("Decode(%q): %v", f, err)
+		}
+		if u.Key != backend.KeyUnsolicited || !u.OK {
+			t.Errorf("Decode(%q) = key %q, OK %v; want it ignored quietly", f, u.Key, u.OK)
 		}
 	}
 }
