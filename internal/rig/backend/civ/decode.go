@@ -24,6 +24,21 @@ const (
 	KeyDataMode    backend.Key = "1A/06"
 	KeyPTT         backend.Key = "1C/00"
 	KeyID          backend.Key = "19/00"
+
+	// The dual-VFO commands. 25 and 26 answer for whichever VFO the request
+	// named, so one key covers both bands: the session only ever has one
+	// outstanding, and the band is in the answer's own first byte.
+	KeyVFOFreq   backend.Key = "25"
+	KeyVFOMode   backend.Key = "26"
+	KeySplit     backend.Key = "0F"
+	KeyDualWatch backend.Key = "07/C2"
+	// KeySubSMeter is a 15 02 answer that arrived behind a 29 prefix. It needs
+	// its own key because it is a different reading from the main receiver's
+	// meter and must not satisfy a pending read of it.
+	KeySubSMeter backend.Key = "29/15/02"
+	// KeyVFOWidth is a 1A 03 answer behind a 29 prefix: one VFO's passband,
+	// separate from the unprefixed read that fills the operating one.
+	KeyVFOWidth backend.Key = "29/1A/03"
 )
 
 // Decode turns one framed message into an Update.
@@ -42,6 +57,14 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 
 	cmd := frame[4]
 	body := frame[5 : len(frame)-1]
+
+	// A 29-prefixed answer carries the band and then the command it was
+	// wrapping. Unwrapping it here rather than in each case keeps the decoders
+	// below unaware of the prefix, but the key must still distinguish the two
+	// bands' readings — see decodeBandPrefixed.
+	if cmd == cmdBand && r.model.DualVFO {
+		return r.decodeBandPrefixed(u, body)
+	}
 
 	switch cmd {
 	case codeOK:
@@ -67,6 +90,43 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		r.decodeMode(&u.Patch, body)
 		if cmd == cmdReadMode && u.Patch.Mode != nil {
 			u.Key = KeyMode
+		}
+		return u, nil
+
+	case cmdVFO:
+		// Only 07 C2 says anything; the rest of command 07 is selection and
+		// band exchange, which are actions rather than readings.
+		if r.model.DualWatch && len(body) >= 2 && body[0] == subDualWatch {
+			u.Key = KeyDualWatch
+			on := body[1] != 0x00
+			u.Patch.DualWatch = &on
+			r.dualWatch.Store(on)
+		}
+		return u, nil
+
+	case cmdSplit:
+		// 0F answers a bare 00 or 01. Guarded by the model because a radio
+		// without split would not send this, and a stray frame that shape
+		// should not turn into a claim about where the transmitter is pointed.
+		if r.model.Split && len(body) == 1 {
+			u.Key = KeySplit
+			on := body[0] != 0x00
+			u.Patch.Split = &on
+		}
+		return u, nil
+
+	case cmdBandFreq:
+		// 25 <band> <frequency>. The band is in the answer, so one key serves
+		// both and the reply says which VFO it is about.
+		if r.model.DualVFO {
+			r.decodeVFOFreq(&u, body)
+		}
+		return u, nil
+
+	case cmdBandMode:
+		// 26 <band> <mode> <data> <filter>.
+		if r.model.DualVFO {
+			r.decodeVFOMode(&u, body)
 		}
 		return u, nil
 
@@ -203,4 +263,135 @@ func (r *Rig) decodeMode(p *radio.Patch, body []byte) {
 		slot := int(body[1])
 		p.FilterSlot = &slot
 	}
+}
+
+// decodeBandPrefixed unwraps a 29-prefixed answer.
+//
+// The prefix names the band and is followed by the command it wrapped, so the
+// reading has to be attributed to that band rather than folded into the main
+// receiver's fields. Only the readings remoses asks for behind the prefix are
+// decoded; anything else keeps the empty unsolicited Update, because a frame
+// this backend did not provoke is not evidence about which band it describes.
+func (r *Rig) decodeBandPrefixed(u backend.Update, body []byte) (backend.Update, error) {
+	if len(body) < 2 {
+		return u, nil
+	}
+	vfo, ok := vfoForBand(body[0])
+	if !ok {
+		return u, nil
+	}
+	inner, rest := body[1], body[2:]
+
+	// 29 <band> 15 02 <two bytes>: the S-meter of one receiver. Published only
+	// for the sub band, because the main one already has its own unprefixed
+	// read and two sources for one field would fight.
+	if inner == cmdMeter && len(rest) >= 1 && rest[0] == subSMeter && vfo == radio.VFOB {
+		if n, okv := decodeBCD2(rest[1:]); okv {
+			u.Key = KeySubSMeter
+			m := radio.Meter{Raw: n, Scale: sMeterScale}
+			u.Patch.SubSMeter = &m
+		}
+	}
+
+	// 29 <band> 1A 03 <index>: that VFO's passband. The index means a different
+	// width in each mode family, so it is read against the mode command 26
+	// reported for the SAME VFO — not the operating one, which is the whole
+	// point of asking per VFO.
+	if inner == cmdMisc && r.model.FilterWidth && len(rest) >= 2 && rest[0] == subFilterWidth {
+		u.Key = KeyVFOWidth
+		if n, okv := unbcdByte(rest[1]); okv {
+			st := r.vfoSnapshot(vfo)
+			if hz, okw := filterWidthHz(st.Mode, n); okw {
+				st.PassbandHz = hz
+				r.storeVFO(vfo, st)
+				if vfo == radio.VFOA {
+					u.Patch.VFOA = &st
+				} else {
+					u.Patch.VFOB = &st
+				}
+			}
+		}
+	}
+	return u, nil
+}
+
+// decodeVFOFreq parses a command 25 answer: the band, then the ordinary
+// frequency field.
+func (r *Rig) decodeVFOFreq(u *backend.Update, body []byte) {
+	if len(body) < 2 {
+		return
+	}
+	vfo, ok := vfoForBand(body[0])
+	if !ok {
+		return
+	}
+	hz, ok := decodeFrequency(body[1:])
+	if !ok {
+		return
+	}
+	u.Key = KeyVFOFreq
+	// Only the frequency is known here, so the rest of the VFO is carried
+	// through unchanged from the cache by the session's Apply. Patch replaces a
+	// whole VFOState, so the fields this frame says nothing about are filled
+	// from what the backend last read — see r.vfo.
+	st := r.vfoSnapshot(vfo)
+	st.Frequency = hz
+	r.storeVFO(vfo, st)
+	if vfo == radio.VFOA {
+		u.Patch.VFOA = &st
+	} else {
+		u.Patch.VFOB = &st
+	}
+}
+
+// decodeVFOMode parses a command 26 answer: band, operating mode, data mode and
+// filter, which the reference gives as one frame because they belong together.
+func (r *Rig) decodeVFOMode(u *backend.Update, body []byte) {
+	if len(body) < 2 {
+		return
+	}
+	vfo, ok := vfoForBand(body[0])
+	if !ok {
+		return
+	}
+	m, ok := r.model.modeFromByte(body[1])
+	if !ok {
+		return
+	}
+	st := r.vfoSnapshot(vfo)
+	st.Mode = m
+
+	// The data and filter bytes are optional in a set and always present in an
+	// answer, but a short frame is read for what it has rather than discarded:
+	// the mode is the field a client is most likely to be watching.
+	if len(body) >= 3 {
+		st.DataMode = body[2] != bandDataOff
+	}
+	if n := r.model.FilterSlots; n > 0 && len(body) >= 4 && body[3] >= 1 && body[3] <= byte(n) {
+		st.FilterSlot = int(body[3])
+	}
+
+	u.Key = KeyVFOMode
+	r.storeVFO(vfo, st)
+	if vfo == radio.VFOA {
+		u.Patch.VFOA = &st
+		u.Patch.VFO = r.operatingVFO()
+	} else {
+		u.Patch.VFOB = &st
+	}
+}
+
+// operatingVFO is which VFO the top-level state fields describe.
+//
+// Always A on the radios this backend can address by name. The IC-7610 has no
+// A/B switch: both of its VFOs are real receivers, A is what it receives and
+// transmits on, and B joins in under dual watch or takes the transmit under
+// split. So there is nothing to read and nothing to select — publishing A is a
+// statement about the radio's design, not a guess about its current state.
+//
+// A radio that did switch would have to report this from the wire; the shape is
+// a pointer so that adding one later is a change here and nowhere else.
+func (r *Rig) operatingVFO() *radio.VFO {
+	v := radio.VFOA
+	return &v
 }

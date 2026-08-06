@@ -73,6 +73,31 @@ type Model struct {
 	// five bytes. The IC-905 sends and expects six bytes (12 digits, 100 GHz
 	// down to 1 Hz) while the 10 GHz band is selected, and five below it.
 	WideFrequency bool
+
+	// DualVFO marks a radio with commands 25 and 26, which address one VFO by
+	// name instead of operating on whichever is selected: 25 <band> for the
+	// frequency, 26 <band> for the mode, data mode and filter together. With
+	// them a second VFO can be read and set without disturbing the first;
+	// without them the only way to reach it is to select it, which changes what
+	// the operator is using.
+	//
+	// It also implies the 29 prefix, which addresses the inactive band for the
+	// commands its table marks — the S-meter and the filter width among them.
+	//
+	// True only on the IC-7610, because that is the only reference remoses has
+	// read that lists them. Several other Icoms very likely have 25 and 26; a
+	// capability this backend has not transcribed is one it does not claim, and
+	// the cost of guessing wrong here is a command sent to a radio that has
+	// never heard of it.
+	DualVFO bool
+	// Split marks command 0F, which reads and sets transmit-on-the-other-VFO.
+	// Recorded separately from DualVFO because it is a different command with a
+	// different history, and a radio could have one without the other.
+	Split bool
+	// DualWatch marks 07 C0/C1/C2, receiving on both VFOs at once. This is what
+	// makes the second VFO a second *receiver* rather than a stored frequency,
+	// and so what makes a sub S-meter reading mean anything.
+	DualWatch bool
 }
 
 // Mode sets. The common set is what essentially every Icom has; the variants
@@ -127,8 +152,21 @@ var models = map[string]Model{
 		return m
 	}(),
 
-	"ic-7610": modern("ic-7610", "Icom IC-7610", 0x98,
-		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)),
+	// The IC-7610 is the only radio here with a second receiver remoses can
+	// read, and the only one whose reference this backend has read for the
+	// dual-VFO commands. Its two VFOs are not the classic A/B pair with a
+	// switch between them: both are real receivers, A is always what it
+	// receives and transmits on, B joins in under dual watch and takes the
+	// transmit under split. So there is no VFO-select operation to offer, only
+	// the two flags.
+	"ic-7610": func() Model {
+		m := modern("ic-7610", "Icom IC-7610", 0x98,
+			withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))
+		m.DualVFO = true
+		m.Split = true
+		m.DualWatch = true
+		return m
+	}(),
 
 	// The MK2 reference lists no PSK in its operating mode table.
 	"ic-7300mk2": modern("ic-7300mk2", "Icom IC-7300MK2", 0xB6, modesCommon()),

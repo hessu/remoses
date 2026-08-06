@@ -270,10 +270,33 @@ type CWStatus struct {
 	EstRemainingMS int  `json:"est_remaining_ms"`
 }
 
+// VFOState is everything one VFO carries on a radio whose VFOs are
+// independent.
+//
+// On an IC-7610 they genuinely are: each VFO has its own mode, data-mode flag,
+// IF filter slot and passband, not just a frequency. Its command 26 sets mode,
+// data mode and filter for one VFO in a single frame, which is the clearest
+// statement the reference makes that these belong together.
+//
+// The zero value means "this radio does not expose that VFO separately", which
+// is every radio but the IC-7610 today. Caps.VFOs is what a client should read
+// to know; see Caps.PerVFOMode for the mode/filter half of it.
+type VFOState struct {
+	Frequency  uint64 `json:"frequency"`
+	Mode       Mode   `json:"mode"`
+	DataMode   bool   `json:"data_mode"`
+	PassbandHz int    `json:"passband_hz"`
+	FilterSlot int    `json:"filter_slot"`
+}
+
 // State is the full snapshot of a radio. It is copied by value and published
 // through an atomic pointer, so it must stay free of reference types that a
 // reader could mutate.
 type State struct {
+	// The operating VFO: the one the radio is receiving on, and — unless Split
+	// is set — transmitting on. These fields mean the same thing on every
+	// radio, including the single-VFO ones, so a client that does not care
+	// about a second VFO can ignore everything below them.
 	Frequency  uint64   `json:"frequency"`
 	Mode       Mode     `json:"mode"`
 	DataMode   bool     `json:"data_mode"`
@@ -286,9 +309,59 @@ type State struct {
 	ALC        *Meter   `json:"alc,omitempty"`
 	CW         CWStatus `json:"cw"`
 
+	// VFO names which of the two the fields above describe, so a client can
+	// tell whether it is looking at A or B without inferring it.
+	//
+	// It is not always something the operator can change, and the two radio
+	// designs behind that are worth knowing apart. The classic one has a single
+	// receiver and an A/B switch: exactly one VFO is live, the display shows
+	// which, and split transmits on the other. The IC-7610 has no such switch —
+	// its two VFOs are both real receivers, A is always the one it receives and
+	// transmits on, and B joins in when DualWatch is set or takes the transmit
+	// when Split is. So this reads A permanently there, and remoses offers no
+	// VFO-select operation for it, because the radio has nothing to select.
+	VFO VFO `json:"vfo"`
+	// VFOA and VFOB are the per-VFO detail on a radio that exposes both. One of
+	// them duplicates the operating fields above; that redundancy is deliberate,
+	// because the common client wants "the frequency" and the split-aware one
+	// wants "both frequencies", and making the first derive from the second
+	// would tax every caller for a feature one radio has.
+	VFOA VFOState `json:"vfo_a"`
+	VFOB VFOState `json:"vfo_b"`
+
+	// Split transmits on the other VFO. It is the one flag here that changes
+	// where RF comes out, so it is carried for every radio that can report it
+	// rather than hidden behind the dual-VFO block.
+	Split bool `json:"split"`
+	// DualWatch receives on both VFOs at once. Only then does SubSMeter mean
+	// anything: with it off the second receiver is not running, and a meter
+	// reading from it would be a stale number that looks live.
+	DualWatch bool  `json:"dual_watch"`
+	SubSMeter Meter `json:"sub_s_meter"`
+
 	Connected bool      `json:"connected"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Seq       uint64    `json:"seq"`
+}
+
+// TXVFO reports which VFO the radio will transmit on: the other one when split
+// is set, the operating one otherwise.
+//
+// It exists so that no caller has to re-derive the rule, because getting it
+// wrong means telling an operator they are transmitting somewhere they are not.
+//
+// One rule covers both radio designs. Where the operator switches A and B it
+// follows the switch; on an IC-7610, where VFO is always A, it simply answers B
+// whenever split is on — which is the same statement, since B is where that
+// radio's transmit goes.
+func (s State) TXVFO() VFO {
+	if !s.Split {
+		return s.VFO
+	}
+	if s.VFO == VFOB {
+		return VFOA
+	}
+	return VFOB
 }
 
 // Patch is a sparse state update. Backends decode a wire frame into a Patch;
@@ -307,6 +380,18 @@ type Patch struct {
 	ALC        *Meter
 	CWBusy     *bool
 	Connected  *bool
+
+	// The dual-VFO fields. VFOA and VFOB are whole-VFO replacements rather than
+	// per-field pointers: the IC-7610's command 26 answers mode, data mode and
+	// filter together and command 25 answers a frequency, so a decoder always
+	// has a whole VFO's worth or none of it, and finer granularity would only
+	// invite half-applied updates.
+	VFO       *VFO
+	VFOA      *VFOState
+	VFOB      *VFOState
+	Split     *bool
+	DualWatch *bool
+	SubSMeter *Meter
 }
 
 // Empty reports whether the patch carries no fields at all.
@@ -314,7 +399,9 @@ func (p Patch) Empty() bool {
 	return p.Frequency == nil && p.Mode == nil && p.DataMode == nil &&
 		p.PassbandHz == nil && p.FilterSlot == nil && p.Power == nil &&
 		p.PTT == nil && p.SMeter == nil && p.SWR == nil && p.ALC == nil &&
-		p.CWBusy == nil && p.Connected == nil
+		p.CWBusy == nil && p.Connected == nil &&
+		p.VFO == nil && p.VFOA == nil && p.VFOB == nil &&
+		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil
 }
 
 // Apply returns s updated with every field the patch sets. It does not touch
@@ -356,6 +443,25 @@ func (s State) Apply(p Patch) State {
 	if p.Connected != nil {
 		s.Connected = *p.Connected
 	}
+
+	if p.VFO != nil {
+		s.VFO = *p.VFO
+	}
+	if p.VFOA != nil {
+		s.VFOA = *p.VFOA
+	}
+	if p.VFOB != nil {
+		s.VFOB = *p.VFOB
+	}
+	if p.Split != nil {
+		s.Split = *p.Split
+	}
+	if p.DualWatch != nil {
+		s.DualWatch = *p.DualWatch
+	}
+	if p.SubSMeter != nil {
+		s.SubSMeter = *p.SubSMeter
+	}
 	return s
 }
 
@@ -393,6 +499,28 @@ func (s State) Diff(next State) Patch {
 	if s.CW.Busy != next.CW.Busy {
 		p.CWBusy = &next.CW.Busy
 	}
+
+	if s.VFO != next.VFO {
+		p.VFO = &next.VFO
+	}
+	if s.VFOA != next.VFOA {
+		p.VFOA = &next.VFOA
+	}
+	if s.VFOB != next.VFOB {
+		p.VFOB = &next.VFOB
+	}
+	if s.Split != next.Split {
+		p.Split = &next.Split
+	}
+	if s.DualWatch != next.DualWatch {
+		p.DualWatch = &next.DualWatch
+	}
+	// The sub meter moves constantly while dual watch is on, exactly as the
+	// main one does, so it is diffed like a meter and coalesced by the
+	// WebSocket layer's min_interval rather than suppressed here.
+	if s.SubSMeter != next.SubSMeter {
+		p.SubSMeter = &next.SubSMeter
+	}
 	return p
 }
 
@@ -419,7 +547,27 @@ type Caps struct {
 	FilterWidth bool `json:"filter_width"`
 	FilterSlots int  `json:"filter_slots"`
 	SMeterScale int  `json:"s_meter_scale"`
+
+	// SubReceiver is a second receiver that can be listened to at the same
+	// time as the first — the IC-7610's dual watch. It is not "the radio has
+	// two VFOs", which nearly every radio here does: it is "both can be
+	// received at once", which is what makes State.SubSMeter mean anything.
 	SubReceiver bool `json:"sub_receiver"`
+	// Split reports that the radio can transmit on the VFO it is not receiving
+	// on, and that remoses can read and set that. It is the capability that
+	// changes where RF comes out, so a client should check it before offering
+	// the control rather than inferring it from the VFO list.
+	Split bool `json:"split"`
+	// DualWatch is the receive-on-both control. Implies SubReceiver; kept
+	// separate because a radio could in principle have the second receiver
+	// wired to something remoses cannot switch.
+	DualWatch bool `json:"dual_watch"`
+	// PerVFOMode reports that each VFO carries its own mode, data-mode flag and
+	// filter, rather than only its own frequency. True on the IC-7610, whose
+	// command 26 addresses all three per VFO. Where it is false a client should
+	// treat mode and filter as properties of the radio, and State.VFOA/VFOB
+	// carry frequencies only.
+	PerVFOMode bool `json:"per_vfo_mode"`
 
 	CWMethod  CWMethod `json:"cw_method"`
 	CWCharset string   `json:"cw_charset,omitempty"`

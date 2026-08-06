@@ -30,6 +30,19 @@ type simRig struct {
 	width  byte
 	ptt    byte
 
+	// The dual-VFO side, indexed by the band selector commands 25, 26 and 29
+	// take: [0] is main (VFO A), [1] is sub (VFO B). Held separately from the
+	// single-VFO fields above because that is how the radio holds them — the
+	// point of commands 25 and 26 is that they do not touch the other band.
+	bandFreq   [2][5]byte
+	bandMode   [2]byte
+	bandData   [2]byte
+	bandFilter [2]byte
+	bandWidth  [2]byte
+	subSmeter  [2]byte
+	split      byte
+	dualWatch  byte
+
 	cwMessages []string
 	cwAborts   int
 
@@ -55,6 +68,18 @@ func newSim(t *testing.T) *simRig {
 		speed:   [2]byte{0x01, 0x28},
 		width:   0x10,
 		backend: testRig(t),
+
+		// VFO A on 14.025 CW/FIL2 like the operating fields, VFO B somewhere
+		// else entirely on USB/FIL1, so a test that mixes the two up produces
+		// an obviously wrong answer rather than a plausible one.
+		bandFreq:   [2][5]byte{{0x00, 0x50, 0x02, 0x14, 0x00}, {0x00, 0x00, 0x35, 0x28, 0x00}},
+		bandMode:   [2]byte{0x03, 0x01},
+		bandFilter: [2]byte{0x02, 0x01},
+		// Different widths per band, so a decoder reading one against the
+		// other's mode is caught: index 09 is 500 Hz in CW, index 31 is 2700 Hz
+		// in USB.
+		bandWidth: [2]byte{0x09, 0x31},
+		subSmeter: [2]byte{0x00, 0x21}, // 21
 	}
 }
 
@@ -187,6 +212,90 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 		}
 		s.cwMessages = append(s.cwMessages, string(body))
 		return ok, nil
+
+	case cmdVFO:
+		// Only dual watch is modelled; the rest of command 07 is selection and
+		// band exchange, which remoses does not send.
+		switch {
+		case len(body) == 1 && body[0] == subDualWatch:
+			return [][]byte{fromRig(cmdVFO, subDualWatch, s.dualWatch)}, nil
+		case len(body) == 1 && body[0] == subDualWatchOn:
+			s.dualWatch = 0x01
+			return ok, nil
+		case len(body) == 1 && body[0] == subDualWatchOff:
+			s.dualWatch = 0x00
+			return ok, nil
+		}
+		return ng, nil
+
+	case cmdSplit:
+		if len(body) == 0 {
+			return [][]byte{fromRig(cmdSplit, s.split)}, nil
+		}
+		s.split = body[0]
+		return ok, nil
+
+	case cmdBandFreq:
+		if len(body) < 1 || body[0] > 1 {
+			return ng, nil
+		}
+		b := body[0]
+		if len(body) == 1 {
+			f := s.bandFreq[b]
+			return [][]byte{fromRig(cmdBandFreq, append([]byte{b}, f[:]...)...)}, nil
+		}
+		if len(body) != 6 {
+			return ng, nil
+		}
+		copy(s.bandFreq[b][:], body[1:])
+		return ok, nil
+
+	case cmdBandMode:
+		if len(body) < 1 || body[0] > 1 {
+			return ng, nil
+		}
+		b := body[0]
+		if len(body) == 1 {
+			return [][]byte{fromRig(cmdBandMode, b, s.bandMode[b], s.bandData[b], s.bandFilter[b])}, nil
+		}
+		// The reference allows the data and filter bytes to be omitted, in
+		// which case the radio selects DATA OFF and the mode's default filter.
+		// Modelled, so that a backend relying on "omit to leave alone" fails
+		// here rather than on the radio.
+		s.bandMode[b] = body[1]
+		if len(body) >= 3 {
+			s.bandData[b] = body[2]
+		} else {
+			s.bandData[b] = 0x00
+		}
+		if len(body) >= 4 {
+			s.bandFilter[b] = body[3]
+		} else {
+			s.bandFilter[b] = 0x01
+		}
+		return ok, nil
+
+	case cmdBand:
+		// 29 <band> <command...>: answers as the wrapped command, with the
+		// prefix echoed back, and works whether or not that band is selected.
+		if len(body) < 2 || body[0] > 1 {
+			return ng, nil
+		}
+		b, inner := body[0], body[1:]
+		if len(inner) == 2 && inner[0] == cmdMeter && inner[1] == subSMeter {
+			m := s.smeter
+			if b == bandSub {
+				m = s.subSmeter
+			}
+			return [][]byte{fromRig(cmdBand, b, cmdMeter, subSMeter, m[0], m[1])}, nil
+		}
+		// 1A 03 behind the prefix: that band's filter width. One width per
+		// band, so a decoder reading the wrong one against the wrong mode gives
+		// a visibly wrong passband.
+		if len(inner) == 2 && inner[0] == cmdMisc && inner[1] == subFilterWidth {
+			return [][]byte{fromRig(cmdBand, b, cmdMisc, subFilterWidth, s.bandWidth[b])}, nil
+		}
+		return ng, nil
 	}
 	return ng, nil
 }
@@ -281,8 +390,16 @@ func TestInitReadsFullState(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 	// 19 is the identity cross-check, which runs first so that a mismatch is
-	// reported before any state is published.
-	s.wantConversation(t, "19", "03", "04", "14/0A", "15/02", "1C/00")
+	// reported before any state is published. The 25/26/0F/07 tail is the
+	// dual-VFO read, which the IC-7610 profile has and most models do not — it
+	// runs at connect so the first client to look sees the second VFO filled
+	// in, and so that dual watch is settled before the first fast poll decides
+	// whether to ask for the sub meter.
+	// The 29 pair is each VFO's filter width, read behind the prefix so neither
+	// band has to be selected — and after the 26 reads, because turning a width
+	// index into hertz needs that VFO's own mode.
+	s.wantConversation(t, "19", "03", "04", "14/0A", "15/02", "1C/00",
+		"25", "25", "26", "26", "29", "29", "0F", "07")
 }
 
 func TestInitFailsWhenTheRigRejects(t *testing.T) {
@@ -307,7 +424,12 @@ func TestPoll(t *testing.T) {
 		// 1A 06 is in the slow tier because data mode has no other source: no
 		// other answer carries the flag and the rig does not broadcast it, so
 		// without the read state.data_mode would never move.
-		{"slow", backend.PollSlow, []string{"14/0A", "1A/03", "1A/06"}},
+		// 25/26 twice each is one frequency and one mode per VFO; 0F is split
+		// and 07 is dual watch. All of it is slow-tier because it moves only
+		// when somebody changes it, and four extra transactions have no
+		// business on a 500 ms tick.
+		{"slow", backend.PollSlow, []string{"14/0A", "1A/03",
+			"25", "25", "26", "26", "0F", "07", "1A/06"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

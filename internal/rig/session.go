@@ -504,6 +504,97 @@ func (s *Session) SetFilterWidth(ctx context.Context, hz int) (radio.State, erro
 	return s.readback(ctx, backend.PollSlow, backend.PollFast)
 }
 
+// dualVFO reports the backend's dual-VFO interface, or nil where the radio can
+// only reach the VFO it is on.
+//
+// Asked of the backend rather than of Caps, because this is the type assertion
+// the write paths need; Caps is the same fact published for clients, and
+// TestCapsAgreeWithTheInterface holds the two together.
+func (s *Session) dualVFO() backend.DualVFO {
+	d, _ := s.rig.(backend.DualVFO)
+	return d
+}
+
+// SetVFOFrequency tunes one named VFO, which is a different operation from
+// SetFrequency: that one moves whatever the radio is on.
+//
+// The band limits apply to both. A frequency this station may not transmit on
+// is one it may not put in a VFO either, because split makes the other VFO a
+// transmit frequency without any further command.
+func (s *Session) SetVFOFrequency(ctx context.Context, vfo radio.VFO, hz uint64) (radio.State, error) {
+	if !s.cfg.Limits.AllowsFrequency(hz) {
+		return s.State(), fmt.Errorf("radio %s: %d Hz: %w", s.id, hz, ErrOutOfBand)
+	}
+	d := s.dualVFO()
+	if d == nil {
+		return s.State(), fmt.Errorf("radio %s: addressing VFO %s: %w", s.id, vfo, ErrUnsupported)
+	}
+	if err := s.requireConnected(); err != nil {
+		return s.State(), err
+	}
+	if err := d.SetVFOFrequency(ctx, s, vfo, hz); err != nil {
+		return s.State(), err
+	}
+	return s.readback(ctx, backend.PollSlow, backend.PollFast)
+}
+
+// SetVFOMode sets mode, data mode and filter on one named VFO. slot 0 keeps
+// whatever filter that VFO has.
+func (s *Session) SetVFOMode(ctx context.Context, vfo radio.VFO, m radio.Mode, dataMode bool, slot int) (radio.State, error) {
+	caps := s.Caps()
+	if len(caps.Modes) > 0 && !caps.SupportsMode(m) {
+		return s.State(), fmt.Errorf("radio %s: mode %s: %w", s.id, m, ErrUnsupported)
+	}
+	d := s.dualVFO()
+	if d == nil {
+		return s.State(), fmt.Errorf("radio %s: addressing VFO %s: %w", s.id, vfo, ErrUnsupported)
+	}
+	if err := s.requireConnected(); err != nil {
+		return s.State(), err
+	}
+	if err := d.SetVFOMode(ctx, s, vfo, m, dataMode, slot); err != nil {
+		return s.State(), err
+	}
+	return s.readback(ctx, backend.PollSlow, backend.PollFast)
+}
+
+// SetSplit moves transmit to the other VFO, or back.
+//
+// It is read back before returning, like every other write here, and for a
+// sharper reason than most: this is the setting that decides where the
+// transmitter lands, and an operator who thinks split is off when it is on
+// transmits on somebody else's frequency.
+func (s *Session) SetSplit(ctx context.Context, on bool) (radio.State, error) {
+	d := s.dualVFO()
+	if d == nil || !s.Caps().Split {
+		return s.State(), fmt.Errorf("radio %s: split: %w", s.id, ErrUnsupported)
+	}
+	if err := s.requireConnected(); err != nil {
+		return s.State(), err
+	}
+	if err := d.SetSplit(ctx, s, on); err != nil {
+		return s.State(), err
+	}
+	return s.readback(ctx, backend.PollSlow, backend.PollFast)
+}
+
+// SetDualWatch turns receiving on both VFOs on or off.
+func (s *Session) SetDualWatch(ctx context.Context, on bool) (radio.State, error) {
+	d := s.dualVFO()
+	if d == nil || !s.Caps().DualWatch {
+		return s.State(), fmt.Errorf("radio %s: dual watch: %w", s.id, ErrUnsupported)
+	}
+	if err := s.requireConnected(); err != nil {
+		return s.State(), err
+	}
+	if err := d.SetDualWatch(ctx, s, on); err != nil {
+		return s.State(), err
+	}
+	// Slow first: it carries the dual-watch flag itself, and the fast tier's
+	// decision to poll the second receiver's meter depends on it.
+	return s.readback(ctx, backend.PollSlow, backend.PollFast)
+}
+
 // SetFilterSlot selects an IF filter: FIL1-3 on Icom, IF Filter A/B on Kenwood.
 func (s *Session) SetFilterSlot(ctx context.Context, slot int) (radio.State, error) {
 	if err := s.requireConnected(); err != nil {
@@ -531,12 +622,35 @@ type PatchRequest struct {
 	FilterWidthHz *int
 	Power         *radio.PowerSet
 	PTT           *bool
+
+	// Split and DualWatch are radio-wide rather than per-VFO, which is why
+	// they sit beside VFO rather than inside it.
+	Split     *bool
+	DualWatch *bool
 }
 
 // Empty reports whether the request would change nothing.
 func (r PatchRequest) Empty() bool {
 	return r.Mode == nil && r.DataMode == nil && r.Frequency == nil &&
-		r.FilterSlot == nil && r.FilterWidthHz == nil && r.Power == nil && r.PTT == nil
+		r.FilterSlot == nil && r.FilterWidthHz == nil && r.Power == nil && r.PTT == nil &&
+		r.Split == nil && r.DualWatch == nil
+}
+
+// vfoState is the cached state of one named VFO, for filling in the half of a
+// mode change a request did not specify.
+func (s *Session) vfoState(vfo radio.VFO) radio.VFOState {
+	st := s.State()
+	if vfo == radio.VFOB || vfo == radio.VFOSub {
+		return st.VFOB
+	}
+	return st.VFOA
+}
+
+// namesAVFO reports whether this request addresses a particular VFO rather than
+// whichever one the radio is on.
+func (r PatchRequest) namesAVFO() bool {
+	return r.VFO == radio.VFOA || r.VFO == radio.VFOB ||
+		r.VFO == radio.VFOMain || r.VFO == radio.VFOSub
 }
 
 // ApplyPatch performs a multi-field change as one ordered transaction.
@@ -572,6 +686,18 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 			return s.State(), fmt.Errorf("radio %s: filter slot %d: %w", s.id, *req.FilterSlot, ErrUnsupported)
 		}
 	}
+	// The dual-VFO controls, validated here with the rest so that a request
+	// naming VFO B on a radio that cannot address one is refused before
+	// anything reaches the wire.
+	if req.namesAVFO() && s.dualVFO() == nil {
+		return s.State(), fmt.Errorf("radio %s: addressing VFO %s: %w", s.id, req.VFO, ErrUnsupported)
+	}
+	if req.Split != nil && !caps.Split {
+		return s.State(), fmt.Errorf("radio %s: split: %w", s.id, ErrUnsupported)
+	}
+	if req.DualWatch != nil && !caps.DualWatch {
+		return s.State(), fmt.Errorf("radio %s: dual watch: %w", s.id, ErrUnsupported)
+	}
 	var power radio.PowerSet
 	if req.Power != nil {
 		p, err := s.clampPower(*req.Power)
@@ -587,11 +713,51 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		return s.State(), err
 	}
 
-	slow := req.Power != nil || req.FilterSlot != nil || req.FilterWidthHz != nil
+	slow := req.Power != nil || req.FilterSlot != nil || req.FilterWidthHz != nil ||
+		req.Split != nil || req.DualWatch != nil || req.namesAVFO()
+
+	// A request naming a VFO takes the whole mode/frequency path through the
+	// dual-VFO commands instead. On an Icom that is strictly better even for
+	// the operating VFO — command 26 carries mode, data mode and filter in one
+	// frame, where the single-VFO path needs 06 then 1A 06 and those two
+	// overwrite each other — but it is used only when a VFO was named, because
+	// on any other radio there is no such command and the ordinary path is the
+	// only one there is.
+	if named := req.namesAVFO(); named {
+		d := s.dualVFO()
+		if req.Mode != nil || req.DataMode != nil {
+			cur := s.vfoState(req.VFO)
+			m, dm := cur.Mode, cur.DataMode
+			if req.Mode != nil {
+				m = *req.Mode
+			}
+			if req.DataMode != nil {
+				dm = *req.DataMode
+			}
+			// Slot 0 keeps the filter this VFO has, unless the request names
+			// one — and when it does, it is applied here rather than by the
+			// separate filter step below, because command 26 sets all three at
+			// once and a later SetFilterSlot would be a second write.
+			slot := 0
+			if req.FilterSlot != nil {
+				slot = *req.FilterSlot
+			}
+			if err := d.SetVFOMode(ctx, s, req.VFO, m, dm, slot); err != nil {
+				return s.State(), err
+			}
+			req.FilterSlot = nil
+		}
+		if req.Frequency != nil {
+			if err := d.SetVFOFrequency(ctx, s, req.VFO, *req.Frequency); err != nil {
+				return s.State(), err
+			}
+			req.Frequency = nil
+		}
+	}
 
 	// Data mode is orthogonal to mode, so a request that changes only one of
 	// the two has to resend the other as the rig currently has it.
-	if req.Mode != nil || req.DataMode != nil {
+	if !req.namesAVFO() && (req.Mode != nil || req.DataMode != nil) {
 		cur := s.State()
 		m, dm := cur.Mode, cur.DataMode
 		if req.Mode != nil {
@@ -622,6 +788,19 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	}
 	if req.Power != nil {
 		if err := s.rig.SetPower(ctx, s, power); err != nil {
+			return s.State(), err
+		}
+	}
+	// Split and dual watch go after everything that shapes a VFO and before
+	// PTT, so that a request which sets up the other VFO and then enables split
+	// cannot key before the transmit VFO is where the operator asked for it.
+	if req.Split != nil {
+		if err := s.dualVFO().SetSplit(ctx, s, *req.Split); err != nil {
+			return s.State(), err
+		}
+	}
+	if req.DualWatch != nil {
+		if err := s.dualVFO().SetDualWatch(ctx, s, *req.DualWatch); err != nil {
 			return s.State(), err
 		}
 	}

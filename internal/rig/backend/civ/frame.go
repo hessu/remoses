@@ -37,6 +37,34 @@ const (
 	cmdMisc        = 0x1A // memories, filters, and the whole Set-mode menu
 	cmdTransceiver = 0x1C // transmitter status, tuner, XFC
 
+	// The dual-VFO commands, from the IC-7610 CI-V Reference Guide. Not every
+	// Icom has them — Model.DualVFO gates all of them — and where a radio does,
+	// they are strictly better than the single-VFO equivalents above, because
+	// they name the VFO instead of operating on whichever one is selected.
+	cmdVFO      = 0x07 // VFO selection, band exchange, dual watch
+	cmdSplit    = 0x0F // 0F read, 0F 00 off, 0F 01 on
+	cmdBandFreq = 0x25 // 25 <band> [freq]: per-VFO frequency
+	cmdBandMode = 0x26 // 26 <band> [mode data filter]: per-VFO mode, atomically
+	// cmdBand is the prefix that addresses the inactive VFO. "Regardless of
+	// active/inactive the Main or Sub band, you can directly specify the Main
+	// or Sub band, and send/read the supported command settings." Only the
+	// commands its table marks are supported; frequency and mode are NOT among
+	// them, which is exactly why 25 and 26 exist.
+	cmdBand = 0x29
+
+	subDualWatchOff = 0xC0 // 07 C0
+	subDualWatchOn  = 0xC1 // 07 C1
+	subDualWatch    = 0xC2 // 07 C2, read/set, 00 off 01 on
+	subSelectMain   = 0xD0 // 07 D0
+	subSelectSub    = 0xD1 // 07 D1
+	subBandSelected = 0xD2 // 07 D2, read which band is selected
+
+	// The band selector carried by 25, 26 and the 29 prefix. remoses addresses
+	// these as VFO A and VFO B, which is how the radio's operator thinks of
+	// them; the reference calls them the main and sub bands.
+	bandMain = 0x00
+	bandSub  = 0x01
+
 	subRFPower     = 0x0A // 14 0A, 0000-0255 relative
 	subKeyerSpeed  = 0x0C // 14 0C, 0000-0255 mapped to 6-48 wpm
 	subSMeter      = 0x02 // 15 02, 0000-0255

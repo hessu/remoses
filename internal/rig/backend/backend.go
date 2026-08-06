@@ -226,11 +226,44 @@ type MorseSender interface {
 	EncodeProsigns(text string) (string, error)
 }
 
-// SubReceiver is implemented by backends with a second receiver, such as the
-// IC-7610. Not required for v1.
-type SubReceiver interface {
-	SetSubFrequency(ctx context.Context, c Conn, hz uint64) error
-	SetSubMode(ctx context.Context, c Conn, m radio.Mode) error
+// DualVFO is implemented by a backend whose radio can address each VFO by name
+// rather than only "the one it is on", and report both at once.
+//
+// The distinction is not that the radio has two VFOs — nearly all of them do —
+// but that the protocol can *reach* the second one without selecting it. An
+// Icom's commands 03 and 05 act on whichever VFO is operating, so reaching the
+// other means selecting it, which changes what the operator is using and races
+// the front panel; commands 25 and 26 name the VFO in the frame instead. Where
+// a radio has only the former, remoses controls the operating VFO and refuses
+// to call it A or B, and that backend does not implement this.
+//
+// Caps is what a client reads to know: VFOs lists what may be named, and Split,
+// DualWatch and PerVFOMode describe the rest. A backend implementing this must
+// set them, because the type assertion is invisible from outside the daemon.
+type DualVFO interface {
+	// ReadVFOs refreshes both VFOs, split and dual watch. Called at connect and
+	// on the slow poll; the session applies the patches, as with Poll.
+	ReadVFOs(ctx context.Context, c Conn) error
+
+	// SetVFOFrequency and SetVFOMode address one VFO by name. VFOCurrent is not
+	// a valid argument: a caller reaching these is naming a VFO deliberately,
+	// and resolving "current" would make a request about one act on another.
+	//
+	// slot 0 on SetVFOMode means "keep the filter that VFO has". It is a
+	// distinct case rather than a default because the underlying command may
+	// have no encoding for "leave it alone" — Icom's 26 reads a short frame as
+	// "data off and the mode's default filter" — so preserving it takes a read.
+	SetVFOFrequency(ctx context.Context, c Conn, vfo radio.VFO, hz uint64) error
+	SetVFOMode(ctx context.Context, c Conn, vfo radio.VFO, m radio.Mode, dataMode bool, slot int) error
+
+	// SetSplit moves transmit to the other VFO. Of everything in this
+	// interface it is the one that changes where RF comes out, so the session
+	// reads it back rather than assuming it took.
+	SetSplit(ctx context.Context, c Conn, on bool) error
+
+	// SetDualWatch receives on both VFOs at once. Only while it is on does a
+	// second receiver's meter mean anything.
+	SetDualWatch(ctx context.Context, c Conn, on bool) error
 }
 
 // Factory builds a Rig from its radio configuration.

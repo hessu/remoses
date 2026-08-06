@@ -59,6 +59,45 @@ type Rig struct {
 	// session's cache holds the authoritative mode, and this is only ever used
 	// to choose a column.
 	mode atomic.Uint32
+
+	// dualWatch is the last 07 C2 reading, and shapes the poll: with dual watch
+	// off the second receiver is not running, so its S-meter is not worth
+	// asking for and would be a stale number if it were.
+	dualWatch atomic.Bool
+
+	// vfoA and vfoB accumulate what the per-VFO commands report separately. 25
+	// answers a frequency, 26 a mode with its data flag and filter, and a
+	// 29-prefixed 1A 03 a passband — but a Patch carries a whole VFOState, so
+	// each decode has to merge into what the others last said rather than blank
+	// them.
+	//
+	// Pointers rather than fields because Decode runs on the session's reader
+	// goroutine while Poll and the setters run on the command goroutine, and
+	// the contract forbids a lock. Each store publishes a fresh value; nothing
+	// mutates one in place.
+	vfoA atomic.Pointer[radio.VFOState]
+	vfoB atomic.Pointer[radio.VFOState]
+}
+
+// vfoSnapshot is what the backend last read for one VFO, so a decode that
+// learns only part of it can fill in the rest.
+func (r *Rig) vfoSnapshot(vfo radio.VFO) radio.VFOState {
+	p := r.vfoA.Load()
+	if vfo == radio.VFOB {
+		p = r.vfoB.Load()
+	}
+	if p == nil {
+		return radio.VFOState{}
+	}
+	return *p
+}
+
+func (r *Rig) storeVFO(vfo radio.VFO, s radio.VFOState) {
+	if vfo == radio.VFOB {
+		r.vfoB.Store(&s)
+		return
+	}
+	r.vfoA.Store(&s)
 }
 
 // Model reports the configured radio model.
@@ -147,15 +186,25 @@ func (r *Rig) Caps() radio.Caps {
 		// comes from the model, so a client is not offered PSK on an IC-9700 or
 		// DV on an IC-7610.
 		Modes: append([]radio.Mode(nil), r.model.Modes...),
-		// Only the operating (selected) VFO is addressable here: commands 03/05
-		// act on whatever the rig is tuned to. Main/sub and VFO A/B need the
-		// 25/29 command family, which is deferred with backend.SubReceiver.
-		VFOs:              []radio.VFO{radio.VFOCurrent},
+		// What a client may address. Commands 03/05 act on whatever the rig is
+		// tuned to, so the operating VFO is always available; A and B join it
+		// only on a radio with the 25/26 family, which can name a VFO instead
+		// of operating on whichever is selected.
+		VFOs:              r.addressableVFOs(),
 		PowerWattAccurate: false,
 		FilterWidth:       r.model.FilterWidth,
 		FilterSlots:       r.model.FilterSlots,
 		SMeterScale:       sMeterScale,
-		SubReceiver:       false,
+
+		// SubReceiver means both VFOs can be *received at once*, which is what
+		// makes State.SubSMeter a live reading rather than a stale one — so it
+		// follows dual watch rather than merely having two VFOs.
+		SubReceiver: r.model.DualWatch,
+		Split:       r.model.Split,
+		DualWatch:   r.model.DualWatch,
+		// Command 26 carries mode, data mode and filter per VFO, so on those
+		// radios all three are per-VFO rather than properties of the set.
+		PerVFOMode: r.model.DualVFO,
 		// Capability, not configuration: a radio with command 17 has a CAT CW
 		// buffer whether or not this station is configured to use it, and one
 		// without it — the IC-718 — cannot send Morse over CAT at all, however
@@ -184,13 +233,22 @@ func (r *Rig) Caps() radio.Caps {
 // state exactly like a solicited reply.
 func (r *Rig) Init(ctx context.Context, c backend.Conn) error {
 	r.checkIdentity(ctx, c)
-	return r.readAll(ctx, c,
+	if err := r.readAll(ctx, c,
 		request{KeyFrequency, r.frame(cmdReadFreq)},
 		request{KeyMode, r.frame(cmdReadMode)},
 		request{KeyPower, r.frame(cmdLevel, subRFPower)},
 		request{KeySMeter, r.frame(cmdMeter, subSMeter)},
 		request{KeyPTT, r.frame(cmdTransceiver, r.model.PTTSub)},
-	)
+	); err != nil {
+		return err
+	}
+	if !r.model.DualVFO {
+		return nil
+	}
+	// Both VFOs at connect, so the first client to look sees the second one
+	// filled in rather than zeroes — and so that the dual-watch flag is settled
+	// before the first fast poll decides whether to ask for the sub meter.
+	return r.ReadVFOs(ctx, c)
 }
 
 // checkIdentity asks the radio who it is (command 19 00) and warns if the
@@ -244,12 +302,22 @@ func (r *Rig) checkIdentity(ctx context.Context, c backend.Conn) {
 func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) error {
 	switch tier {
 	case backend.PollFast:
-		return r.readAll(ctx, c,
-			request{KeyFrequency, r.frame(cmdReadFreq)},
-			request{KeyMode, r.frame(cmdReadMode)},
-			request{KeyPTT, r.frame(cmdTransceiver, r.model.PTTSub)},
-			request{KeySMeter, r.frame(cmdMeter, subSMeter)},
-		)
+		reqs := []request{
+			{KeyFrequency, r.frame(cmdReadFreq)},
+			{KeyMode, r.frame(cmdReadMode)},
+			{KeyPTT, r.frame(cmdTransceiver, r.model.PTTSub)},
+			{KeySMeter, r.frame(cmdMeter, subSMeter)},
+		}
+		// The second receiver's meter belongs in the fast tier for the same
+		// reason the first one does — it is a signal level, and a client draws
+		// it as a live bar — but only while dual watch is actually running.
+		// With it off that receiver is not listening to anything, and a reading
+		// from it would sit in the cache looking current.
+		if r.model.DualVFO && r.dualWatch.Load() {
+			reqs = append(reqs, request{KeySubSMeter,
+				r.frame(cmdBand, bandSub, cmdMeter, subSMeter)})
+		}
+		return r.readAll(ctx, c, reqs...)
 	case backend.PollSlow:
 		reqs := []request{{KeyPower, r.frame(cmdLevel, subRFPower)}}
 		// Asking a radio without 1A 03 would draw an NG every slow tick. The
@@ -257,6 +325,24 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		// is no reason to generate the noise.
 		if r.model.FilterWidth {
 			reqs = append(reqs, request{KeyFilterWidth, r.frame(cmdMisc, subFilterWidth)})
+		}
+		// Both VFOs, split and dual watch. The slow tier because they move only
+		// when somebody changes them — and because on a dual-VFO radio this is
+		// four extra transactions, which has no business on a 500 ms tick.
+		// The sub receiver's meter is the exception and rides the fast tier;
+		// see PollFast.
+		if r.model.DualVFO {
+			reqs = append(reqs,
+				request{KeyVFOFreq, r.frame(cmdBandFreq, bandMain)},
+				request{KeyVFOFreq, r.frame(cmdBandFreq, bandSub)},
+				request{KeyVFOMode, r.frame(cmdBandMode, bandMain)},
+				request{KeyVFOMode, r.frame(cmdBandMode, bandSub)})
+		}
+		if r.model.Split {
+			reqs = append(reqs, request{KeySplit, r.frame(cmdSplit)})
+		}
+		if r.model.DualWatch {
+			reqs = append(reqs, request{KeyDualWatch, r.frame(cmdVFO, subDualWatch)})
 		}
 		// Data mode has to be read, not merely written. Nothing else reports it:
 		// there is no data-mode flag in any other answer, and the rig does not

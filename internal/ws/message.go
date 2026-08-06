@@ -143,5 +143,27 @@ func changedFields(p radio.Patch, st radio.State) map[string]any {
 	if p.Connected != nil {
 		m["connected"] = *p.Connected
 	}
+
+	// The dual-VFO fields. A whole VFO goes out at once because that is how the
+	// radio answers for one — an Icom's 26 carries mode, data mode and filter
+	// together — and a client redrawing "VFO B" wants all of it anyway.
+	if p.VFO != nil {
+		m["vfo"] = *p.VFO
+	}
+	if p.VFOA != nil {
+		m["vfo_a"] = *p.VFOA
+	}
+	if p.VFOB != nil {
+		m["vfo_b"] = *p.VFOB
+	}
+	if p.Split != nil {
+		m["split"] = *p.Split
+	}
+	if p.DualWatch != nil {
+		m["dual_watch"] = *p.DualWatch
+	}
+	if p.SubSMeter != nil {
+		m["sub_s_meter"] = *p.SubSMeter
+	}
 	return m
 }

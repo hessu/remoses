@@ -147,6 +147,12 @@ type statePatchBody struct {
 	PowerW     *float64    `json:"power_w"`
 	PowerPct   *float64    `json:"power_pct"`
 	PTT        *bool       `json:"ptt"`
+
+	// Split moves transmit to the other VFO; DualWatch receives on both at
+	// once. Both need caps.split / caps.dual_watch, and a radio without them
+	// answers 422 rather than pretending.
+	Split     *bool `json:"split"`
+	DualWatch *bool `json:"dual_watch"`
 }
 
 // toRequest converts the body into the session's patch request.
@@ -168,6 +174,8 @@ func (b statePatchBody) toRequest() (rig.PatchRequest, error) {
 		FilterSlot:    b.FilterSlot,
 		FilterWidthHz: b.PassbandHz,
 		PTT:           b.PTT,
+		Split:         b.Split,
+		DualWatch:     b.DualWatch,
 	}
 	if b.VFO != nil {
 		req.VFO = *b.VFO

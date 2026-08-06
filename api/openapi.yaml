@@ -462,7 +462,27 @@ components:
 
     VFO:
       type: string
+      description: |
+        `current` is the VFO the radio is operating and works everywhere.
+        `A`/`B` (and their `main`/`sub` aliases) may be used only where
+        `caps.vfos` lists them: naming one needs a protocol command that
+        addresses a VFO by name, and on a radio without it remoses would have
+        to act on the operating VFO and call it A, which it refuses to do.
       enum: [current, A, B, main, sub]
+
+    VFOState:
+      description: |
+        One VFO's own settings. On a radio with `caps.per_vfo_mode` these are
+        genuinely independent — an IC-7610 holds a separate mode, data-mode
+        flag and IF filter per VFO — and elsewhere only `frequency` is
+        meaningful.
+      type: object
+      properties:
+        frequency: { type: integer, format: int64 }
+        mode: { $ref: "#/components/schemas/Mode" }
+        data_mode: { type: boolean }
+        passband_hz: { type: integer }
+        filter_slot: { type: integer }
 
     Power:
       description: |
@@ -530,6 +550,38 @@ components:
         swr: { $ref: "#/components/schemas/Meter" }
         alc: { $ref: "#/components/schemas/Meter" }
         cw: { $ref: "#/components/schemas/CWStatus" }
+
+        # The fields above describe the OPERATING VFO — the one the radio is
+        # receiving on, and transmitting on unless split is set. They mean the
+        # same on every radio, so a client that does not care about a second VFO
+        # can stop reading here.
+        vfo:
+          allOf: [{ $ref: "#/components/schemas/VFO" }]
+          description: |
+            Which VFO the fields above describe. Not always switchable: on a
+            classic single-receiver radio it follows the operator's A/B switch,
+            while an IC-7610 has no such switch — its VFO A is always what it
+            receives and transmits on, so this reads `A` permanently there and
+            remoses offers no VFO-select operation for it.
+        vfo_a: { $ref: "#/components/schemas/VFOState" }
+        vfo_b: { $ref: "#/components/schemas/VFOState" }
+        split:
+          type: boolean
+          description: |
+            Transmit happens on the *other* VFO. The one flag here that changes
+            where RF comes out, so a client showing a transmit frequency should
+            read it rather than assuming the operating VFO.
+        dual_watch:
+          type: boolean
+          description: Receiving on both VFOs at once.
+        sub_s_meter:
+          allOf: [{ $ref: "#/components/schemas/Meter" }]
+          description: |
+            The second receiver's signal level. Meaningful only while
+            `dual_watch` is true: with it off that receiver is not running and
+            remoses stops polling it rather than leaving a stale reading that
+            would look live.
+
         connected: { type: boolean }
         seq: { type: integer, format: int64 }
         updated_at: { type: string, format: date-time }
@@ -538,8 +590,18 @@ components:
 
     StatePatch:
       description: |
-        Every field is optional. Applied in rig-safe order, mode before
-        frequency. Supplying both power_w and power_pct is a 422.
+        Every field is optional. Applied in rig-safe order: mode before
+        frequency, then split and dual watch, then PTT last — so a request that
+        sets up the other VFO and enables split cannot key before the transmit
+        frequency is where it was asked to be. Supplying both power_w and
+        power_pct is a 422.
+
+        `vfo` selects what `frequency`, `mode`, `data_mode` and `filter_slot`
+        address. Omit it to act on whichever VFO the radio is operating, which
+        is the only thing most radios can do; name `A` or `B` only where
+        `caps.vfos` lists them. On a radio with `caps.per_vfo_mode` a naming
+        request sets mode, data mode and filter in a single command, so those
+        cannot disturb one another.
       type: object
       properties:
         frequency: { type: integer, format: int64 }
@@ -551,6 +613,12 @@ components:
         power_w: { type: number }
         power_pct: { type: number, minimum: 0, maximum: 100 }
         ptt: { type: boolean }
+        split:
+          type: boolean
+          description: Needs `caps.split`; 422 otherwise.
+        dual_watch:
+          type: boolean
+          description: Needs `caps.dual_watch`; 422 otherwise.
 
     Caps:
       type: object
@@ -568,7 +636,25 @@ components:
         filter_width: { type: boolean }
         filter_slots: { type: integer }
         s_meter_scale: { type: integer }
-        sub_receiver: { type: boolean }
+        sub_receiver:
+          type: boolean
+          description: |
+            Both VFOs can be received *at the same time*, which is what makes
+            `state.sub_s_meter` a live reading. Not merely "the radio has two
+            VFOs" — nearly all of them do.
+        split:
+          type: boolean
+          description: Transmit-on-the-other-VFO can be read and set.
+        dual_watch:
+          type: boolean
+          description: Receiving on both VFOs at once can be switched.
+        per_vfo_mode:
+          type: boolean
+          description: |
+            Each VFO carries its own mode, data-mode flag and filter rather than
+            only its own frequency. Where this is false, treat mode and filter
+            as properties of the radio and read only `frequency` from
+            `state.vfo_a` / `state.vfo_b`.
         cw_method:
           type: string
           enum: [none, cat, serial_key]
