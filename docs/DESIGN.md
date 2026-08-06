@@ -645,6 +645,31 @@ that remoses wrote but never read, so `State` kept reporting the zero value for 
 Both were invisible to a manual reading, because a manual documents the command and not whether
 anything asks for it. That is the argument for doing this on hardware at all.
 
+**A second session found two more, and they are the sharper kind: a command that succeeds and
+changes something nobody asked it to.** Neither `06` nor `1A 06` is a filter selector. `06` sets
+the *mode* and takes a filter byte with it; `1A 06` sets *data mode* and takes a filter byte with
+it. Using either one to move a filter therefore has a side effect, and remoses was paying both:
+
+- **`SetFilterSlot` cleared the data flag.** It sent `06 <mode> <slot>`, and `06` resets `1A 06`
+  — so choosing a filter dropped the operator out of USB-D. The earlier code considered `1A 06`
+  and rejected it, correctly, as invalid in CW; what went unnoticed is that the alternative is
+  not side-effect-free either. It now picks by what the rig is doing: `1A 06` in a data mode,
+  `06` otherwise, which covers every case without a command that means something else.
+- **`SetMode` moved the filter.** It sent `06 <mode>` with no filter byte, and the rig answers
+  that by reverting to the mode's *default* filter. Because data mode is orthogonal at the API
+  layer, a request changing only the data flag arrives as `SetMode(the mode the rig is in, flag)`
+  — so touching data mode moved the filter. It now reads the mode first and sends nothing when it
+  already matches. On a genuine mode change the filter is still left to the rig, which is the
+  right default for a new mode.
+
+Together they made **USB-DATA on FIL1 unreachable**: filter-then-data landed on FIL2 with data
+on, and both-in-one-patch landed on FIL1 with data off. Confirmed fixed on the radio, in both
+orders.
+
+The general lesson is worth keeping: on CI-V several settings share a command, so *writing* one
+of them rewrites its neighbours. Any new setter here should ask what else its command carries
+before assuming it is narrow.
+
 ### 5.5 Kenwood models
 
 The Kenwood family splits in two, and the split is deeper than Icom's. The TS-480 and TS-590

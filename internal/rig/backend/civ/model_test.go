@@ -20,8 +20,21 @@ import (
 // earlier frames and any command that should not have been sent at all.
 type captureConn struct{ sent [][]byte }
 
+// Do records the request and answers it plausibly enough for the setters to get
+// past their read-first steps.
+//
+// A read of 04 or 1A 06 resolves with an EMPTY patch, which is deliberate:
+// "the rig did not say" makes every caller take its change-something branch, so
+// a test that means to assert what a mode change sends is not quietly turned
+// into a test of the no-op path.
 func (c *captureConn) Do(_ context.Context, req []byte, _ ...backend.Key) (backend.Update, error) {
 	c.sent = append(c.sent, bytes.Clone(req))
+	switch {
+	case len(req) == 6 && req[4] == cmdReadMode:
+		return backend.Update{Key: KeyMode, OK: true}, nil
+	case len(req) == 7 && req[4] == cmdMisc && req[5] == subDataMode:
+		return backend.Update{Key: KeyDataMode, OK: true}, nil
+	}
 	return backend.Update{Key: KeyAck, OK: true}, nil
 }
 
@@ -401,13 +414,13 @@ func TestIC910HModeCodes(t *testing.T) {
 		if err := r.SetMode(t.Context(), c, radio.ModeFM, false); err != nil {
 			t.Fatalf("SetMode(FM): %v", err)
 		}
-		// Exactly one frame: command 06. In particular NOT 1A 06, which is RIT
-		// on this radio — sending "data mode off" here would switch RIT off as
-		// a side effect of changing mode.
-		if got := c.commands(); len(got) != 1 || got[0] != "06" {
-			t.Fatalf("SetMode(FM) sent %v, want just [06]", got)
+		// A read of the current mode, then command 06. In particular NOT 1A 06,
+		// which is RIT on this radio — sending "data mode off" here would
+		// switch RIT off as a side effect of changing mode.
+		if got := c.commands(); len(got) != 2 || got[0] != "04" || got[1] != "06" {
+			t.Fatalf("SetMode(FM) sent %v, want [04 06]", got)
 		}
-		f := c.sent[0]
+		f := c.sent[1]
 		if len(f) < 6 || f[5] != 0x04 {
 			t.Errorf("SetMode(FM) sent % X, want mode byte 04", f)
 		}

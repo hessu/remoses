@@ -362,31 +362,35 @@ func TestSetMode(t *testing.T) {
 		wantConv []string
 	}{
 		{
-			name: "cw leaves the data setting alone", mode: radio.ModeCW, data: false,
+			// The sim is already in CW, so no mode goes out at all. Command 06
+			// carries no filter byte, and the rig answers one by reverting to
+			// the mode's default filter — so re-sending the mode the rig is in
+			// would move the operator's filter for nothing.
+			name: "cw is already set, so nothing is sent", mode: radio.ModeCW, data: false,
 			wantMode: 0x03, wantData: [2]byte{0x00, 0x00},
-			wantConv: []string{"06"},
+			wantConv: []string{"04"},
 		},
 		{
 			name: "ssb clears the data setting", mode: radio.ModeUSB, data: false,
 			wantMode: 0x01, wantData: [2]byte{0x00, 0x00},
-			wantConv: []string{"06", "1A/06"},
+			wantConv: []string{"04", "06", "1A/06"},
 		},
 		{
-			// Turning data on needs a filter byte, so the mode is read back to
-			// find the filter the mode change selected.
+			// Turning data on needs a filter byte, so after a real mode change
+			// the mode is read again to find the filter the rig just selected.
 			name: "ssb data reads the filter back", mode: radio.ModeUSB, data: true,
 			wantMode: 0x01, wantData: [2]byte{0x01, 0x01},
-			wantConv: []string{"06", "04", "1A/06"},
+			wantConv: []string{"04", "06", "04", "1A/06"},
 		},
 		{
 			name: "rtty maps to fsk", mode: radio.ModeFSK, data: false,
 			wantMode: 0x04, wantData: [2]byte{0x00, 0x00},
-			wantConv: []string{"06"},
+			wantConv: []string{"04", "06"},
 		},
 		{
 			name: "psk is a literal 0x12", mode: radio.ModePSK, data: false,
 			wantMode: 0x12, wantData: [2]byte{0x00, 0x00},
-			wantConv: []string{"06"},
+			wantConv: []string{"04", "06"},
 		},
 	}
 	for _, tc := range tests {
@@ -641,6 +645,115 @@ func TestSlowPollSkipsWhatAModelLacks(t *testing.T) {
 			// Power only: neither radio has 1A 03, and neither has a data mode
 			// on 1A 06.
 			s.wantConversation(t, "14/0A")
+		})
+	}
+}
+
+// TestDataModeOnlyChangeKeepsTheFilter is the first of the two bugs an IC-7610
+// found, and it is the reason SetMode reads before it writes.
+//
+// Data mode is orthogonal at the API layer, so a request that changes only the
+// flag arrives here as SetMode(the mode the rig is already in, flag). Command
+// 06 carries no filter byte and the rig answers one by reverting to that mode's
+// default, so the old unconditional 06 moved the operator's filter as a side
+// effect of touching data mode. On the radio, a data-mode-only PATCH on
+// USB/FIL1 came back on FIL2.
+func TestDataModeOnlyChangeKeepsTheFilter(t *testing.T) {
+	s := newSim(t)
+	s.mode = 0x01   // USB
+	s.filter = 0x01 // FIL1
+
+	if err := s.backend.SetMode(context.Background(), s, radio.ModeUSB, true); err != nil {
+		t.Fatalf("SetMode: %v", err)
+	}
+	// No 06 anywhere: the mode did not change, so nothing may be sent that
+	// could disturb the filter.
+	s.wantConversation(t, "04", "1A/06")
+	if s.filter != 0x01 {
+		t.Errorf("filter moved to %#02X; turning data mode on must not touch it", s.filter)
+	}
+	if s.data != [2]byte{0x01, 0x01} {
+		t.Errorf("data setting = % X, want 01 01 (on, FIL1)", s.data)
+	}
+}
+
+// TestSetFilterSlotKeepsDataMode is the second bug, and the worse one: choosing
+// a filter quietly dropped the operator out of USB-D.
+//
+// Command 06 sets the mode and resets the 1A 06 data flag with it, so in a data
+// mode the filter has to be moved with 1A 06 instead — which carries a filter
+// byte of its own and leaves the mode alone.
+func TestSetFilterSlotKeepsDataMode(t *testing.T) {
+	s := newSim(t)
+	s.mode = 0x01                // USB
+	s.filter = 0x01              // FIL1
+	s.data = [2]byte{0x01, 0x01} // data mode on, FIL1
+
+	if err := s.backend.SetFilterSlot(context.Background(), s, 3); err != nil {
+		t.Fatalf("SetFilterSlot: %v", err)
+	}
+	// Read the mode, read the data setting, then move the filter with 1A 06.
+	// A 06 here would have cleared the data flag.
+	s.wantConversation(t, "04", "1A/06", "1A/06")
+	if s.data != [2]byte{0x01, 0x03} {
+		t.Errorf("data setting = % X, want 01 03 (still on, now FIL3)", s.data)
+	}
+}
+
+// TestSetFilterSlotOutsideDataModeUsesCommand06 is the other half of the rule.
+// 1A 06 is not valid in CW, and on an IC-910H it is RIT, so the mode has to be
+// re-sent with the filter there — which changes nothing, being the mode the rig
+// is already in.
+func TestSetFilterSlotOutsideDataModeUsesCommand06(t *testing.T) {
+	s := newSim(t) // CW, and CW carries no data setting
+	if err := s.backend.SetFilterSlot(context.Background(), s, 3); err != nil {
+		t.Fatalf("SetFilterSlot: %v", err)
+	}
+	// No 1A 06 read at all: in CW there is no data setting to preserve.
+	s.wantConversation(t, "04", "06")
+	if s.filter != 0x03 {
+		t.Errorf("filter = %#02X, want 03", s.filter)
+	}
+	if s.mode != 0x03 {
+		t.Errorf("mode = %#02X, want it left at CW", s.mode)
+	}
+}
+
+// TestUSBDataOnFIL1IsReachable is the bug the other two added up to. Neither
+// order of operations could express it on the radio: filter-then-data landed on
+// FIL2 with data on, and both-in-one-patch landed on FIL1 with data off.
+func TestUSBDataOnFIL1IsReachable(t *testing.T) {
+	for _, order := range []string{"filter first", "data first"} {
+		t.Run(order, func(t *testing.T) {
+			s := newSim(t)
+			s.mode = 0x01 // USB
+			ctx := context.Background()
+
+			if order == "filter first" {
+				if err := s.backend.SetFilterSlot(ctx, s, 1); err != nil {
+					t.Fatalf("SetFilterSlot: %v", err)
+				}
+				if err := s.backend.SetMode(ctx, s, radio.ModeUSB, true); err != nil {
+					t.Fatalf("SetMode: %v", err)
+				}
+			} else {
+				if err := s.backend.SetMode(ctx, s, radio.ModeUSB, true); err != nil {
+					t.Fatalf("SetMode: %v", err)
+				}
+				if err := s.backend.SetFilterSlot(ctx, s, 1); err != nil {
+					t.Fatalf("SetFilterSlot: %v", err)
+				}
+			}
+
+			if s.mode != 0x01 {
+				t.Errorf("mode = %#02X, want USB", s.mode)
+			}
+			if s.data[0] != 0x01 {
+				t.Errorf("data mode is off; USB-D on FIL1 is not expressible")
+			}
+			if s.data[1] != 0x01 {
+				t.Errorf("data filter = %#02X, want FIL1", s.data[1])
+			}
 		})
 	}
 }

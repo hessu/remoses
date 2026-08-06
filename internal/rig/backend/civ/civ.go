@@ -366,8 +366,26 @@ func (r *Rig) SetMode(ctx context.Context, c backend.Conn, m radio.Mode, dataMod
 	if dataMode && !supportsDataMode(m) {
 		return fmt.Errorf("civ: data mode is not available in %s", m)
 	}
-	if err := r.set(ctx, c, "mode", r.frame(cmdSetMode, mb)); err != nil {
+	// Read the mode before writing one, because re-sending the mode the rig is
+	// already in is not free. Command 06 with no filter byte makes the radio
+	// fall back to that mode's *default* filter, so a request that changes only
+	// the data flag — which the API turns into SetMode(current mode, flag),
+	// since data mode is orthogonal at that layer — would silently move the
+	// operator's filter selection. Confirmed on an IC-7610: a data-mode-only
+	// PATCH on USB/FIL1 came back on FIL2.
+	//
+	// On a genuine mode change the filter is deliberately left to the rig. Its
+	// default for the new mode is very likely what the operator wants, and
+	// forcing the old slot could select a passband that mode has no use for.
+	cur, err := r.read(ctx, c, KeyMode, r.frame(cmdReadMode))
+	if err != nil {
 		return err
+	}
+	changed := cur.Patch.Mode == nil || *cur.Patch.Mode != m
+	if changed {
+		if err := r.set(ctx, c, "mode", r.frame(cmdSetMode, mb)); err != nil {
+			return err
+		}
 	}
 	if !r.model.DataMode {
 		// Sub-command 06 of 1A is not data mode everywhere: on the IC-910H it
@@ -389,15 +407,24 @@ func (r *Rig) SetMode(ctx context.Context, c backend.Conn, m radio.Mode, dataMod
 		return r.set(ctx, c, "data mode off", r.frame(cmdMisc, subDataMode, 0x00, 0x00))
 	}
 	// Turning data on does need a filter byte, and 1A 06 offers no "leave it
-	// alone" encoding. Read back the filter the mode change just selected so
-	// that enabling data does not also move the filter.
-	u, err := r.read(ctx, c, KeyMode, r.frame(cmdReadMode))
-	if err != nil {
-		return err
+	// alone" encoding, so the current filter has to be carried into it or
+	// enabling data would move the filter.
+	//
+	// Which read that comes from depends on whether a mode went out: after a
+	// real mode change the rig has picked the new mode's default and has to be
+	// asked again, but when nothing was sent the read above is still current
+	// and asking twice would only widen the window for the operator to turn the
+	// filter knob between them.
+	state := cur
+	if changed {
+		state, err = r.read(ctx, c, KeyMode, r.frame(cmdReadMode))
+		if err != nil {
+			return err
+		}
 	}
 	slot := 1
-	if u.Patch.FilterSlot != nil {
-		slot = *u.Patch.FilterSlot
+	if state.Patch.FilterSlot != nil {
+		slot = *state.Patch.FilterSlot
 	}
 	// DATA1 is used for "data mode on": DATA2 and DATA3 differ only in which
 	// modulation input they select, which is a station wiring choice remoses
@@ -464,11 +491,24 @@ func (r *Rig) SetFilterWidth(ctx context.Context, c backend.Conn, hz int) error 
 	return r.set(ctx, c, "filter width", r.frame(cmdMisc, subFilterWidth, bcdByte(int(idx))))
 }
 
-// SetFilterSlot selects FIL1..FIL3 (command 06 with an explicit filter byte).
+// SetFilterSlot selects FIL1..FIL3, by whichever of the two commands can do it
+// without changing something else.
 //
-// The mode has to be re-sent with the filter, so the current one is read first.
-// Command 1A 06 can also carry a filter byte, but it carries the data-mode
-// setting with it and is not valid in CW, which is this daemon's main use.
+// Neither command is a filter selector. Command 06 sets the *mode* and takes a
+// filter byte with it; command 1A 06 sets *data mode* and takes a filter byte
+// with it. Which one is safe therefore depends on what the rig is doing:
+//
+//   - In a data mode, 06 is wrong. Sending it resets the 1A 06 data flag, so
+//     picking a filter would quietly drop the operator out of USB-D. Confirmed
+//     on an IC-7610. 1A 06 with the data byte still 01 moves the filter and
+//     leaves the mode alone.
+//   - Otherwise 1A 06 is wrong, or unavailable: it is not valid in CW, RTTY or
+//     PSK, and on an IC-910H sub-command 06 is RIT rather than data mode. So
+//     the mode is read and re-sent with the filter, which changes nothing
+//     because it is the mode the rig is already in.
+//
+// Between them every case is covered without a command that means something
+// else, which is what the earlier single-command version could not manage.
 func (r *Rig) SetFilterSlot(ctx context.Context, c backend.Conn, slot int) error {
 	if n := r.model.FilterSlots; n == 0 {
 		return fmt.Errorf("civ: %s has no IF filter selection", r.model.Label)
@@ -482,9 +522,23 @@ func (r *Rig) SetFilterSlot(ctx context.Context, c backend.Conn, slot int) error
 	if u.Patch.Mode == nil {
 		return fmt.Errorf("civ: cannot set filter slot: the rig reported an unrecognised mode")
 	}
-	mb, ok := r.model.modeByte(*u.Patch.Mode)
+	mode := *u.Patch.Mode
+	mb, ok := r.model.modeByte(mode)
 	if !ok {
-		return fmt.Errorf("civ: cannot set filter slot: mode %s is not supported", *u.Patch.Mode)
+		return fmt.Errorf("civ: cannot set filter slot: mode %s is not supported", mode)
+	}
+
+	// Only ask about data mode where the question means anything. On a radio
+	// without one the command is absent or is something else entirely, and in
+	// CW, RTTY and PSK it carries no data setting to preserve.
+	if r.model.DataMode && supportsDataMode(mode) {
+		d, err := r.read(ctx, c, KeyDataMode, r.frame(cmdMisc, subDataMode))
+		if err != nil {
+			return err
+		}
+		if d.Patch.DataMode != nil && *d.Patch.DataMode {
+			return r.set(ctx, c, "filter slot", r.frame(cmdMisc, subDataMode, 0x01, byte(slot)))
+		}
 	}
 	return r.set(ctx, c, "filter slot", r.frame(cmdSetMode, mb, byte(slot)))
 }
