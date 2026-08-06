@@ -1560,11 +1560,16 @@ The CAT sender deliberately declines to override the wpm range. There the rig's 
 its range is per model, and the backend already knows it; only the local keyer, which really
 does generate the elements, replaces it.
 
-**Confirmed on hardware.** An IC-7610 with `USB KEYING (CW)` set to DTR, keyed from its second
-USB port with full break-in and no `ptt_line`: 21 characters at 20 wpm estimated 11220 ms and
-took 11428 ms, with the rig's QSK raising PTT off the key line and `1C 00` reporting it. Note
-that opening a port wired this way produces a brief key-down click, for the reason §6 gives —
-which is a real if harmless transmission every time the daemon starts.
+**Confirmed on hardware, on both lines.** An IC-7610 with `USB KEYING (CW)` keyed from its
+second USB port, full break-in and no `ptt_line`, sending 21 characters at 20 wpm against an
+11220 ms estimate: **DTR took 11428 ms and RTS 11304 ms**, the rig's QSK raising PTT off the key
+line either way and `1C 00` reporting it. `key_line` is therefore symmetric in practice, not
+merely in the code.
+
+Two things that look like faults and are not. PTT reads true for a moment *after* the queue
+drains — that is the rig's own CW delay hanging on, not a control line left asserted; it clears
+by itself. And opening a port wired this way produces a brief key-down click, for the reason §6
+gives: a real if harmless transmission every time the daemon starts.
 
 **Timing.** A dedicated keyer goroutine with `runtime.LockOSThread()`:
 
