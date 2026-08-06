@@ -781,9 +781,13 @@ once. It decodes as transmitting, like `1` and `2`.
 
 **Assumptions worth revisiting on hardware:**
 
-- **The FT-891's manual does not say which of `1` and `2` is LSB.** It labels both "SSB" and
-  defers to a BFO menu item. remoses reads `1` as LSB by consistency with every other model and
-  with the pairing structure (`3`/`7` CW, `6`/`9` RTTY, `8`/`C` DATA), but it is an inference.
+- ~~**The FT-891's manual does not say which of `1` and `2` is LSB.**~~ **Resolved.** Its manual
+  labels both "SSB" and defers to a BFO menu item, so remoses read `1` as LSB by consistency
+  with every other model and with the pairing structure (`3`/`7` CW, `6`/`9` RTTY, `8`/`C`
+  DATA). `1` is LSB on the FT-891, and the mappings are consistent across the family — this is
+  settled for the whole table, not just for this one byte.
+
+  The exception is `E`, which is C4FM on the FT-991A and PSK on the other radios.
 - **DATA is grouped with CW/RTTY/PSK in the `SH` table.** The FT-710 and FTX-1 tables say so
   outright; the FT-991A, FT-891 and the FT-950 generation name no DATA column at all. The
   FTdx5000 is the one that comes closest to confirming it: its table has separate RTTY and PSK
