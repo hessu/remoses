@@ -2,6 +2,52 @@ package radio
 
 import "testing"
 
+// TestModeTextRoundTrip is the check that was missing when a client could not
+// read a radio that had just connected.
+//
+// Mode.String emits UNKNOWN for a rig that has not reported one yet, and
+// ParseMode refused it — so the type could not decode its own output, and
+// remoses-cli failed with `unknown mode "UNKNOWN"` against a freshly connected
+// IC-9700. Every value has to survive the round trip, whatever the API then
+// decides to accept as input.
+func TestModeTextRoundTrip(t *testing.T) {
+	for m := ModeUnknown; m <= ModeDIG; m++ {
+		name := m.String()
+		if name == "" || name[0] == 'M' && len(name) > 5 && name[:5] == "Mode(" {
+			t.Errorf("mode %d has no name; add it to modeNames", uint8(m))
+			continue
+		}
+		got, err := ParseMode(name)
+		if err != nil {
+			t.Errorf("ParseMode(%q) — the string Mode(%d) marshals to — failed: %v",
+				name, uint8(m), err)
+			continue
+		}
+		if got != m {
+			t.Errorf("%q round-tripped to %v, want %v", name, got, m)
+		}
+	}
+}
+
+// TestModeUnmarshalRoundTrip covers the same ground through the JSON path a
+// client actually uses.
+func TestModeUnmarshalRoundTrip(t *testing.T) {
+	for m := ModeUnknown; m <= ModeDIG; m++ {
+		b, err := m.MarshalText()
+		if err != nil {
+			t.Fatalf("MarshalText(%v): %v", m, err)
+		}
+		var got Mode
+		if err := got.UnmarshalText(b); err != nil {
+			t.Errorf("UnmarshalText(%q): %v", b, err)
+			continue
+		}
+		if got != m {
+			t.Errorf("%q unmarshalled to %v, want %v", b, got, m)
+		}
+	}
+}
+
 // TestTXVFO pins the rule that decides where RF comes out. Getting it wrong
 // tells an operator they are transmitting on a frequency they are not, which is
 // the worst kind of wrong answer this project can give.

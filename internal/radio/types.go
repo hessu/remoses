@@ -101,8 +101,20 @@ func (m Mode) String() string {
 
 // ParseMode accepts the canonical API spelling, case-insensitively, and
 // tolerates the common "CWR"/"RTTY" aliases.
+//
+// UNKNOWN parses, and must: String emits it for a radio that has not reported a
+// mode yet, so refusing it here made Mode a type that could not decode its own
+// output — which broke every client reading the state of a rig that had just
+// connected, remoses-cli included.
+//
+// That it parses does not make it settable. The API rejects it on the way in
+// because caps.modes never lists it, and every backend refuses it explicitly
+// besides; those are the checks that enforce "never accepted as input", and
+// they belong there rather than in a text decoder.
 func ParseMode(s string) (Mode, error) {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "UNKNOWN":
+		return ModeUnknown, nil
 	case "LSB":
 		return ModeLSB, nil
 	case "USB":
