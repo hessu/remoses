@@ -187,18 +187,36 @@ type Kenwood struct {
 	BulkPoll bool `yaml:"bulk_poll"`
 }
 
-// Yaesu configures the Yaesu ASCII CAT backend.
+// Yaesu configures a Yaesu radio.
 type Yaesu struct {
 	// Model names the radio, and it matters more here than on any other
-	// backend: the mode-code tables are per model rather than per family. The
-	// code E is PSK on an FT-710 and C4FM on an FT-991A, so the wrong name
-	// reports the wrong mode instead of failing. The FTX-1 also has a wider IF
-	// answer and a power command with a head selector.
+	// backend, in two separate ways.
+	//
+	// The first is that it chooses the *protocol*. Yaesu has shipped two that
+	// have nothing in common but the manufacturer, and the model name is what
+	// tells them apart: the FT-857, FT-857D, FT-897 and FT-897D speak a binary
+	// dialect of fixed five-byte blocks with the opcode last, packed-BCD
+	// frequencies, no terminator and no framing at all, while every other radio
+	// in the list speaks the ASCII one. remoses dispatches on the name, so
+	// `backend: yaesu` is right for both and an operator never has to know
+	// which generation their radio belongs to. It is why the model matters even
+	// more than the backend here — and why an FT-857 left unnamed will not
+	// work, since an unnamed Yaesu falls back to the modern dialect.
+	//
+	// The second is that within the ASCII family the mode-code tables are per
+	// model rather than per family. The code E is PSK on an FT-710 and C4FM on
+	// an FT-991A, so the wrong name reports the wrong mode instead of failing.
+	// The FTX-1 also has a wider IF answer and a power command with a head
+	// selector.
 	Model string `yaml:"model"`
 	// AutoInformation enables AI1, the rig's push updates. Yaesu has no AI2:
 	// the parameter is 0 or 1 only. Like Kenwood's AI2 it reverts to off when
 	// the rig is switched off, so it does not permanently alter the operator's
 	// settings. On the FTdx10 it works only over the USB CAT port.
+	//
+	// Ignored on the FT-857/FT-897 generation, which has no push updates of any
+	// kind: nothing in that command set is unsolicited, so those radios are
+	// poll-only whatever this says.
 	AutoInformation bool `yaml:"auto_information"`
 }
 

@@ -48,15 +48,25 @@ var KenwoodModels = []string{
 
 // YaesuModels are the accepted values of yaesu.model.
 //
-// Duplicated from the yaesu backend's own registry rather than imported, for
+// It is one list for two protocols, because `backend: yaesu` is one
+// configuration value for two protocols: the last four names below are the
+// binary five-byte generation and the rest are the ASCII one, and remoses
+// dispatches on the name so an operator never has to know which is which. See
+// Yaesu.Model.
+//
+// Duplicated from the two backends' own registries rather than imported, for
 // the same reason as CIVModels: config sits below rig/backend in the dependency
-// graph and asking the registry would be a cycle. The backend has a test that
-// fails if the two ever drift, which is the direction that can import both.
+// graph and asking a registry would be a cycle. There is a test that fails if
+// this list and the union of the two registries ever drift, which is the
+// direction that can import both.
 var YaesuModels = []string{
 	"generic",
 	"ft-710", "ft-891", "ft-950", "ft-991a",
 	"ftdx10", "ftdx101d", "ftdx101mp", "ftdx1200", "ftdx3000", "ftdx5000", "ftdx9000",
 	"ftx-1",
+
+	// The five-byte binary generation.
+	"ft-857", "ft-857d", "ft-897", "ft-897d",
 }
 
 // kenwoodModelKey folds a configured model name into a KenwoodModels entry. It

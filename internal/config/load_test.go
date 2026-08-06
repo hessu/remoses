@@ -135,10 +135,22 @@ func TestLoadExampleConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the shipped example must load and validate: %v", err)
 	}
-	for _, id := range []string{"ic7610", "ts590sg"} {
+	for _, id := range []string{"ic7610", "ts590sg", "ft710", "ft857"} {
 		if c.Radio(id) == nil {
 			t.Errorf("example is missing radio %q", id)
 		}
+	}
+	// The two Yaesu entries share a backend name and differ only in the model,
+	// which is the whole point of the dispatch — and the example is where an
+	// operator sees that for the first time.
+	for _, id := range []string{"ft710", "ft857"} {
+		if got := c.Radio(id).Backend; got != BackendYaesu {
+			t.Errorf("example radio %q has backend %q, want %q", id, got, BackendYaesu)
+		}
+	}
+	if got := c.Radio("ft857").Yaesu.Model; got != "ft-857d" {
+		t.Errorf("example radio ft857 names model %q; without a model it would be built as a "+
+			"modern Yaesu, which that radio cannot speak", got)
 	}
 	if len(c.Auth.Users) != 2 {
 		t.Errorf("example has %d users, want 2", len(c.Auth.Users))

@@ -35,6 +35,12 @@ type conn struct {
 	// frame in the reader goroutine, which is in the CW timing path.
 	wire bool
 
+	// framer is the backend, when its inbound framing depends on which command
+	// is in flight. Nil for the three protocols that delimit their own frames.
+	// Resolved once here rather than asserted per write. See
+	// backend.ReplyFramer.
+	framer backend.ReplyFramer
+
 	timeout time.Duration
 
 	// cmdMu serialises transactions. A backend may assume its own request and
@@ -67,7 +73,7 @@ func (w *waiter) wants(k backend.Key) bool {
 }
 
 func newConn(s *Session, t transport.Transport) *conn {
-	return &conn{
+	c := &conn{
 		s:       s,
 		t:       t,
 		log:     s.log,
@@ -75,6 +81,8 @@ func newConn(s *Session, t transport.Transport) *conn {
 		timeout: s.cmdTimeout,
 		done:    make(chan struct{}),
 	}
+	c.framer, _ = s.rig.(backend.ReplyFramer)
+	return c
 }
 
 // start launches the reader goroutine. Exactly one goroutine ever reads the
@@ -310,6 +318,15 @@ func (c *conn) writeLocked(req []byte) error {
 			return err
 		}
 		return transport.ErrDisconnected
+	}
+
+	// Told before the write, never after: on a protocol whose answers are not
+	// self-delimiting the reply can be back before this goroutine is scheduled
+	// again, and a reader that has not yet been told how long it will be would
+	// frame it wrongly. Under cmdMu, so the backend sees commands in the order
+	// the radio does. See backend.ReplyFramer.
+	if c.framer != nil {
+		c.framer.Expect(req)
 	}
 
 	if _, err := c.t.Write(req); err != nil {

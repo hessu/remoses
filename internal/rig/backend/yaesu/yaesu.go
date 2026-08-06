@@ -98,14 +98,37 @@ import (
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/radio"
 	"github.com/hessu/remoses/internal/rig/backend"
+	"github.com/hessu/remoses/internal/rig/backend/yaesubin"
 )
 
 // Name is the backend's registered name, matching `backend: yaesu` in the
 // configuration file.
 const Name = "yaesu"
 
+// init registers `backend: yaesu` for BOTH Yaesu protocols, choosing between
+// them on the model name.
+//
+// Yaesu has shipped two CAT systems with nothing in common but the
+// manufacturer, and the FT-857/FT-897 generation's — binary, five fixed bytes,
+// opcode last, packed BCD, no terminator — is the yaesubin package. Which one a
+// radio speaks is a fact about the radio, so making the operator encode it in a
+// second backend name would be asking them to know something remoses already
+// knows: `yaesu.model: ft-857d` says everything, and naming the wrong backend
+// for the right radio would be a configuration error remoses could have
+// prevented.
+//
+// The dependency runs this way — the ASCII package importing the binary one —
+// because this package owns the registered name. It is one call and no shared
+// state; nothing in yaesubin refers back.
 func init() {
 	backend.Register(Name, func(r *config.Radio) (backend.Rig, error) {
+		model := ""
+		if r != nil && r.Yaesu != nil {
+			model = r.Yaesu.Model
+		}
+		if yaesubin.Handles(model) {
+			return yaesubin.New(r)
+		}
 		return New(r)
 	})
 }

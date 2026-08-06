@@ -37,6 +37,7 @@ import (
 	// Backends register themselves.
 	_ "github.com/hessu/remoses/internal/rig/backend/civ"
 	_ "github.com/hessu/remoses/internal/rig/backend/kenwood"
+	// yaesu registers the binary FT-857/FT-897 backend alongside its own.
 	_ "github.com/hessu/remoses/internal/rig/backend/yaesu"
 )
 

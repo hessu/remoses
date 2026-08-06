@@ -173,15 +173,22 @@ radios:
       baud: 38400 # the FT-710 and FTX-1 default to 38400 on CAT-1 and CAT-3
     yaesu:
       # ft-891 | ft-950 | ft-991a | ft-710 | ftdx10 | ftdx101d | ftdx101mp |
-      # ftdx1200 | ftdx3000 | ftdx5000 | ftdx9000 | ftx-1 | generic.
+      # ftdx1200 | ftdx3000 | ftdx5000 | ftdx9000 | ftx-1 | generic,
+      # and ft-857 | ft-857d | ft-897 | ft-897d — see the FT-857D below.
       #
-      # This one matters more than on any other backend, for two reasons. The
-      # mode-code tables are per radio, not per family: code E is PSK here,
+      # This one matters more than on any other backend, for three reasons.
+      #
+      # It picks the protocol: the last four names are a completely different
+      # CAT system, and remoses works that out from the model so that one
+      # backend name covers every Yaesu.
+      #
+      # The mode-code tables are per radio, not per family: code E is PSK here,
       # C4FM on an FT-991A and nothing at all on an FT-950, so the wrong name
-      # reports the wrong mode rather than failing. And the FT-950, FTdx1200,
-      # FTdx3000, FTdx5000 and FTdx9000 are an eight-digit-frequency
-      # generation, where the newer seven take nine — so naming one as the
-      # other puts a malformed frequency on the wire.
+      # reports the wrong mode rather than failing.
+      #
+      # And the FT-950, FTdx1200, FTdx3000, FTdx5000 and FTdx9000 are an
+      # eight-digit-frequency generation, where the newer seven take nine — so
+      # naming one as the other puts a malformed frequency on the wire.
       model: ft-710
       # AI1 pushes state changes and reverts to off at rig power-down, so it
       # does not permanently alter the operator's menu settings. Yaesu has no
@@ -213,6 +220,69 @@ radios:
       # FTdx101MP). Not on the FTdx5000 and FTdx9000, whose PC is an
       # uncalibrated 000..255 index: use max_power_pct on those two.
       max_power_w: 80
+      tx_timeout: 120s
+
+  # The FT-857/FT-897 generation. Same `backend: yaesu`, and that is the point —
+  # the model name is what tells remoses these four radios speak a protocol
+  # sharing nothing with the one above but the manufacturer: five fixed binary
+  # bytes with the opcode last, packed-BCD frequencies, seventeen commands in
+  # total, and no terminator or framing of any kind.
+  #
+  # Naming the model is REQUIRED here. An unnamed Yaesu still means the modern
+  # ASCII dialect, which these radios do not speak at all.
+  - id: ft857
+    name: "Yaesu FT-857D"
+    backend: yaesu
+    port:
+      device: /dev/ttyUSB0
+      # Two settings this generation needs that no other radio here does.
+      #
+      # 4800 is the factory default (menu 019 CAT RATE, which also offers 9600
+      # and 38400) — remoses defaults to 115200, which these radios do not have.
+      # Raising it in the menu is worth doing: at 4800 the fast poll's three
+      # commands take a noticeable slice of a 500 ms tick.
+      baud: 4800
+      # The manuals specify one start bit, eight data bits, no parity and TWO
+      # stop bits. remoses defaults to one.
+      stop_bits: "2"
+      # Menu 020 CAT/LIN/TUN must also be set to CAT, or the rear-panel jack is
+      # driving a linear amplifier rather than talking to a computer.
+    yaesu:
+      # ft-857 | ft-857d | ft-897 | ft-897d. All four are one command set, one
+      # mode table and one tuning range, so this is the label remoses reports
+      # rather than a choice between dialects — but there is no ID command in
+      # this generation, so it is the only thing that will ever know which radio
+      # is on the desk.
+      model: ft-857d
+      # Ignored here. This generation has no auto-information, no transceive and
+      # nothing unsolicited at all, so these radios are poll-only whatever it
+      # says: a front-panel knob movement shows up at the next poll rather than
+      # immediately.
+      auto_information: false
+    poll:
+      interval: 500ms
+      # There is nothing for the slow tier to read. Power, filter width and
+      # filter slot are what it carries on every other radio, and this CAT set
+      # has no command for any of the three.
+      slow_interval: 5s
+    cw:
+      enabled: true
+      # Not a preference: there is no keyer-buffer command anywhere in this
+      # protocol, so remoses generates the Morse itself and keys a control line.
+      method: serial_key
+      default_wpm: 25
+      serial_key:
+        device: /dev/ttyUSB1 # a separate port from CAT is strongly preferred
+        key_line: dtr
+        ptt_line: rts # omit for full break-in
+        ptt_lead_ms: 15
+        ptt_tail_ms: 150
+        weight: 50
+    limits:
+      # No max_power_* here. These radios have no CAT command for transmit power
+      # in either direction, so there is nothing for remoses to clamp — RF POWER
+      # SET on the front panel is the only control, and a limit written here
+      # would be one remoses could not enforce.
       tx_timeout: 120s
 
   # Another Icom. Same backend, same opcodes; only the model line changes, and

@@ -385,8 +385,19 @@ same trap; assume the fourth has one too and go looking for it.
 |---|---|---|
 | `civ` | All Icom | Binary `FE FE <to> <from> cmd [sub] [data] FD`; BCD frequencies |
 | `kenwood` | Kenwood | ASCII, `;`-terminated; per-model quirk table |
-| `yaesu` | Yaesu | Same framing as `kenwood`, different fields throughout — see §5.6 |
+| `yaesu` | Modern Yaesu | Same framing as `kenwood`, different fields throughout — see §5.6 |
+| `yaesu` | FT-857/857D/897/897D | **Binary**: five fixed bytes, opcode last, no terminator and no framing at all — see §5.7 |
 | `rigctld` | Everything Hamlib supports | Pure-Go TCP client; optionally spawns `rigctld` as a child process and supervises it |
+
+`yaesu` appears twice because Yaesu has shipped two CAT systems with nothing in common but the
+manufacturer, and **the model name is what tells them apart**, not a second backend name.
+`backend: yaesu` with `yaesu.model: ft-857d` builds the binary implementation; anything else
+builds the ASCII one. Which protocol a radio speaks is a fact about the radio, so asking an
+operator to encode it twice would only create a way to get it wrong — and `ft-891` and `ft-897`
+are one character and one entire protocol apart. The two model registries are disjoint and a
+test enforces that, since a name in both would make the dispatch depend on which was asked
+first. The one consequence worth knowing: **an FT-857 must be named**, because an unnamed Yaesu
+still means the modern dialect.
 
 > **Elecraft and Flex are not covered by any of these**, whatever their similarity to Kenwood's
 > dialect suggests. An earlier draft of this table claimed `kenwood` covered "Elecraft, modern
@@ -857,6 +868,173 @@ Every one of these is a question one radio can settle in a minute with `debug_wi
 including the ones that would otherwise be silent, since a Yaesu refusing a command usually
 answers with nothing at all, and the trace is the only place the sent frame and the missing
 answer are both visible.
+
+### 5.7 The FT-857 and FT-897: Yaesu's other CAT
+
+Transcribed from the CAT Operation chapter of four operating manuals — FT-857, FT-857D, FT-897,
+FT-897D. It is the same chapter four times. The two FT-857 charts are identical to the value,
+the two FT-897 charts are identical to each other, and the pairs differ only in typesetting and
+in three printing slips noted below. **Nothing in the wire format varies between these four
+radios**, which is why §5.6's per-model table has no analogue here and why the profiles carry
+little more than a label.
+
+This is not the `yaesu` dialect with different values. It is a different protocol:
+
+| | ASCII Yaesu (§5.6) | FT-857/FT-897 |
+|---|---|---|
+| Frame | `FA014250000;` — letters, digits, `;` | `43 97 00 00 01` — **five bytes, always** |
+| Command position | first | **last** |
+| Frequency | decimal digits in Hz | **packed BCD in units of 10 Hz** |
+| Mode | a character, `2` = USB | a byte, `02` = **CW** |
+| Answer framing | `;` terminates | **nothing terminates anything** |
+| Commands | hundreds | **seventeen** |
+| Push updates | `AI1;` | **none at all** |
+
+`43 97 00 00 = 439.700 MHz` and `01 42 34 56 [01] = 14.23456 MHz` are the manuals' own worked
+examples, and are the only statement anywhere of what the four bytes mean. Ten hertz is also
+these radios' finest synthesizer step, so the field is exactly what the radio can tune; a finer
+request is rounded to the nearest step before it goes out, and the read-back reports where it
+landed.
+
+**There is no framing, and that is the design problem.** An answer has no terminator, no
+length, no opcode, no checksum and nothing that identifies it. Answers are one byte or five, and
+the two are not distinguishable by content — an acknowledgement of `00` and the leading
+`100/10 MHz` digit pair of a status answer on the 1.8 MHz band are the same byte. The only
+thing that knows where a frame ends is **the command that provoked it**.
+
+That is why `backend.ReplyFramer` exists. It is one optional method, implemented by this backend
+and by no other, that the session calls immediately before a request goes on the wire — *holding
+the write lock*. The lock is the whole point. A backend that recorded the fact for itself would
+have to do so before calling `Do`, and therefore outside that lock, where the poller and an HTTP
+setter overlapping is the ordinary case rather than a rare one: two goroutines could store in one
+order and write in the other, the reader would frame the wrong number of bytes, and **the stream
+would never recover**. Concurrency belongs to the session (§3), so the fact belongs there too.
+
+**Every command is acknowledged, and no manual says so.** The command chart lists a reply for
+the three reads only, but the radios answer everything else with a single byte. remoses waits
+for it — every command in this backend goes out through `Do`, and there is not one `Send` call
+in it. That is framing rather than thoroughness: on a delimiter-free stream an unconsumed byte
+is not harmless noise, it becomes the first byte of the next answer and offsets everything after
+it permanently. `yaesu` and `kenwood` can fire a set off and never look, because a stray frame
+there is skipped at the next `;`. Here there is no next `;`.
+
+Its **value is never read as a verdict**. `00` and `F0` are both reported in the field, `F0`
+meaning roughly "already in that state" — which is exactly what a redundant unkey is, and the
+dead-man path (§12) sends those by design. Treating a value as a rejection would make `ForceRX`
+report a failure for doing its job.
+
+**A slipped stream cannot resynchronise in place — so it is made to fail instead.** With no
+delimiter there is nothing to hunt for. What remoses can do is *notice*: the status answer's four
+BCD bytes are eight nibbles that must all be 0–9, so a frame offset by even one byte fails that
+test about forty-nine times in fifty. The decoder reports it not-OK, the session turns that into
+a poll failure, and five consecutive failures tear the connection down (§6). The reconnect starts
+a clean stream. That path is the entire reason the check is there. An unknown *mode* byte is
+deliberately **not** treated the same way: the frequency beside it already proved the framing was
+right, so it publishes no mode and leaves the frame good.
+
+**What these radios simply do not have**, each an absence in a seventeen-command set that found
+room for DCS codes and repeater shifts:
+
+- **Transmit power.** No opcode reads or writes it; `RF POWER SET` is a front-panel menu item.
+  `power_watt_accurate` is false and `max_power_w` unset, so the session refuses a request in
+  watts before it reaches the backend, and a request in percent is refused there.
+- **Filter width or filter slot.** The optional YF-122S/C/CN filters are chosen with the front
+  panel's `[B]` and `[C]` keys. Between this and the above, **the slow poll tier is empty** —
+  power and filter are what it carries everywhere else.
+- **CW over CAT.** No keyer buffer command, so the type does not implement `MorseSender` at all,
+  `cw_method` is `none`, and the daemon names `serial_key` as the fix — the §5.4 lesson that a
+  successful type assertion produces failures that look like success.
+- **Push updates.** No `AI`, no Transceive, nothing unsolicited. A front-panel knob movement is
+  invisible until the next poll. The fast tier is the only source of state here rather than a
+  safety net behind a push channel.
+- **A VFO by name.** The only VFO command, opcode `81`, is a **blind toggle**: it swaps A and B
+  and nothing anywhere reports which one it landed on. `caps.vfos` therefore lists only
+  `current`, and `SetFrequency` refuses `A` and `B` rather than tuning whichever VFO the operator
+  was on and calling it A.
+- **An identity.** There is no `ID` command in this generation, so unlike every other backend
+  there is nothing to cross-check the configuration against. What the operator wrote is all
+  remoses will ever know — which is also why the model is required rather than defaulted.
+
+**The two status bytes need care in one place.** Both pack a four-bit meter into the low nibble
+and three flags above it, and `F7` — the transmit one, and the only source of PTT, since no bulk
+answer here carries a TX/RX flag — has **inverted** polarity on PTT and split: zero means the
+thing is happening. remoses publishes its power meter and its HI SWR flag **only while the PTT
+bit says the radio is keyed**. Nothing in a transmitter status byte is documented as meaningful
+in receive, and these radios are reported to answer `FF` there, which decodes to a plausible
+full-scale power reading and a high-SWR alarm on a radio sitting quietly in receive. For the same
+reason the receive-status read `E7` is skipped entirely while transmitting: a transmitting radio
+is not measuring a received signal.
+
+The power reading goes into `s_meter` because `State` has no forward-power field, and that field
+already means this on a transmitting radio — a Kenwood's `SM` reads its RF power meter during
+transmit (§5.2). Leaving the meter alone instead would freeze it at the last receive reading,
+which looks live to a remote operator and is not. HI SWR is a threshold flag rather than a ratio,
+so it is published as 0-or-1 on a scale of 1: it is the only transmit fault these radios report
+over CAT, and a remote operator who cannot see the front panel is exactly who needs it.
+
+**Modes, and the two that need naming.** The status answer's table is the larger of the two the
+manuals print, and it disagrees with the mode-set table in one direction: `06` is WFM, which is
+readable and has no set code. So `WFM` is the one mode that can appear in `state.mode` and never
+in `caps.modes` — reporting it as FM would call a 200 kHz passband a 15 kHz one.
+
+`0A` is `DIG`, and it is one mode for the same reason `C4FM` is one mode on an FT-991A: which
+digital mode it *is* — RTTY-L, RTTY-U, PSK31-L, PSK31-U, USER-L or USER-U — is menu item 038, a
+persistent setting orthogonal to the mode that no CAT command reads. Mapping it to FSK because
+RTTY-L is the factory default would report a radio sitting in PSK31 as RTTY: the IC-910H failure
+of §5.4 again. `0C` is `PKT`, which is packet on FM, and maps to FM with the DATA flag exactly as
+the ASCII backend's own DATA-FM code does — so `SetMode(FM, data)` reaches it with no special
+case. There is no USB-DATA code anywhere: `DIG` and `PKT` are the data modes.
+
+**Where the four manuals disagree with each other**, and what remoses does about it:
+
+- **The FT-897 pair omits `82` (CW-N) and `88` (FM-N) from the status table** and prints `88` in
+  its own mode-set table two columns away; both FT-857 manuals list them in each. remoses decodes
+  them on all four. The omission is on the side that costs only a reading, and following it would
+  leave an FT-897 in FM-N reporting the mode it was in before.
+- **The FT-897 pair prints `P1 = 00: "+" OFFSET` and `P1 = 00: "-" OFFSET`** on adjacent lines of
+  the clarifier row, where the FT-857 manuals read `P1 ≠ 00` for the second. Immaterial here —
+  remoses does not implement the clarifier — but it is the clearest evidence that the FT-897
+  chapter is a re-typeset of the FT-857 one rather than an independent document.
+- **Both FT-857 manuals print the squelch bit as `0: Squelch "OFF"` and `1: Squelch "OFF"`.** The
+  FT-897 manuals have `1: Squelch "ON"`, which is the reading that makes sense. remoses drops
+  that bit — `State` has no squelch field — so nothing turns on it.
+- **The two charts swap the titles of opcodes `09` and `F9`** between "Repeater Offset" and
+  "Repeater Offset Frequency". Neither is implemented.
+
+**Assumptions worth revisiting on hardware:**
+
+- **The single-byte acknowledgement is a field report, not a transcribed fact.** It is the one
+  thing in this backend that is not in a manual, and it is load-bearing: if a radio turns out not
+  to send it, every set command would wait out the full per-command timeout. Visible immediately,
+  and `debug_wire` (§6.1) shows the sent block with nothing after it.
+- **`F0` as "already in that state"** is field-reported too. remoses does not act on it either
+  way, so being wrong costs nothing.
+- **`FF` as the transmit-status answer in receive** is the reason those fields are gated on the
+  PTT bit. If a radio instead answers something meaningful there, remoses is discarding real
+  readings — the safe direction, and one trace settles it.
+- **Only the outer frequency bounds are enforced**, 100 kHz to 470 MHz. These radios have three
+  coverage gaps (56–76, 108–118, 164–420 MHz) and no manual says what one does with a frequency
+  inside one. Refusing a frequency the rig would have tuned is worse than letting it ignore one it
+  will not, and the read-back reports which happened.
+- **The FT-817 and FT-817ND are the same protocol and are not profiled**, because remoses has no
+  manual for either and every value here came from one. An owner can name an FT-857 and find out,
+  accepting that the label will then say FT-857.
+
+**One rough edge, and it is `ApplyPatch`'s rather than this backend's.** A `PATCH` naming only a
+mode carries the *current* data-mode flag forward, because on a Kenwood the two really are
+orthogonal (§5.2). They are not here: DATA is folded into the mode code and only FM has a data
+variant. So a radio sitting in PKT that is asked for `{"mode": "CW"}` is asked for CW-with-data,
+which does not exist, and is refused with 422 — the operator has to send
+`{"mode": "CW", "data_mode": false}`. The refusal names the two data modes, so it is
+self-explanatory, and quietly dropping the flag instead would be the "succeeds and means
+something else" failure this document keeps returning to. The same applies to the ASCII Yaesus
+and to the TS-890S/TS-990S, which fold DATA into the mode code too; teaching `ApplyPatch` to ask
+a backend whether the target mode has a data variant would fix all three at once.
+
+The serial settings are worth stating because they are not the defaults: **4800 bps** out of the
+box (menu 019 `CAT RATE`, also 9600 and 38400), 8 data bits, no parity, and the manuals specify
+**two stop bits** — see `remoses.example.yaml`. Menu 020 `CAT/LIN/TUN` must also be set to `CAT`,
+or the rear-panel jack is driving a linear amplifier instead.
 
 ---
 

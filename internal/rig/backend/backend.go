@@ -49,6 +49,22 @@ import (
 // answer — risks losing a capability over a momentary condition.
 var ErrBusy = errors.New("backend: rig busy, the command can be retried")
 
+// ErrUnsupported means this radio cannot do what was asked, and no retry will
+// change that: the command does not exist in its CAT set, the value is outside
+// the range it accepts, or the control is a front-panel one.
+//
+// It lives here for the same reason ErrBusy does. internal/rig aliases it as
+// rig.ErrUnsupported, which the API already maps to 422 with the error's own
+// text — so a backend that wraps its refusals in this gets "your radio has no
+// such control", with the explanation, instead of a bare 500 that reads as a
+// daemon bug. A backend cannot import internal/rig to reach that sentinel, and
+// a plain fmt.Errorf lands in the 500 catch-all.
+//
+// Wrap the refusals a client can provoke by asking for something reasonable.
+// Do not wrap a programming error — a bad poll tier, a malformed internal
+// request — which really is a 500.
+var ErrUnsupported = errors.New("backend: unsupported by this radio")
+
 // Key correlates a decoded frame with the request that asked for it.
 //
 // Backends choose their own key space, so long as it is stable: the Kenwood
@@ -138,6 +154,34 @@ type Rig interface {
 	SetPTT(ctx context.Context, c Conn, on bool) error
 	SetFilterWidth(ctx context.Context, c Conn, hz int) error
 	SetFilterSlot(ctx context.Context, c Conn, slot int) error
+}
+
+// ReplyFramer is implemented by a backend that cannot frame the inbound stream
+// from its bytes alone, and has to know what was asked for instead.
+//
+// Every other protocol here delimits itself: Kenwood and Yaesu ASCII end each
+// frame with ';', CI-V wraps one in FE FE … FD. Yaesu's five-byte binary CAT
+// does neither. Its answers are one byte or five, carry no opcode, no length
+// and no terminator, and nothing in an answer says which of the two it is — so
+// the only thing that can tell the reader where a frame ends is the command
+// that provoked it.
+//
+// Implementing this interface is what lets a backend record that. The session
+// calls Expect immediately before req goes on the wire, holding the same lock
+// that serialises writes, which is the point: a backend that stored the fact
+// itself would have to do so before calling Do, outside that lock, and two
+// concurrent callers — the poller and an HTTP setter, which is the ordinary
+// case — could then store in one order and write in the other. The reader would
+// frame the wrong number of bytes and the stream would never recover.
+//
+// A backend whose framing is self-contained does not implement this and is not
+// called.
+type ReplyFramer interface {
+	// Expect records that req is about to be written, so Split can size the
+	// answer. It is called with the write lock held and must not block, take a
+	// lock of its own, or perform I/O — the reader goroutine is concurrently
+	// inside Split reading whatever it stored.
+	Expect(req []byte)
 }
 
 // MorseSender is implemented by backends whose rig has a CAT CW buffer.

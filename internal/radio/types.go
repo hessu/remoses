@@ -49,6 +49,25 @@ const (
 	ModeC4FM   // FT-991A
 	ModeC4FMDN // FTX-1, digital narrow
 	ModeC4FMVW // FTX-1, voice wide
+
+	// The FT-857/FT-897 generation, whose mode table has two entries the rest
+	// of this list cannot express.
+	//
+	// ModeWFM is wide FM, the 76-108 MHz broadcast band. It is receive-only and
+	// cannot be selected over CAT — those radios' mode-set table has no code
+	// for it — so it never appears in Caps.Modes. It exists because their
+	// status read does report it, and calling it FM would misreport a 200 kHz
+	// passband as a 15 kHz one.
+	//
+	// ModeDIG is Yaesu's DIG, and it is one mode here for the same reason
+	// ModeC4FM is one mode on an FT-991A: which digital mode it actually is —
+	// RTTY-L, RTTY-U, PSK31-L, PSK31-U, USER-L or USER-U — is menu item 038, a
+	// persistent setting orthogonal to the mode, and one no CAT command reads.
+	// So ModeDIG means "DIG, sub-mode not expressed as a mode". Mapping it to
+	// FSK because RTTY-L is the factory default would report a radio sitting in
+	// PSK31 as RTTY: a wrong answer rather than a missing one.
+	ModeWFM
+	ModeDIG
 )
 
 var modeNames = map[Mode]string{
@@ -69,6 +88,8 @@ var modeNames = map[Mode]string{
 	ModeC4FM:    "C4FM",
 	ModeC4FMDN:  "C4FM-DN",
 	ModeC4FMVW:  "C4FM-VW",
+	ModeWFM:     "WFM",
+	ModeDIG:     "DIG",
 }
 
 func (m Mode) String() string {
@@ -114,6 +135,10 @@ func ParseMode(s string) (Mode, error) {
 		return ModeC4FMDN, nil
 	case "C4FM-VW", "C4FMVW":
 		return ModeC4FMVW, nil
+	case "WFM":
+		return ModeWFM, nil
+	case "DIG":
+		return ModeDIG, nil
 	}
 	return ModeUnknown, fmt.Errorf("radio: unknown mode %q", s)
 }

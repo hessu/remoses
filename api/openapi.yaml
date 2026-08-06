@@ -445,9 +445,20 @@ components:
         selects `C4FM-DN` and `C4FM-VW` separately. A radio's `caps.modes` lists
         what it will actually accept, and a mode outside that list is rejected
         with 422.
+
+        `WFM` and `DIG` belong to the FT-857/FT-897 generation. `DIG` is one
+        mode for the same reason `C4FM` is: which digital mode it actually is —
+        RTTY, PSK31 or a USER slot, and on which sideband — is a menu item no
+        CAT command reads.
+
+        `WFM` is the one value that can appear in `state.mode` and never in
+        `caps.modes`: those radios report wide FM in their status answer and
+        have no command to select it, so it is readable and not settable. A
+        client should render a mode it reads rather than assume it came from the
+        capability list.
       enum:
         [UNKNOWN, LSB, USB, CW, CW-R, AM, FM, FSK, FSK-R, PSK, PSK-R, DV, DD, ATV,
-         C4FM, C4FM-DN, C4FM-VW]
+         C4FM, C4FM-DN, C4FM-VW, WFM, DIG]
 
     VFO:
       type: string
@@ -583,7 +594,10 @@ components:
       properties:
         id: { type: string }
         name: { type: string }
-        backend: { type: string, enum: [civ, kenwood, rigctld] }
+        # yaesu covers both of Yaesu's CAT systems: the ASCII dialect the modern
+        # radios speak and the five-byte binary one of the FT-857/FT-897
+        # generation. The model chooses, so there is one backend name.
+        backend: { type: string, enum: [civ, kenwood, yaesu, rigctld] }
         connected: { type: boolean }
         caps: { $ref: "#/components/schemas/Caps" }
         limits: { $ref: "#/components/schemas/Limits" }

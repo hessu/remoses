@@ -50,7 +50,11 @@ var (
 	// to 422.
 	ErrOutOfBand = errors.New("rig: frequency outside configured band limits")
 	// ErrUnsupported means this radio cannot do what was asked. Maps to 422.
-	ErrUnsupported = errors.New("rig: unsupported by this radio")
+	// It aliases the backend sentinel, the way ErrBusy does, so that a backend
+	// refusing a control it does not have — which it cannot report as
+	// rig.ErrUnsupported, being unable to import this package — reaches the
+	// client as 422 with its own explanation rather than as a bare 500.
+	ErrUnsupported = backend.ErrUnsupported
 	// ErrNAK means the rig rejected the command.
 	ErrNAK = errors.New("rig: command rejected by radio")
 	// ErrBusy means the rig said "not now" rather than refusing outright —

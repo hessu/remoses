@@ -169,10 +169,21 @@ func TestValidate(t *testing.T) {
 			name: "unknown yaesu model",
 			mutate: func(c *Config) {
 				c.Radios[0].Backend = BackendYaesu
-				c.Radios[0].Yaesu = &Yaesu{Model: "ft-857"}
+				c.Radios[0].Yaesu = &Yaesu{Model: "ft-101"}
 			},
-			wantErr: `yaesu.model "ft-857", want one of generic, ft-710, ft-891, ft-950, ft-991a, ` +
-				`ftdx10, ftdx101d, ftdx101mp, ftdx1200, ftdx3000, ftdx5000, ftdx9000, ftx-1`,
+			wantErr: `yaesu.model "ft-101", want one of generic, ft-710, ft-891, ft-950, ft-991a, ` +
+				`ftdx10, ftdx101d, ftdx101mp, ftdx1200, ftdx3000, ftdx5000, ftdx9000, ftx-1, ` +
+				`ft-857, ft-857d, ft-897, ft-897d`,
+		},
+		{
+			// The FT-857/FT-897 generation speaks a different protocol under
+			// the same backend name; the model is what dispatches, so these
+			// names have to validate against yaesu.model like any other.
+			name: "yaesu model from the five-byte binary generation",
+			mutate: func(c *Config) {
+				c.Radios[0].Backend = BackendYaesu
+				c.Radios[0].Yaesu = &Yaesu{Model: "FT-857D"}
+			},
 		},
 		{
 			// Yaesu is not consistent about hyphens in its own product names —

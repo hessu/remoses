@@ -92,13 +92,26 @@ way to poll PTT at all, so it arrives only through auto-information pushes.
 | FTdx101MP | `ftdx101mp` | 200 W | — |
 | FTX-1 | `ftx-1` | 30-byte `IF`; `PC` names the head; C4FM-DN and C4FM-VW | — |
 | other Yaesu | `generic` | FTdx101 shape | — |
+| FT-857 | `ft-857` | **Binary CAT** — a different protocol; see below | — |
+| FT-857D | `ft-857d` | | — |
+| FT-897 | `ft-897` | | — |
+| FT-897D | `ft-897d` | | — |
 
-Naming the model matters more here than on any other backend, because the mode-code tables are
-per radio rather than per family: `E` selects PSK on five of them, C4FM on the FT-991A, and
-nothing at all on the other six, so the wrong name reports the wrong mode instead of failing.
-The five older radios are also an **eight-digit** generation — `FA14025000;` where the newer
-seven take `FA014025000;` — and their `IF` answer is a byte shorter to match, so a wrong name
-there produces a malformed command rather than an error.
+Naming the model matters more here than on any other backend, for two separate reasons.
+
+The first is that it chooses the **protocol**. The last four radios above speak a CAT system
+that has nothing in common with the others but the manufacturer: five fixed binary bytes with
+the opcode last, packed-BCD frequencies, seventeen commands in total, and no terminator or
+framing of any kind. `backend: yaesu` is still correct for them — remoses dispatches on the
+model name, so you never have to know which generation your radio belongs to — but an FT-857
+left unnamed will not work, because an unnamed Yaesu means the modern dialect.
+
+The second is that within the modern family the mode-code tables are per radio rather than per
+family: `E` selects PSK on five of them, C4FM on the FT-991A, and nothing at all on the other
+six, so the wrong name reports the wrong mode instead of failing. The five older radios are
+also an **eight-digit** generation — `FA14025000;` where the newer seven take `FA014025000;` —
+and their `IF` answer is a byte shorter to match, so a wrong name there produces a malformed
+command rather than an error.
 
 Two of the older radios report **transmit power as an uncalibrated `000`–`255` index rather
 than watts**, so remoses shows a percentage and refuses a request in watts on them: the FTdx5000
@@ -111,8 +124,22 @@ refuses to set one.
 
 None of these radios can key arbitrary CW text over CAT — `KY` plays a stored keyer memory, and
 remoses will not overwrite the operator's saved messages to send one — so CW on a Yaesu means
-`cw.method: serial_key`, keying DTR or RTS. Every model supports it through its `PC KEYING`
-menu item.
+`cw.method: serial_key`, keying DTR or RTS. Every modern model supports it through its
+`PC KEYING` menu item; the FT-857/FT-897 have no CW-over-CAT command at all, so it is the only
+option there too.
+
+**The FT-857 and FT-897 are more limited than the rest**, and it is the radios rather than
+remoses: their seventeen-command CAT set has no way to set or read **transmit power**, no
+**filter width or filter selection**, no **push updates** (so a front-panel knob movement shows
+up at the next poll rather than immediately), and no **model identification**. Its one VFO
+command is a blind toggle that reports nothing, so remoses controls whichever VFO the radio is
+on and does not offer A and B by name. Frequency, mode, PTT, the S-meter, the transmit power
+meter and the high-SWR warning all work.
+
+They also need their serial port set up by hand: **4800 bps** out of the box (menu 019
+`CAT RATE`, which also offers 9600 and 38400) and **two stop bits**, where remoses defaults to
+115200 and one. Menu 020 `CAT/LIN/TUN` has to be on `CAT` as well, or the rear-panel jack is
+driving a linear amplifier instead. See `remoses.example.yaml`.
 
 ### Anything else (`rigctld` backend)
 

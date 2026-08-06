@@ -9,17 +9,31 @@ import (
 
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/rig/backend/yaesubin"
 )
 
 // TestModelListMatchesConfig is the drift guard. config cannot import this
 // package — it sits below rig/backend — so its list is a copy, and this is the
 // direction that can see both.
+//
+// It is the union of two registries, because `yaesu.model` is one namespace
+// covering two protocols: a name this backend does not know may still be a
+// valid configuration, and config has to accept it. Which is also why the two
+// registries must not overlap — a name in both would make the dispatch depend
+// on the order it was checked in.
 func TestModelListMatchesConfig(t *testing.T) {
-	got := ModelNames()
+	got := append(ModelNames(), yaesubin.ModelNames()...)
+	slices.Sort(got)
 	want := slices.Clone(config.YaesuModels)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
-		t.Errorf("yaesu.ModelNames() = %v, config.YaesuModels = %v; the lists have drifted", got, want)
+		t.Errorf("yaesu + yaesubin model names = %v, config.YaesuModels = %v; the lists have drifted", got, want)
+	}
+
+	for _, n := range ModelNames() {
+		if yaesubin.Handles(n) {
+			t.Errorf("%q is in both registries; the dispatch would depend on which was asked first", n)
+		}
 	}
 }
 

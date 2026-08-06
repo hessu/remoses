@@ -92,8 +92,43 @@ func TestBackendRegistered(t *testing.T) {
 		t.Errorf("MaxPowerW = %v, want 200; the registered factory did not read the model", got)
 	}
 	if _, err := backend.New(&config.Radio{ID: "rig", Backend: Name,
-		Yaesu: &config.Yaesu{Model: "ft-857"}}); err == nil {
+		Yaesu: &config.Yaesu{Model: "ft-101"}}); err == nil {
 		t.Error("backend.New accepted a model with no profile")
+	}
+}
+
+// TestBackendDispatchesTheBinaryGeneration covers the other half of what
+// `backend: yaesu` means. The FT-857/FT-897 radios speak a protocol this
+// package cannot talk at all, so the factory has to hand them to yaesubin on
+// the strength of the model name alone — and an unnamed Yaesu has to keep
+// landing here, where it always has.
+func TestBackendDispatchesTheBinaryGeneration(t *testing.T) {
+	for _, model := range []string{"ft-857", "FT-857D", "ft-897", "FT897D"} {
+		r, err := backend.New(&config.Radio{
+			ID:      "rig",
+			Backend: Name,
+			Yaesu:   &config.Yaesu{Model: model, AutoInformation: true},
+		})
+		if err != nil {
+			t.Fatalf("backend.New(%q): %v", model, err)
+		}
+		if _, ok := r.(*Rig); ok {
+			t.Errorf("%q was built as an ASCII-CAT radio; it speaks the five-byte binary protocol", model)
+		}
+		// The giveaway either way: this generation has no bulk status command
+		// and cannot report a passband, so it publishes no filter width.
+		if r.Caps().FilterWidth {
+			t.Errorf("%q reports a filter width; no command in its protocol has one", model)
+		}
+	}
+
+	// An unnamed Yaesu is a modern one, as it has always been.
+	r, err := backend.New(&config.Radio{ID: "rig", Backend: Name, Yaesu: &config.Yaesu{}})
+	if err != nil {
+		t.Fatalf("backend.New with no model: %v", err)
+	}
+	if _, ok := r.(*Rig); !ok {
+		t.Error("an unnamed Yaesu was not built as an ASCII-CAT radio")
 	}
 }
 
