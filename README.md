@@ -16,32 +16,54 @@ Scope for v1 is control only. Audio is a separate concern.
 
 ## Status
 
-**Experimental. One radio out of the thirty below has ever been connected.**
+**Experimental. One radio out of the thirty-three below has ever been connected — but
+that one has now been put through everything.**
 
-That is the single most important thing to know about the project right now.
 Every protocol detail below was transcribed from the manufacturers' own CI-V and
 CAT reference documentation and is exercised against simulated rigs in the test
-suite — but a test suite agreeing with a manual proves only that the code matches
-what the manual says. It does not prove the manual is right, that the transcription
-is right, or that a particular radio behaves the way its documentation claims.
+suite. That proves the code matches what the manual says. It does not prove the
+manual is right, that the transcription is right, or that a particular radio
+behaves the way its documentation claims — which is why the one radio that has
+been on the wire matters more than the thirty-two that have not.
 
-An **IC-7610** has now been on the wire: read, write and CW keying on the air, with
-push updates tracking the VFO knob. It found two bugs no amount of reading would
-have — a filter width and a data-mode flag that remoses wrote but never read back,
-so both reported a stale value for ever. Details in
-[docs/DESIGN.md](docs/DESIGN.md) §5.4. Expect the other twenty-nine models to be
-hiding something similar.
+### What has been verified on hardware
 
-Concretely, that means:
+An **IC-7610**, over its native USB, on the air. Everything remoses implements
+for it was exercised: connect and reconnect, the full poll, all ten modes, all
+three filter slots and the filter-width ladder, transmit power, PTT, Icom
+Transceive push updates tracking the VFO knob, the REST and WebSocket APIs, the
+lock lifecycle including steal and expiry, and CW both ways — the rig's own CAT
+keyer and locally generated Morse keying DTR and RTS.
 
-- **Only the IC-7610 has been verified.** Treat every other "supported" model below
-  as "implemented from documentation, awaiting confirmation".
-- **It keys transmitters.** The safety interlocks are implemented and tested
-  (dead-man TX timeout, lock expiry dropping PTT, power clamping, band limits).
-  CAT keying and PTT have now been exercised on a real transmitter; the interlocks
-  themselves have still only been tested against fakes.
-- Expect to find protocol bugs. If you do, the per-model differences are collected
-  in [docs/DESIGN.md](docs/DESIGN.md) §5.2–§5.7, which is the place to look first.
+**The safety interlocks were fired for real**, not against fakes: band limits
+refusing an out-of-band tune, power clamping, the dead-man `tx_timeout` forcing
+receive mid-transmission, and lock expiry cutting a live CW transmission inside a
+character. CW pacing was measured at **61 ms of drift over 18.3 seconds** on a rig
+whose buffer cannot be queried, so the timing is dead reckoning.
+
+**It found five bugs that no amount of reading the reference would have.** Two
+values remoses wrote but never read back, so both reported a stale figure for
+ever; two setters that quietly changed a neighbouring setting, because on CI-V
+several settings share one command; and capabilities that described the radio's
+own keyer while a different one was installed. All five are fixed, with the
+measurements and reasoning in [docs/DESIGN.md](docs/DESIGN.md) §5.4 and §11.2.
+**Expect the other thirty-two models to be hiding something similar.**
+
+### What that still does not tell you
+
+- **Only the IC-7610 has been verified.** Treat every other model below as
+  "implemented from documentation, awaiting confirmation". The Yaesu, Kenwood and
+  remaining Icom backends have never seen a radio.
+- **One failure mode is untested and unfixable here:** pulling the cable *while
+  transmitting*. The rig stays keyed and remoses cannot reach it — the link it
+  would send the unkey over is the one that vanished. Only the radio's own
+  time-out ends that, so set one.
+- **A few known rough edges are recorded rather than fixed**, including the CW
+  queue position reported after a `replace` and the lock lease not being extended
+  by a long transmission. They are in `DESIGN.md`; none of them keys a
+  transmitter.
+- Expect to find protocol bugs. The per-model differences are collected in
+  [docs/DESIGN.md](docs/DESIGN.md) §5.2–§5.7, which is the place to look first.
 
 Do not leave it running an unattended station yet.
 
@@ -49,6 +71,9 @@ Do not leave it running an unattended station yet.
 
 The **Tested** column marks radios confirmed against real hardware. Exactly one
 entry is filled in: see the status note above.
+
+"Tested" there means every feature remoses implements for that radio was
+exercised on the air, not that the radio was seen to connect.
 
 ### Icom (`civ` backend)
 
@@ -58,7 +83,7 @@ entry is filled in: see the status note above.
 | IC-7300 | `ic-7300` | | — |
 | IC-7300MK2 | `ic-7300mk2` | | — |
 | IC-7600 | `ic-7600` | | — |
-| IC-7610 | `ic-7610` | Read, write, CW keying and Transceive push confirmed on the air | **yes** |
+| IC-7610 | `ic-7610` | Every implemented feature exercised on the air, interlocks included | **yes** |
 | IC-7700 | `ic-7700` | | — |
 | IC-7760 | `ic-7760` | | — |
 | IC-7850 / IC-7851 | `ic-7850` | One profile; identical over CI-V | — |
@@ -135,6 +160,11 @@ remoses will not overwrite the operator's saved messages to send one — so CW o
 `cw.method: serial_key`, keying DTR or RTS. Every modern model supports it through its
 `PC KEYING` menu item; the FT-857/FT-897 have no CW-over-CAT command at all, so it is the only
 option there too.
+
+That path is the one part of Yaesu CW support that has been confirmed on hardware, because it is
+not Yaesu-specific: `serial_key` generates the Morse locally and keys a control line, and it was
+tested on both DTR and RTS against an IC-7610's USB keying. What has never been exercised on a
+Yaesu is the CAT side — the frames in the tables above.
 
 **The FT-857 and FT-897 are more limited than the rest**, and it is the radios rather than
 remoses: their seventeen-command CAT set has no way to set or read **transmit power**, no
