@@ -90,10 +90,25 @@ type Model struct {
 	// the cost of guessing wrong here is a command sent to a radio that has
 	// never heard of it.
 	DualVFO bool
+	// DualVFOBandSelector says what the first byte of 25 and 26 means, and
+	// getting it wrong addresses a different part of the radio.
+	//
+	// True on the IC-7610: 00 is the main band and 01 the sub band, two fixed
+	// receivers, and the reference titles them so. False on the IC-9700: 00 is
+	// the *selected* VFO and 01 the unselected one, both within the main band,
+	// and its own note says outright "You cannot set the SUB band frequency".
+	//
+	// One opcode, two axes — the same shape as the IC-718's 1C 01, and the
+	// reason this is a per-model field rather than a constant.
+	DualVFOBandSelector bool
 	// Split marks command 0F, which reads and sets transmit-on-the-other-VFO.
 	// Recorded separately from DualVFO because it is a different command with a
 	// different history, and a radio could have one without the other.
 	Split bool
+	// SubReceiver marks a radio with a second receiver that can listen at the
+	// same time as the first. Whether remoses can *read* it is a different
+	// question — see DualWatch and the IC-9700's entry.
+	SubReceiver bool
 	// DualWatch marks 07 C0/C1/C2, receiving on both VFOs at once. This is what
 	// makes the second VFO a second *receiver* rather than a stored frequency,
 	// and so what makes a sub S-meter reading mean anything.
@@ -163,7 +178,9 @@ var models = map[string]Model{
 		m := modern("ic-7610", "Icom IC-7610", 0x98,
 			withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))
 		m.DualVFO = true
+		m.DualVFOBandSelector = true // 25/26 take 00=MAIN, 01=SUB
 		m.Split = true
+		m.SubReceiver = true
 		m.DualWatch = true
 		return m
 	}(),
@@ -176,8 +193,34 @@ var models = map[string]Model{
 
 	// VHF/UHF/1.2 GHz: D-STAR instead of PSK. DD is 1200 MHz only, which the
 	// radio enforces; remoses does not second-guess the band.
-	"ic-9700": modern("ic-9700", "Icom IC-9700", 0xA2,
-		withModes(modesCommon(), radio.ModeDV, radio.ModeDD)),
+	// The IC-9700 has 25 and 26 like the IC-7610 and means something different
+	// by them. There, 00 and 01 select the main and sub *bands*; here they
+	// select the *selected and unselected VFO*, and only within the main band —
+	// its own reference says "You cannot set the SUB band frequency" and titles
+	// both commands "(Only MAIN band)".
+	//
+	// So remoses addresses the main band's two VFOs and nothing else. The sub
+	// band is real, receives independently, and is deliberately left alone: the
+	// only way to reach it is `07 D1`, select the sub band, which moves the
+	// operator's own focus and fights whoever is holding the dial. A meter
+	// reading is not worth grabbing somebody's radio for, so SubReceiver is
+	// true, the backend never reads it, and Caps says so.
+	//
+	// Nor is which VFO is "selected" knowable: 07 00 and 07 01 *set* VFO A and
+	// B and nothing reports the current one. Hence relative addressing — see
+	// radio.Caps.VFOAddressing. Calling the selected one "A" would be a guess,
+	// and wrong half the time.
+	"ic-9700": func() Model {
+		m := modern("ic-9700", "Icom IC-9700", 0xA2,
+			withModes(modesCommon(), radio.ModeDV, radio.ModeDD))
+		m.DualVFO = true
+		m.DualVFOBandSelector = false // 25/26 take 00=selected, 01=unselected
+		m.Split = true
+		m.SubReceiver = true
+		// No DualWatch: 07 C0/C1/C2 is not in this radio's command table, and
+		// its sub band is not the IC-7610's dual watch in any case.
+		return m
+	}(),
 
 	// DD and ATV need 1200 MHz or higher, again enforced by the radio.
 	"ic-905": func() Model {

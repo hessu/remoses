@@ -719,14 +719,42 @@ meter on PTT. And the per-VFO passband is read behind the `29` prefix and conver
 VFO's** own mode rather than the operating one; a `passband_hz` that always read zero would have
 been the same defect this backend was carrying twice that morning.
 
-**This model does not fit the IC-9700, and that is a known limit rather than an oversight.** That
-radio has two *receivers*, each with its own VFO A/B and memory mode, its own split, and a rule
-that the two must be on different bands. Worse, `split` means different things on the two radios:
-on the IC-7610 it moves transmit to the sub receiver, while the IC-9700 always transmits on Main,
-so there it must mean the other VFO *of Main*. One name, two axes — the `1C 01` shape again.
-Supporting it means `receivers → VFOs`, with the flat fields kept as a projection of the
-transmitting receiver's selected VFO; the work is deferred until that radio's reference has been
-read, rather than guessed at from this one.
+#### The IC-9700 means something else by the same commands
+
+Reading its reference settled what guessing could not. `25` and `26` exist there too and address
+a **different axis**:
+
+| | IC-7610 | IC-9700 |
+|---|---|---|
+| `25`/`26` selector | `00` MAIN band, `01` SUB band | `00` **selected** VFO, `01` **unselected** |
+| Scope | either receiver | **"(Only MAIN band)"** |
+| Reaching the sub band | `29` prefix, no selection needed | *impossible* — "You cannot set the SUB band frequency" |
+| `29` prefix | yes | **not in its command table** |
+
+One opcode, two axes: the `1C 01` shape again, and why `Model.DualVFOBandSelector` is per model
+rather than a constant.
+
+The IC-9700's sub band is real and receives independently, and the only route to it is `07 D1`,
+"select the sub band" — which moves the operator's own focus and fights whoever is holding the
+dial. **remoses does not send it.** `caps.sub_receiver` is true because the radio has one and
+`caps.sub_receiver_readable` is false because remoses will not grab the radio to read it; a meter
+reading is not worth that. There is a test asserting no `07 D0`/`07 D1` ever reaches the wire.
+
+Which VFO is "selected" is also unknowable: `07 00` and `07 01` *set* VFO A and B and nothing
+reports the current one. So on that radio A and B are **relative** labels — A is whatever the
+operator has selected, B is the other — and `caps.vfo_addressing` says `relative` where the
+IC-7610 says `named`, rather than leaving a client to mislabel one of them. The split rule is the
+same either way: B is where transmit goes.
+
+What this buys is that one flat two-slot model serves both radios honestly, where a nested
+`receivers → VFOs` structure would have had to leave the IC-9700's sub branch permanently empty
+and the IC-7610's A/B branch permanently absent. Both radios expose **two addressable tuning
+slots, the second of which is the split target**; what those slots *are* differs, and caps says
+so.
+
+Confirmed on an IC-9700: `vfo_addressing: relative`, VFO A tracking the operating frequency,
+VFO B set to 432.200 USB and back with the operating VFO untouched, split on and off, and no band
+selection on the wire at any point.
 
 **The rest of the surface was exercised on the same radio**, and passed: authentication;
 the whole lock lifecycle including steal and expiry; WebSocket streaming and `ws-ticket`; all

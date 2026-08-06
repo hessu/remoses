@@ -214,15 +214,18 @@ func (r *Rig) Caps() radio.Caps {
 		FilterSlots:       r.model.FilterSlots,
 		SMeterScale:       sMeterScale,
 
-		// SubReceiver means both VFOs can be *received at once*, which is what
-		// makes State.SubSMeter a live reading rather than a stale one — so it
-		// follows dual watch rather than merely having two VFOs.
-		SubReceiver: r.model.DualWatch,
-		Split:       r.model.Split,
-		DualWatch:   r.model.DualWatch,
+		// SubReceiver is whether the radio *has* a second receiver;
+		// SubReceiverReadable is whether remoses can report it. They differ on
+		// the IC-9700, which has one and offers no command that addresses it —
+		// only "select the sub band", which would move the operator's focus.
+		SubReceiver:         r.model.SubReceiver,
+		SubReceiverReadable: r.model.DualWatch,
+		Split:               r.model.Split,
+		DualWatch:           r.model.DualWatch,
 		// Command 26 carries mode, data mode and filter per VFO, so on those
 		// radios all three are per-VFO rather than properties of the set.
-		PerVFOMode: r.model.DualVFO,
+		PerVFOMode:    r.model.DualVFO,
+		VFOAddressing: r.vfoAddressing(),
 		// Capability, not configuration: a radio with command 17 has a CAT CW
 		// buffer whether or not this station is configured to use it, and one
 		// without it — the IC-718 — cannot send Morse over CAT at all, however

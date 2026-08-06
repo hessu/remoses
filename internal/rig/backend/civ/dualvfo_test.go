@@ -303,6 +303,85 @@ func TestCapsFollowTheModel(t *testing.T) {
 	}
 }
 
+// ic9700 builds the other dual-VFO profile: same commands, different meaning.
+//
+// Addressed at the simulator's bus address rather than its own factory 0xA2, so
+// that a test can drive it through simRig. Which address it uses is settled
+// separately, by TestConfigDefaultsDoNotOverrideTheModelAddress.
+func ic9700(t *testing.T) *Rig {
+	t.Helper()
+	r, err := New(&config.Radio{CIV: &config.CIV{
+		Model:      "ic-9700",
+		RigAddress: int(DefaultRigAddress),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// TestTheTwoDualVFORadiosDisagreeAboutTheSelector is the whole reason the
+// selector is a per-model field.
+//
+// 25 and 26 exist on both radios and mean different things: the IC-7610's byte
+// picks the main or sub *band*, two fixed receivers, while the IC-9700's picks
+// the *selected or unselected VFO* of the main band and cannot reach its sub
+// band at all. One opcode, two axes — the IC-718's 1C 01 shape. A client is
+// told which it is looking at through caps rather than left to infer it.
+func TestTheTwoDualVFORadiosDisagreeAboutTheSelector(t *testing.T) {
+	c7610 := testRig(t).Caps()
+	if c7610.VFOAddressing != "named" {
+		t.Errorf("IC-7610 vfo_addressing = %q, want named: its A and B are fixed bands",
+			c7610.VFOAddressing)
+	}
+	c9700 := ic9700(t).Caps()
+	if c9700.VFOAddressing != "relative" {
+		t.Errorf("IC-9700 vfo_addressing = %q, want relative: nothing reports which "+
+			"VFO is selected, so A and B cannot be stable labels", c9700.VFOAddressing)
+	}
+}
+
+// TestIC9700SubReceiverIsNotRead is the instruction this profile encodes: the
+// radio has a sub band, remoses cannot address it, and the one route that
+// exists — 07 D1, select the sub band — moves the operator's own focus.
+//
+// So the capability says "there is one and I cannot read it", and nothing in
+// the poll goes looking.
+func TestIC9700SubReceiverIsNotRead(t *testing.T) {
+	r := ic9700(t)
+	caps := r.Caps()
+	if !caps.SubReceiver {
+		t.Error("caps deny the sub receiver; the radio has one")
+	}
+	if caps.SubReceiverReadable {
+		t.Error("caps claim the sub receiver is readable; no command addresses it")
+	}
+	if caps.DualWatch {
+		t.Error("caps claim dual watch; 07 C0/C1/C2 is not in this radio's table")
+	}
+
+	s := newSim(t)
+	s.backend = r
+	ctx := context.Background()
+	for _, tier := range []backend.PollTier{backend.PollFast, backend.PollSlow} {
+		if err := r.Poll(ctx, s, tier); err != nil {
+			t.Fatalf("Poll: %v", err)
+		}
+	}
+	if err := r.ReadVFOs(ctx, s); err != nil {
+		t.Fatalf("ReadVFOs: %v", err)
+	}
+	for _, req := range s.log {
+		cmd, body := req[4], req[5:len(req)-1]
+		if cmd == cmdVFO && len(body) == 1 && (body[0] == subSelectMain || body[0] == subSelectSub) {
+			t.Fatalf("sent 07 %02X: remoses must not switch bands to read one", body[0])
+		}
+		if cmd == cmdBand {
+			t.Fatal("sent a 29 prefix; the IC-9700 has no such command")
+		}
+	}
+}
+
 // TestBandByteRejectsCurrent guards a subtle one: resolving "current" to A
 // would make a request about one VFO act on another the moment a radio appeared
 // whose operating VFO is not A.

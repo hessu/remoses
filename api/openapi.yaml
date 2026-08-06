@@ -639,9 +639,28 @@ components:
         sub_receiver:
           type: boolean
           description: |
-            Both VFOs can be received *at the same time*, which is what makes
-            `state.sub_s_meter` a live reading. Not merely "the radio has two
-            VFOs" — nearly all of them do.
+            The radio has a second receiver that can listen at the same time as
+            the first. Not merely "two VFOs" — nearly all of them have that.
+            Whether remoses can *report* it is `sub_receiver_readable`.
+        sub_receiver_readable:
+          type: boolean
+          description: |
+            The second receiver's state can be read, so `state.sub_s_meter` is
+            live. False on a radio that has one remoses cannot address: the
+            IC-9700's sub band is reachable only by telling the radio to select
+            it, which would move the operator's own focus, and remoses does not
+            switch bands to fill in a meter.
+        vfo_addressing:
+          type: string
+          enum: [named, relative]
+          description: |
+            What `state.vfo_a` and `state.vfo_b` name. `named` means stable
+            labels for two fixed slots (an IC-7610's main and sub bands).
+            `relative` means A is whichever VFO the operator has selected and B
+            is the other — an IC-9700, whose protocol offers exactly that
+            selector and never reports which letter is selected. Absent on a
+            radio with a single addressable VFO. Either way, B is where split
+            sends the transmit.
         split:
           type: boolean
           description: Transmit-on-the-other-VFO can be read and set.

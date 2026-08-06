@@ -581,6 +581,32 @@ type Caps struct {
 	// carry frequencies only.
 	PerVFOMode bool `json:"per_vfo_mode"`
 
+	// VFOAddressing says what State.VFOA and State.VFOB actually name, because
+	// the two radios that have them disagree and a client that assumed would
+	// mislabel one of them.
+	//
+	//	"named"     A and B are stable labels for two fixed tuning slots. The
+	//	            IC-7610's main and sub bands: A is always the same one.
+	//	"relative"  A is whichever VFO the operator has selected and B is the
+	//	            other. The IC-9700's commands 25 and 26 take exactly that
+	//	            selector, and nothing in its protocol reports which letter
+	//	            is selected — so remoses does not claim one.
+	//	""          The radio exposes a single VFO; VFOA and VFOB are unused.
+	//
+	// The split rule is the same either way: B is where transmit goes.
+	VFOAddressing string `json:"vfo_addressing,omitempty"`
+
+	// SubReceiverReadable distinguishes a second receiver remoses can report
+	// from one that merely exists.
+	//
+	// The IC-9700 has a sub band that receives independently, and no command
+	// that addresses it: reaching it means sending "select the sub band", which
+	// moves the operator's own focus and fights whoever is holding the dial. So
+	// SubReceiver is true there and this is false, and State.SubSMeter stays
+	// empty. remoses does not switch bands behind an operator's back to fill in
+	// a meter.
+	SubReceiverReadable bool `json:"sub_receiver_readable"`
+
 	CWMethod  CWMethod `json:"cw_method"`
 	CWCharset string   `json:"cw_charset,omitempty"`
 	CWMinWPM  int      `json:"cw_min_wpm,omitempty"`

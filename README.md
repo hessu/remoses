@@ -90,7 +90,7 @@ exercised on the air, not that the radio was seen to connect.
 | IC-905 | `ic-905` | 6-byte frequency field on the 10 GHz band | — |
 | IC-910H | `ic-910h` | Own mode-code table; no CAT CW buffer | — |
 | IC-9100 | `ic-9100` | | — |
-| IC-9700 | `ic-9700` | | — |
+| IC-9700 | `ic-9700` | Main's two VFOs and split; sub band present but not readable | — |
 | other Icom | `generic` | Requires an explicit `civ.rig_address` | — |
 
 **The IC-7610 is the only radio here whose second VFO remoses can reach.** Its commands `25` and
@@ -105,10 +105,17 @@ inferring any of it from the model name.
 Other Icoms very likely have `25` and `26` too. They stay off until each radio's own reference
 has been read, which is the same rule the rest of this table follows.
 
-**The IC-9700's second receiver is a different shape and is not supported yet.** It has two
-receivers, each with its own VFO A/B and memory mode, and transmits only on Main — so its split
-means "the other VFO of Main" where the IC-7610's means "the sub receiver". Fitting both needs a
-receivers-and-VFOs model; see [docs/DESIGN.md](docs/DESIGN.md) §5.4.
+**The IC-9700 also has two addressable VFOs, but they mean something else.** Its commands `25`
+and `26` select the *selected and unselected VFO of the Main band*, where the IC-7610's select the
+main and sub bands — one opcode, two axes. So on an IC-9700 remoses exposes Main's two VFOs and
+split, and `caps.vfo_addressing` reads `relative`: A is whichever VFO the operator has selected
+and B is the other, because nothing in that radio's protocol reports which letter is which and
+remoses will not guess. (On an IC-7610 it reads `named` and the labels are stable.)
+
+**Its sub band is deliberately left alone.** The radio has one and it receives independently, but
+no command addresses it — the only route is "select the sub band", which would move the
+operator's focus and fight whoever is holding the dial. So `caps.sub_receiver` is true and
+`caps.sub_receiver_readable` is false, and remoses never switches bands to read a meter.
 
 ### Kenwood (`kenwood` backend)
 

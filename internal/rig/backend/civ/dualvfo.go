@@ -61,12 +61,18 @@ const (
 	bandData1   = 0x01
 )
 
-// bandByte maps a VFO onto the selector 25, 26 and 29 take.
+// bandByte maps a VFO onto the selector 25 and 26 take.
+//
+// The byte is the same either way — 00 for the first slot, 01 for the second —
+// but what the radio does with it is not, and Model.DualVFOBandSelector is what
+// records which. On an IC-7610 those are the main and sub bands, two fixed
+// receivers. On an IC-9700 they are the selected and unselected VFO of the main
+// band. remoses calls both pairs A and B, and Caps.VFOAddressing tells a client
+// whether those labels are stable or relative, rather than leaving it to guess.
 //
 // VFOCurrent is deliberately not accepted. Every caller of these commands is
 // naming a VFO on purpose, and quietly resolving "current" to A would make a
-// request about one VFO act on another the moment a radio appeared whose
-// operating VFO is not A.
+// request about one VFO act on another.
 func bandByte(vfo radio.VFO) (byte, error) {
 	switch vfo {
 	case radio.VFOA, radio.VFOMain:
@@ -102,6 +108,19 @@ func (r *Rig) addressableVFOs() []radio.VFO {
 	return []radio.VFO{radio.VFOCurrent, radio.VFOA, radio.VFOB}
 }
 
+// vfoAddressing tells a client whether State.VFOA and VFOB are stable labels or
+// relative ones. See radio.Caps.VFOAddressing for what the two mean.
+func (r *Rig) vfoAddressing() string {
+	switch {
+	case !r.model.DualVFO:
+		return ""
+	case r.model.DualVFOBandSelector:
+		return "named"
+	default:
+		return "relative"
+	}
+}
+
 // requireDualVFO reports why this radio cannot address a VFO by name, or nil.
 func (r *Rig) requireDualVFO() error {
 	if !r.model.DualVFO {
@@ -129,11 +148,15 @@ func (r *Rig) ReadVFOs(ctx context.Context, c backend.Conn) error {
 		{KeyVFOMode, r.frame(cmdBandMode, bandMain)},
 		{KeyVFOMode, r.frame(cmdBandMode, bandSub)},
 	}
-	// The passband, per VFO. 1A 03 is one of the commands the reference marks
-	// as taking the 29 prefix, so each VFO's filter width can be read without
-	// selecting it — and the mode needed to turn that index into hertz has just
-	// been read above for the same VFO, which is why these come after.
-	if r.model.FilterWidth {
+	// The passband, per VFO, behind the 29 prefix — which only the IC-7610 has.
+	// 1A 03 is one of the commands its table marks as supporting the prefix, so
+	// each band's filter width can be read without selecting it, and the mode
+	// needed to turn that index into hertz has just been read above for the
+	// same band, which is why these come after.
+	//
+	// An IC-9700 has no 29 at all, so its per-VFO passband is simply not
+	// readable. Publishing nothing beats selecting a band to find out.
+	if r.model.FilterWidth && r.model.DualVFOBandSelector {
 		reqs = append(reqs,
 			request{KeyVFOWidth, r.frame(cmdBand, bandMain, cmdMisc, subFilterWidth)},
 			request{KeyVFOWidth, r.frame(cmdBand, bandSub, cmdMisc, subFilterWidth)})
