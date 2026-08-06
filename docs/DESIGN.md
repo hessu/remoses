@@ -670,6 +670,64 @@ The general lesson is worth keeping: on CI-V several settings share a command, s
 of them rewrites its neighbours. Any new setter here should ask what else its command carries
 before assuming it is narrow.
 
+#### Both VFOs, split and dual watch
+
+Transcribed from the *IC-7610 CI-V Reference Guide* (A7380-7EX-4, Sep 2025). **Only the
+`ic-7610` profile enables any of this**, because that is the only Icom reference remoses has
+read for it. Several others very likely have `25` and `26`; a capability this backend has not
+transcribed is one it does not claim.
+
+| Need | Command |
+|---|---|
+| Read / set one VFO's frequency | `25 <band>` / `25 <band> <5-byte BCD>` |
+| Read / set one VFO's mode, data mode **and** filter | `26 <band>` / `26 <band> <mode> <data> <filter>` |
+| Split | `0F` read, `0F 00` / `0F 01` set |
+| Dual watch | `07 C2` read, `07 C1` / `07 C0` set |
+| Anything else, on the inactive band | `29 <band> <command…>` |
+
+`00` is the main band and `01` the sub; remoses calls them VFO A and B, which is the operator's
+model and the API's.
+
+**Why not `03`/`05` and `04`/`06`.** Those read and write *the operating* frequency and mode —
+whichever VFO the radio is on. There is no way to name the other, so reaching it means selecting
+it, which changes what the operator is using and races the front panel. `25` and `26` put the
+VFO in the frame.
+
+**`29` is a prefix, not a command.** "Regardless of active/inactive the Main or Sub band, you can
+directly specify the Main or Sub band, and send/read the supported command settings." The
+supported ones are marked in the reference's own table, and the two that matter here are: `15 02`,
+the S-meter, and `1A 03`, the filter width. **Frequency and mode are pointedly not marked**, which
+is exactly why `25` and `26` exist as separate commands rather than as `29`-prefixed `03` and `04`.
+
+**`26` is atomic, and that is worth more than this feature.** Mode, data mode and filter travel in
+one frame, so none can disturb the others — which is precisely the collision that produced two of
+the bugs above, where `06` and `1A 06` overwrote each other. Where a request names a VFO, remoses
+takes this path and the collision cannot arise. Note that `26` has no "leave the filter alone"
+encoding: the reference is explicit that a frame omitting the data and filter bytes selects DATA
+OFF and the mode's default filter, so preserving a filter takes a read first.
+
+**The IC-7610 is not the classic A/B pair.** On a single-receiver radio one VFO is live, the
+display shows which, and split transmits on the other. Here both VFOs are real receivers: A is
+always what the radio receives and transmits on, B joins in under dual watch and takes the
+transmit under split. So `state.vfo` reads `A` permanently and remoses offers no VFO-select
+operation, because there is nothing to select.
+
+Two things follow the rule this backend already applies elsewhere. The sub receiver's meter is
+polled **only while dual watch is on** — with it off that receiver is not running, and a reading
+from it would sit in the cache looking live, the same reasoning `yaesubin` uses to gate a transmit
+meter on PTT. And the per-VFO passband is read behind the `29` prefix and converted against **that
+VFO's** own mode rather than the operating one; a `passband_hz` that always read zero would have
+been the same defect this backend was carrying twice that morning.
+
+**This model does not fit the IC-9700, and that is a known limit rather than an oversight.** That
+radio has two *receivers*, each with its own VFO A/B and memory mode, its own split, and a rule
+that the two must be on different bands. Worse, `split` means different things on the two radios:
+on the IC-7610 it moves transmit to the sub receiver, while the IC-9700 always transmits on Main,
+so there it must mean the other VFO *of Main*. One name, two axes — the `1C 01` shape again.
+Supporting it means `receivers → VFOs`, with the flat fields kept as a projection of the
+transmitting receiver's selected VFO; the work is deferred until that radio's reference has been
+read, rather than guessed at from this one.
+
 **The rest of the surface was exercised on the same radio**, and passed: authentication;
 the whole lock lifecycle including steal and expiry; WebSocket streaming and `ws-ticket`; all
 ten modes; all three filter slots; the filter-width ladder with its snapping; explicit PTT;

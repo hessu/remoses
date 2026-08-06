@@ -83,7 +83,7 @@ exercised on the air, not that the radio was seen to connect.
 | IC-7300 | `ic-7300` | | — |
 | IC-7300MK2 | `ic-7300mk2` | | — |
 | IC-7600 | `ic-7600` | | — |
-| IC-7610 | `ic-7610` | Every implemented feature exercised on the air, interlocks included | **yes** |
+| IC-7610 | `ic-7610` | Both VFOs, split and dual watch; every implemented feature exercised on the air, interlocks included | **yes** |
 | IC-7700 | `ic-7700` | | — |
 | IC-7760 | `ic-7760` | | — |
 | IC-7850 / IC-7851 | `ic-7850` | One profile; identical over CI-V | — |
@@ -92,6 +92,23 @@ exercised on the air, not that the radio was seen to connect.
 | IC-9100 | `ic-9100` | | — |
 | IC-9700 | `ic-9700` | | — |
 | other Icom | `generic` | Requires an explicit `civ.rig_address` | — |
+
+**The IC-7610 is the only radio here whose second VFO remoses can reach.** Its commands `25` and
+`26` name a VFO in the frame, so both can be read and set without selecting either; everywhere
+else the protocol only offers "the VFO the radio is on", and remoses controls that rather than
+labelling it A or B. So on an IC-7610 the API exposes both VFOs — each with its own frequency,
+mode, data mode and filter — plus **split** (transmit on the other VFO) and **dual watch**
+(receive on both at once, with the second receiver's S-meter streaming while it runs). Clients
+should read `caps.vfos`, `caps.split`, `caps.dual_watch` and `caps.per_vfo_mode` rather than
+inferring any of it from the model name.
+
+Other Icoms very likely have `25` and `26` too. They stay off until each radio's own reference
+has been read, which is the same rule the rest of this table follows.
+
+**The IC-9700's second receiver is a different shape and is not supported yet.** It has two
+receivers, each with its own VFO A/B and memory mode, and transmits only on Main — so its split
+means "the other VFO of Main" where the IC-7610's means "the sub receiver". Fitting both needs a
+receivers-and-VFOs model; see [docs/DESIGN.md](docs/DESIGN.md) §5.4.
 
 ### Kenwood (`kenwood` backend)
 
