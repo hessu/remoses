@@ -582,6 +582,17 @@ components:
             remoses stops polling it rather than leaving a stale reading that
             would look live.
 
+        break_in:
+          type: string
+          enum: [off, semi, full]
+          description: |
+            CW break-in. Absent on a radio remoses cannot ask. It decides
+            whether CW sent over CAT reaches the air: with it off and the
+            transmitter not already keyed, the rig accepts a message and
+            transmits nothing, so `POST /cw` is refused with 422 rather than
+            silently going nowhere. A client offering a CW box should show this
+            beside it.
+
         connected: { type: boolean }
         seq: { type: integer, format: int64 }
         updated_at: { type: string, format: date-time }
@@ -619,6 +630,22 @@ components:
         dual_watch:
           type: boolean
           description: Needs `caps.dual_watch`; 422 otherwise.
+        break_in:
+          type: string
+          enum: [off, semi, full]
+          description: |
+            CW break-in. Needs `caps.break_in_control`; 422 otherwise. Applied
+            before PTT, so a request that enables break-in and then sends does
+            the two in the order that makes the first message audible.
+        vfo_mode:
+          type: boolean
+          description: |
+            `true` returns the radio to VFO operation, out of memory mode. An
+            action rather than a state: remoses models no memory mode, so there
+            is nothing to read back and `false` is a 422. Combine with `vfo` to
+            select which VFO, where the radio has such a command. Applied before
+            everything else, since a rig on a memory channel refuses much of the
+            rest.
 
     Caps:
       type: object
@@ -674,6 +701,13 @@ components:
             only its own frequency. Where this is false, treat mode and filter
             as properties of the radio and read only `frequency` from
             `state.vfo_a` / `state.vfo_b`.
+        break_in_control:
+          type: boolean
+          description: |
+            remoses can read and set CW break-in on this radio. Worth checking
+            before offering a CW box: where it is true, `state.break_in` says
+            whether Morse sent now would actually be transmitted, and `POST /cw`
+            refuses when it would not.
         cw_method:
           type: string
           enum: [none, cat, serial_key]

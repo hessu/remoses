@@ -65,6 +65,10 @@ type Rig struct {
 	// asking for and would be a stale number if it were.
 	dualWatch atomic.Bool
 
+	// breakIn is the last 16 47 reading, held as a string so the CW path can
+	// ask whether a message would actually be transmitted before queueing one.
+	breakIn atomic.Value // radio.BreakIn
+
 	// vfoA and vfoB accumulate what the per-VFO commands report separately. 25
 	// answers a frequency, 26 a mode with its data flag and filter, and a
 	// 29-prefixed 1A 03 a passband — but a Patch carries a whole VFOState, so
@@ -224,8 +228,9 @@ func (r *Rig) Caps() radio.Caps {
 		DualWatch:           r.model.DualWatch,
 		// Command 26 carries mode, data mode and filter per VFO, so on those
 		// radios all three are per-VFO rather than properties of the set.
-		PerVFOMode:    r.model.DualVFO,
-		VFOAddressing: r.vfoAddressing(),
+		PerVFOMode:     r.model.DualVFO,
+		VFOAddressing:  r.vfoAddressing(),
+		BreakInControl: r.model.BreakIn,
 		// Capability, not configuration: a radio with command 17 has a CAT CW
 		// buffer whether or not this station is configured to use it, and one
 		// without it — the IC-718 — cannot send Morse over CAT at all, however
@@ -370,6 +375,13 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		}
 		if r.model.DualWatch {
 			reqs = append(reqs, request{KeyDualWatch, r.frame(cmdVFO, subDualWatch)})
+		}
+		// Break-in belongs in the slow tier — it moves only when somebody
+		// changes it — but it has to be read at all, because the CW path
+		// consults it before queueing and an unknown reading is not something
+		// to guess at.
+		if r.model.BreakIn {
+			reqs = append(reqs, request{KeyBreakIn, r.frame(cmdFunc, subBreakIn)})
 		}
 		// Data mode has to be read, not merely written. Nothing else reports it:
 		// there is no data-mode flag in any other answer, and the rig does not

@@ -43,6 +43,15 @@ type simRig struct {
 	split      byte
 	dualWatch  byte
 
+	// memoryMode and selectedVFO exist only so a test can see that command 07
+	// did something. remoses models no memory mode beyond leaving it.
+	memoryMode  bool
+	selectedVFO byte
+
+	// breakIn defaults to 00, BK-IN off — which is the state that silently
+	// swallows a CW message, and so the one worth defaulting to in tests.
+	breakIn byte
+
 	cwMessages []string
 	cwAborts   int
 
@@ -214,9 +223,18 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 		return ok, nil
 
 	case cmdVFO:
-		// Only dual watch is modelled; the rest of command 07 is selection and
-		// band exchange, which remoses does not send.
 		switch {
+		// A bare 07 is "select the VFO mode": the way out of memory mode, and
+		// a no-op on a rig already on a VFO.
+		case len(body) == 0:
+			s.memoryMode = false
+			return ok, nil
+		// 07 00 / 07 01 select VFO A and VFO B. Note these are the same two
+		// bytes the band selector of 25 and 26 uses, meaning something else.
+		case len(body) == 1 && body[0] <= 0x01:
+			s.memoryMode = false
+			s.selectedVFO = body[0]
+			return ok, nil
 		case len(body) == 1 && body[0] == subDualWatch:
 			return [][]byte{fromRig(cmdVFO, subDualWatch, s.dualWatch)}, nil
 		case len(body) == 1 && body[0] == subDualWatchOn:
@@ -227,6 +245,18 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 			return ok, nil
 		}
 		return ng, nil
+
+	case cmdFunc:
+		// Only 16 47, CW break-in: the setting that decides whether a CW
+		// message sent over CAT is audible.
+		if len(body) < 1 || body[0] != subBreakIn {
+			return ng, nil
+		}
+		if len(body) == 1 {
+			return [][]byte{fromRig(cmdFunc, subBreakIn, s.breakIn)}, nil
+		}
+		s.breakIn = body[1]
+		return ok, nil
 
 	case cmdSplit:
 		if len(body) == 0 {
@@ -428,8 +458,11 @@ func TestPoll(t *testing.T) {
 		// and 07 is dual watch. All of it is slow-tier because it moves only
 		// when somebody changes it, and four extra transactions have no
 		// business on a 500 ms tick.
+		// 16 is CW break-in, read here because the CW path consults it before
+		// queueing anything: with it off, a message would be accepted and
+		// never transmitted.
 		{"slow", backend.PollSlow, []string{"14/0A", "1A/03",
-			"25", "25", "26", "26", "0F", "07", "1A/06"}},
+			"25", "25", "26", "26", "0F", "07", "16", "1A/06"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

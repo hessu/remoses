@@ -382,6 +382,52 @@ func TestIC9700SubReceiverIsNotRead(t *testing.T) {
 	}
 }
 
+// TestSelectVFOModeIsTheWayOutOfMemory covers the only part of memory mode
+// remoses implements. A rig on a memory channel answers 25 and 26 with NG, so
+// its per-VFO readings go stale with nothing else in the API able to move them.
+func TestSelectVFOModeIsTheWayOutOfMemory(t *testing.T) {
+	s := newSim(t)
+	s.backend = ic9700(t)
+	ctx := context.Background()
+
+	// No VFO named: just leave memory mode, whichever VFO that lands on.
+	if err := s.backend.SelectVFOMode(ctx, s, radio.VFOCurrent); err != nil {
+		t.Fatalf("SelectVFOMode: %v", err)
+	}
+	sent := s.log[len(s.log)-1]
+	if body := sent[5 : len(sent)-1]; len(body) != 0 {
+		t.Errorf("sent 07 with body % X, want a bare 07", body)
+	}
+
+	// Naming one also selects it, where the radio has the command.
+	if err := s.backend.SelectVFOMode(ctx, s, radio.VFOB); err != nil {
+		t.Fatalf("SelectVFOMode(B): %v", err)
+	}
+	sent = s.log[len(s.log)-1]
+	if body := sent[5 : len(sent)-1]; len(body) != 1 || body[0] != 0x01 {
+		t.Errorf("sent 07 % X, want 07 01 for VFO B", body)
+	}
+}
+
+// TestIC7610RefusesVFOSelect is the other half. That radio's two VFOs are fixed
+// receivers with no A/B switch, and its table has no 07 00 / 07 01 — so naming
+// one must fail rather than quietly doing only the "leave memory mode" part.
+func TestIC7610RefusesVFOSelect(t *testing.T) {
+	s := newSim(t)
+	ctx := context.Background()
+
+	if err := s.backend.SelectVFOMode(ctx, s, radio.VFOCurrent); err != nil {
+		t.Fatalf("SelectVFOMode on an IC-7610: %v", err)
+	}
+	err := s.backend.SelectVFOMode(ctx, s, radio.VFOA)
+	if err == nil {
+		t.Fatal("SelectVFOMode(A) succeeded on a radio with no A/B switch")
+	}
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Errorf("refused with %v, which the API reports as a 500", err)
+	}
+}
+
 // TestBandByteRejectsCurrent guards a subtle one: resolving "current" to A
 // would make a request about one VFO act on another the moment a radio appeared
 // whose operating VFO is not A.

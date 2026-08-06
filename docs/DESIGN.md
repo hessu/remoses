@@ -756,6 +756,41 @@ Confirmed on an IC-9700: `vfo_addressing: relative`, VFO A tracking the operatin
 VFO B set to 432.200 USB and back with the operating VFO untouched, split on and off, and no band
 selection on the wire at any point.
 
+**Memory mode is not modelled, but leaving it is.** Command `07` selects VFO mode and `08`
+selects memory mode; remoses implements only the first, through `vfo_mode: true`. Modelling
+channels would need a channel list, a select command and a state field; what an operator needs
+from a daemon is the way *out*, because a rig on a memory channel answers `25` and `26` with NG —
+the reference says so for memory, call-channel and DR modes — so its per-VFO readings go stale
+with nothing in the API able to move them. Naming a VFO also selects it where `07 00`/`07 01`
+exist, which is the IC-9700 and not the IC-7610.
+
+#### CW break-in, and a command that succeeded and did nothing
+
+`16 47` reads and sets break-in: `00` off, `01` semi, `02` full. It is in the table of both
+references remoses has read, and it is not one more switch — it decides whether CW sent over CAT
+reaches the air at all. Both references print the same footnote against command `17`:
+
+> …if the [TRANSMIT] or an external TX switch is ON, or the Break-in function is ON, a message
+> will be transmitted as CW code when you send it from your PC.
+
+With break-in off and nothing keying by hand, `17` is **accepted**, the rig's buffer drains on
+schedule, PTT never rises and nothing goes out. Every signal remoses has says success. That is the
+`1C 01` failure wearing different clothes, and it was found the only way it could be — by sending
+real Morse at a real radio and having the operator report they heard none of it.
+
+So remoses reads break-in onto the slow tier, publishes it as `state.break_in` with
+`caps.break_in_control`, lets a client set it, and **refuses to queue CW that would go nowhere**:
+`Session.CheckCWWillTransmit` fails the request with 422 naming the fix. Two rules keep that from
+becoming its own outage. An *unknown* break-in never blocks — a radio whose reference has not been
+read for `16 47` must still be able to send — and PTT already being up is accepted, because that
+is one of the three conditions the footnote names.
+
+Setting it exposed a second bug in the same hour: `16 47` is read on the slow tier, and
+`ApplyPatch` did not mark a break-in request as needing that tier, so the write succeeded while
+the response carried the value from before it. The radio's own display showed BKIN on while
+remoses reported it off and went on refusing to send. **Any field read on the slow tier has to be
+in that list**; there is now a test per field rather than trust.
+
 **The rest of the surface was exercised on the same radio**, and passed: authentication;
 the whole lock lifecycle including steal and expiry; WebSocket streaming and `ws-ticket`; all
 ten modes; all three filter slots; the filter-width ladder with its snapping; explicit PTT;

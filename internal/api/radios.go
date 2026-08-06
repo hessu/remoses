@@ -153,6 +153,15 @@ type statePatchBody struct {
 	// answers 422 rather than pretending.
 	Split     *bool `json:"split"`
 	DualWatch *bool `json:"dual_watch"`
+
+	// VFOMode true returns the radio to VFO operation, out of memory mode. It
+	// is an action rather than a state: remoses models no memory mode, so
+	// there is nothing to read back and nothing false could mean.
+	VFOMode *bool `json:"vfo_mode"`
+
+	// BreakIn is off, semi or full. It decides whether CW sent over CAT is
+	// audible, so a client offering a CW box should offer this beside it.
+	BreakIn *radio.BreakIn `json:"break_in"`
 }
 
 // toRequest converts the body into the session's patch request.
@@ -176,6 +185,8 @@ func (b statePatchBody) toRequest() (rig.PatchRequest, error) {
 		PTT:           b.PTT,
 		Split:         b.Split,
 		DualWatch:     b.DualWatch,
+		VFOMode:       b.VFOMode,
+		BreakIn:       b.BreakIn,
 	}
 	if b.VFO != nil {
 		req.VFO = *b.VFO

@@ -121,6 +121,42 @@ func (r *Rig) vfoAddressing() string {
 	}
 }
 
+// SelectVFOMode returns the radio to VFO operation with command 07, which is
+// how it leaves memory mode.
+//
+// remoses models no part of memory mode but this one. A rig left on a memory
+// channel answers 25 and 26 with NG — the IC-9700's reference says so outright
+// for memory, call-channel and DR modes — so its per-VFO readings go stale with
+// nothing in the API able to move them. This is the way out.
+//
+// Naming a VFO also selects it, where the radio has such a command. The IC-7610
+// does not: its two VFOs are fixed receivers and its table has no 07 00 or
+// 07 01, so A and B are refused there rather than quietly ignored, because a
+// request that silently did half of what it said is worse than one that fails.
+func (r *Rig) SelectVFOMode(ctx context.Context, c backend.Conn, vfo radio.VFO) error {
+	if !r.model.VFOModeSelect {
+		return fmt.Errorf("civ: %s has no command to leave memory mode (07): %w",
+			r.model.Label, backend.ErrUnsupported)
+	}
+	if vfo == radio.VFOCurrent {
+		return r.set(ctx, c, "VFO mode", r.frame(cmdVFO))
+	}
+	if !r.model.VFOSelect {
+		return fmt.Errorf("civ: the %s cannot select VFO %s: its two VFOs are separate "+
+			"receivers with no A/B switch, so remoses can only return it to VFO mode: %w",
+			r.model.Label, vfo, backend.ErrUnsupported)
+	}
+	sub, err := bandByte(vfo)
+	if err != nil {
+		return err
+	}
+	// 07 00 and 07 01 are "select VFO A" and "select VFO B", which is a
+	// different meaning of the same two bytes from the band selector 25 and 26
+	// take — the reason bandByte is only being used for its A-is-0, B-is-1
+	// mapping here and nothing else.
+	return r.set(ctx, c, "VFO select", r.frame(cmdVFO, sub))
+}
+
 // requireDualVFO reports why this radio cannot address a VFO by name, or nil.
 func (r *Rig) requireDualVFO() error {
 	if !r.model.DualVFO {

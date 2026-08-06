@@ -109,6 +109,34 @@ type Model struct {
 	// same time as the first. Whether remoses can *read* it is a different
 	// question — see DualWatch and the IC-9700's entry.
 	SubReceiver bool
+
+	// VFOModeSelect marks command 07 with no sub-command, "select the VFO
+	// mode", which is how a radio leaves memory mode.
+	//
+	// remoses does not model memory mode: it has no channel list, and command
+	// 25 answers NG there, so a radio left in MR reports stale readings with no
+	// way out. This is the way out, and the only part of memory mode worth
+	// implementing — an operator whose rig is on a memory channel wants it back
+	// on a VFO, not a memory API.
+	//
+	// True on the two radios whose references have been read for it. Command 07
+	// is very likely universal across Icom; it stays off elsewhere under the
+	// same rule as the rest of this table.
+	VFOModeSelect bool
+	// VFOSelect marks 07 00 and 07 01, which select VFO A and VFO B. Separate
+	// from VFOModeSelect because the IC-7610 has the latter and not the former:
+	// its two VFOs are fixed receivers with no A/B switch between them.
+	VFOSelect bool
+
+	// BreakIn marks command 16 47, the CW break-in setting.
+	//
+	// It gates whether CW sent over CAT is audible at all. Both references
+	// remoses has read carry the same footnote against command 17: a message
+	// from the PC is transmitted "if the [TRANSMIT] or an external TX switch is
+	// ON, or the Break-in function is ON". With break-in off and nothing keying
+	// manually, 17 is accepted and nothing goes out — which is exactly what
+	// happened on an IC-9700 the first time this was tried.
+	BreakIn bool
 	// DualWatch marks 07 C0/C1/C2, receiving on both VFOs at once. This is what
 	// makes the second VFO a second *receiver* rather than a stored frequency,
 	// and so what makes a sub S-meter reading mean anything.
@@ -182,6 +210,10 @@ var models = map[string]Model{
 		m.Split = true
 		m.SubReceiver = true
 		m.DualWatch = true
+		m.VFOModeSelect = true
+		m.BreakIn = true
+		// No VFOSelect: its table has no 07 00 / 07 01. The two VFOs are fixed
+		// receivers and there is no A/B switch to throw.
 		return m
 	}(),
 
@@ -219,6 +251,9 @@ var models = map[string]Model{
 		m.SubReceiver = true
 		// No DualWatch: 07 C0/C1/C2 is not in this radio's command table, and
 		// its sub band is not the IC-7610's dual watch in any case.
+		m.VFOModeSelect = true
+		m.VFOSelect = true // 07 00 and 07 01 select VFO A and VFO B
+		m.BreakIn = true
 		return m
 	}(),
 

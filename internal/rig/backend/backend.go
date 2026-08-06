@@ -184,6 +184,42 @@ type ReplyFramer interface {
 	Expect(req []byte)
 }
 
+// VFOModeSelector is implemented by a backend that can take the radio out of
+// memory mode and back onto a VFO.
+//
+// It is deliberately the only part of memory mode remoses implements. Modelling
+// channels would mean a channel list, a channel-select command and a state
+// field for which one is active; what an operator actually needs from a daemon
+// is the way out, because a rig left on a memory channel reports readings that
+// several commands answer NG for and that nothing in this API can move.
+//
+// Separate from DualVFO because the two are independent: a single-VFO radio can
+// still be in memory mode, and a dual-VFO one need not offer an A/B switch.
+type VFOModeSelector interface {
+	// SelectVFOMode returns the radio to VFO operation. VFOCurrent means "leave
+	// memory mode, whichever VFO that lands on"; naming A or B also selects
+	// that VFO, on radios that have such a command, and is refused where the
+	// two VFOs are fixed receivers with no switch between them.
+	SelectVFOMode(ctx context.Context, c Conn, vfo radio.VFO) error
+}
+
+// BreakInController is implemented by a backend that can read and set the CW
+// break-in setting.
+//
+// It is not a convenience. On an Icom, a CW message sent over CAT transmits
+// only "if the [TRANSMIT] or an external TX switch is ON, or the Break-in
+// function is ON" — so with break-in off, command 17 is accepted, the buffer
+// drains on schedule and nothing goes on the air. A rig that can report this
+// lets the session refuse to send Morse into silence, which is the whole
+// reason the interface exists rather than being one more setter.
+type BreakInController interface {
+	SetBreakIn(ctx context.Context, c Conn, v radio.BreakIn) error
+	// BreakIn is the last reading, from the poll rather than a fresh
+	// transaction: the CW path consults it on every send and must not add a
+	// round trip to the keying path.
+	BreakIn() radio.BreakIn
+}
+
 // MorseSender is implemented by backends whose rig has a CAT CW buffer.
 //
 // The pacing loop lives in internal/cw and is shared; this interface is only

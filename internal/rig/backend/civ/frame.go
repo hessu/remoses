@@ -52,6 +52,11 @@ const (
 	// them, which is exactly why 25 and 26 exist.
 	cmdBand = 0x29
 
+	// cmdFunc is 16, the on/off function group; 16 47 is CW break-in, which
+	// decides whether a message sent with command 17 reaches the air at all.
+	cmdFunc    = 0x16
+	subBreakIn = 0x47 // 16 47: 00 off, 01 semi, 02 full
+
 	subDualWatchOff = 0xC0 // 07 C0
 	subDualWatchOn  = 0xC1 // 07 C1
 	subDualWatch    = 0xC2 // 07 C2, read/set, 00 off 01 on

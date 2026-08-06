@@ -117,6 +117,18 @@ no command addresses it — the only route is "select the sub band", which would
 operator's focus and fight whoever is holding the dial. So `caps.sub_receiver` is true and
 `caps.sub_receiver_readable` is false, and remoses never switches bands to read a meter.
 
+**CW break-in is controllable, and it matters more than it sounds.** On an Icom a CW message sent
+over CAT is transmitted only if break-in is on or the transmitter is already keyed — otherwise
+the rig accepts the message, empties its buffer on schedule and puts nothing on the air. remoses
+reads the setting (`state.break_in`, `caps.break_in_control`), lets you change it
+(`{"break_in": "semi"}`), and **refuses to queue CW that would go nowhere**, with a 422 naming
+the fix rather than a message you never hear. Radios whose reference has not been read for the
+command are never blocked by that check.
+
+**Memory mode is not modelled — but getting out of it is.** `{"vfo_mode": true}` returns the
+radio to VFO operation, which is what an operator stuck on a memory channel actually needs; a rig
+left there refuses the per-VFO commands and its readings go stale.
+
 ### Kenwood (`kenwood` backend)
 
 | Model | `kenwood.model` | Notes | Tested |

@@ -39,6 +39,9 @@ const (
 	// KeyVFOWidth is a 1A 03 answer behind a 29 prefix: one VFO's passband,
 	// separate from the unprefixed read that fills the operating one.
 	KeyVFOWidth backend.Key = "29/1A/03"
+	// KeyBreakIn is 16 47, the CW break-in setting: the difference between a
+	// CW message being transmitted and being accepted and discarded.
+	KeyBreakIn backend.Key = "16/47"
 )
 
 // Decode turns one framed message into an Update.
@@ -127,6 +130,18 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		// 26 <band> <mode> <data> <filter>.
 		if r.model.DualVFO {
 			r.decodeVFOMode(&u, body)
+		}
+		return u, nil
+
+	case cmdFunc:
+		// 16 is a group of on/off functions; only break-in is modelled, because
+		// it is the one that decides whether CW from the computer is audible.
+		if r.model.BreakIn && len(body) >= 2 && body[0] == subBreakIn {
+			if v, ok := breakInValue(body[1]); ok {
+				u.Key = KeyBreakIn
+				u.Patch.BreakIn = &v
+				r.breakIn.Store(v)
+			}
 		}
 		return u, nil
 

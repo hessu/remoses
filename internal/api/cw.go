@@ -90,6 +90,15 @@ func (s *server) sendCW(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Refuse Morse that would go nowhere. On a radio whose break-in is off,
+	// the rig accepts the message, drains its buffer on schedule and transmits
+	// nothing — every signal here says success and the operator hears silence.
+	// Better a 422 naming the fix than a message that was never sent.
+	if err := sess.CheckCWWillTransmit(); err != nil {
+		s.fail(w, r, id, actionSendCW, err)
+		return
+	}
+
 	// Read before enqueueing: what is already queued is what this text sits
 	// behind.
 	ahead := snd.Status().Queued

@@ -274,6 +274,36 @@ func (m Meter) Fraction() float64 {
 	return min(max(f, 0), 1)
 }
 
+// BreakIn is the rig's CW break-in setting, which decides whether keying the
+// transmitter is automatic.
+//
+// It matters far beyond being one more knob: on an Icom a CW message sent over
+// CAT transmits only "if the [TRANSMIT] or an external TX switch is ON, or the
+// Break-in function is ON" — the reference says so in as many words. With
+// break-in off and nothing keying manually, command 17 is accepted, the queue
+// drains, and nothing goes on the air. That is a success that means nothing,
+// which is the failure this project works hardest to avoid, so remoses reads
+// this, publishes it, and refuses to send Morse into it.
+type BreakIn string
+
+const (
+	// BreakInUnknown is a radio that has not reported one, or one remoses
+	// cannot ask. It is never treated as "off": refusing to send CW on a radio
+	// whose break-in state is simply unknown would break every rig whose
+	// reference this backend has not read.
+	BreakInUnknown BreakIn = ""
+	BreakInOff     BreakIn = "off"
+	// BreakInSemi keys the transmitter and holds it for the delay; BreakInFull
+	// is QSK, receiving between elements. Both transmit, which is all the CW
+	// path needs to know.
+	BreakInSemi BreakIn = "semi"
+	BreakInFull BreakIn = "full"
+)
+
+// Transmits reports whether CW keyed from the computer will actually go out
+// without somebody holding a switch down.
+func (b BreakIn) Transmits() bool { return b == BreakInSemi || b == BreakInFull }
+
 // CWStatus describes the CW sending queue.
 type CWStatus struct {
 	Busy           bool `json:"busy"`
@@ -351,6 +381,10 @@ type State struct {
 	DualWatch bool  `json:"dual_watch"`
 	SubSMeter Meter `json:"sub_s_meter"`
 
+	// BreakIn decides whether CW sent from here reaches the air at all. Empty
+	// on a radio remoses cannot ask.
+	BreakIn BreakIn `json:"break_in,omitempty"`
+
 	Connected bool      `json:"connected"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Seq       uint64    `json:"seq"`
@@ -404,6 +438,7 @@ type Patch struct {
 	Split     *bool
 	DualWatch *bool
 	SubSMeter *Meter
+	BreakIn   *BreakIn
 }
 
 // Empty reports whether the patch carries no fields at all.
@@ -413,7 +448,8 @@ func (p Patch) Empty() bool {
 		p.PTT == nil && p.SMeter == nil && p.SWR == nil && p.ALC == nil &&
 		p.CWBusy == nil && p.Connected == nil &&
 		p.VFO == nil && p.VFOA == nil && p.VFOB == nil &&
-		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil
+		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil &&
+		p.BreakIn == nil
 }
 
 // Apply returns s updated with every field the patch sets. It does not touch
@@ -474,6 +510,9 @@ func (s State) Apply(p Patch) State {
 	if p.SubSMeter != nil {
 		s.SubSMeter = *p.SubSMeter
 	}
+	if p.BreakIn != nil {
+		s.BreakIn = *p.BreakIn
+	}
 	return s
 }
 
@@ -532,6 +571,9 @@ func (s State) Diff(next State) Patch {
 	// WebSocket layer's min_interval rather than suppressed here.
 	if s.SubSMeter != next.SubSMeter {
 		p.SubSMeter = &next.SubSMeter
+	}
+	if s.BreakIn != next.BreakIn {
+		p.BreakIn = &next.BreakIn
 	}
 	return p
 }
@@ -606,6 +648,12 @@ type Caps struct {
 	// empty. remoses does not switch bands behind an operator's back to fill in
 	// a meter.
 	SubReceiverReadable bool `json:"sub_receiver_readable"`
+
+	// BreakInControl reports that remoses can read and set the CW break-in
+	// setting. Worth publishing on its own because it gates whether CW sent
+	// over CAT reaches the air at all: a client offering a CW box on a radio
+	// with this true should show the break-in state next to it.
+	BreakInControl bool `json:"break_in_control"`
 
 	CWMethod  CWMethod `json:"cw_method"`
 	CWCharset string   `json:"cw_charset,omitempty"`

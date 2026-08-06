@@ -515,6 +515,83 @@ func (s *Session) dualVFO() backend.DualVFO {
 	return d
 }
 
+// breakInController reports the backend's CW break-in control, or nil.
+func (s *Session) breakInController() backend.BreakInController {
+	b, _ := s.rig.(backend.BreakInController)
+	return b
+}
+
+// SetBreakIn changes the CW break-in setting.
+func (s *Session) SetBreakIn(ctx context.Context, v radio.BreakIn) (radio.State, error) {
+	b := s.breakInController()
+	if b == nil || !s.Caps().BreakInControl {
+		return s.State(), fmt.Errorf("radio %s: break-in: %w", s.id, ErrUnsupported)
+	}
+	if err := s.requireConnected(); err != nil {
+		return s.State(), err
+	}
+	if err := b.SetBreakIn(ctx, s, v); err != nil {
+		return s.State(), err
+	}
+	return s.readback(ctx, backend.PollSlow, backend.PollFast)
+}
+
+// CheckCWWillTransmit reports why Morse queued now would not reach the air.
+//
+// It exists because the failure it catches is invisible: with break-in off and
+// nothing keying by hand, an Icom accepts command 17, drains its buffer on
+// schedule and transmits nothing. Every signal remoses has says success — the
+// queue empties, no error comes back — and the operator hears silence. That
+// happened on an IC-9700 the first time CW was sent to it.
+//
+// Only a radio that can actually report break-in is checked. Where the setting
+// is unknown, or the backend cannot read it, this says nothing rather than
+// blocking a rig whose reference has not been read for the command: refusing on
+// an unknown is how a safety check turns into an outage.
+//
+// PTT already being up is accepted, because that is one of the three conditions
+// the reference names, and an operator holding the transmitter down is entitled
+// to send into it.
+func (s *Session) CheckCWWillTransmit() error {
+	b := s.breakInController()
+	if b == nil {
+		return nil
+	}
+	v := b.BreakIn()
+	if v == radio.BreakInUnknown || v.Transmits() || s.State().PTT {
+		return nil
+	}
+	return fmt.Errorf("radio %s: break-in is off, so CW sent over CAT would be "+
+		"accepted and never transmitted; set break_in to semi or full, or key the "+
+		"transmitter another way first: %w", s.id, ErrUnsupported)
+}
+
+// vfoModeSelector reports the backend's way out of memory mode, or nil.
+func (s *Session) vfoModeSelector() backend.VFOModeSelector {
+	v, _ := s.rig.(backend.VFOModeSelector)
+	return v
+}
+
+// SelectVFOMode returns the radio to VFO operation, out of memory mode.
+//
+// Deliberately not gated on requireConnected before validating, like the other
+// setters: an operator reaching for this is usually doing so because the radio
+// is behaving oddly, and "this radio cannot do that" is more useful then than
+// "not connected".
+func (s *Session) SelectVFOMode(ctx context.Context, vfo radio.VFO) (radio.State, error) {
+	v := s.vfoModeSelector()
+	if v == nil {
+		return s.State(), fmt.Errorf("radio %s: leaving memory mode: %w", s.id, ErrUnsupported)
+	}
+	if err := s.requireConnected(); err != nil {
+		return s.State(), err
+	}
+	if err := v.SelectVFOMode(ctx, s, vfo); err != nil {
+		return s.State(), err
+	}
+	return s.readback(ctx, backend.PollSlow, backend.PollFast)
+}
+
 // SetVFOFrequency tunes one named VFO, which is a different operation from
 // SetFrequency: that one moves whatever the radio is on.
 //
@@ -627,13 +704,23 @@ type PatchRequest struct {
 	// they sit beside VFO rather than inside it.
 	Split     *bool
 	DualWatch *bool
+
+	// VFOMode returns the radio to VFO operation, out of memory mode. Write
+	// only, and true only: remoses models no memory mode to switch back into,
+	// so there is nothing false could mean. Applied before everything else,
+	// since a rig on a memory channel refuses most of what follows.
+	VFOMode *bool
+
+	// BreakIn is the CW break-in setting, which decides whether Morse sent
+	// over CAT reaches the air.
+	BreakIn *radio.BreakIn
 }
 
 // Empty reports whether the request would change nothing.
 func (r PatchRequest) Empty() bool {
 	return r.Mode == nil && r.DataMode == nil && r.Frequency == nil &&
 		r.FilterSlot == nil && r.FilterWidthHz == nil && r.Power == nil && r.PTT == nil &&
-		r.Split == nil && r.DualWatch == nil
+		r.Split == nil && r.DualWatch == nil && r.VFOMode == nil && r.BreakIn == nil
 }
 
 // vfoState is the cached state of one named VFO, for filling in the half of a
@@ -686,6 +773,19 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 			return s.State(), fmt.Errorf("radio %s: filter slot %d: %w", s.id, *req.FilterSlot, ErrUnsupported)
 		}
 	}
+	if req.BreakIn != nil && !caps.BreakInControl {
+		return s.State(), fmt.Errorf("radio %s: break-in: %w", s.id, ErrUnsupported)
+	}
+	if req.VFOMode != nil {
+		if !*req.VFOMode {
+			return s.State(), fmt.Errorf("radio %s: vfo_mode can only be set true; "+
+				"remoses does not model memory mode and has nothing to switch back into: %w",
+				s.id, ErrUnsupported)
+		}
+		if s.vfoModeSelector() == nil {
+			return s.State(), fmt.Errorf("radio %s: leaving memory mode: %w", s.id, ErrUnsupported)
+		}
+	}
 	// The dual-VFO controls, validated here with the rest so that a request
 	// naming VFO B on a radio that cannot address one is refused before
 	// anything reaches the wire.
@@ -713,8 +813,25 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		return s.State(), err
 	}
 
+	// Which tier the read-back needs. Everything here is read on the slow tier,
+	// so a request touching any of it must re-read that tier or the response —
+	// and the cache behind it — reports the value from before the write.
+	//
+	// Break-in is the one that showed why this list has to be kept in step: it
+	// was missing, so setting break-in answered with the old value and the CW
+	// path went on refusing to send.
 	slow := req.Power != nil || req.FilterSlot != nil || req.FilterWidthHz != nil ||
-		req.Split != nil || req.DualWatch != nil || req.namesAVFO()
+		req.Split != nil || req.DualWatch != nil || req.namesAVFO() ||
+		req.VFOMode != nil || req.BreakIn != nil
+
+	// First of everything: a radio on a memory channel refuses several of the
+	// commands below, so a request that says "get back on a VFO and tune there"
+	// has to do those in that order to mean anything.
+	if req.VFOMode != nil {
+		if err := s.vfoModeSelector().SelectVFOMode(ctx, s, req.VFO); err != nil {
+			return s.State(), err
+		}
+	}
 
 	// A request naming a VFO takes the whole mode/frequency path through the
 	// dual-VFO commands instead. On an Icom that is strictly better even for
@@ -788,6 +905,15 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	}
 	if req.Power != nil {
 		if err := s.rig.SetPower(ctx, s, power); err != nil {
+			return s.State(), err
+		}
+	}
+	// Break-in before PTT and before anything that might key: a request that
+	// turns break-in on and then sends is the ordinary way to make CW audible,
+	// and doing it the other way round would send the first message into
+	// silence.
+	if req.BreakIn != nil {
+		if err := s.breakInController().SetBreakIn(ctx, s, *req.BreakIn); err != nil {
 			return s.State(), err
 		}
 	}
