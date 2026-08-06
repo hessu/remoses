@@ -37,7 +37,11 @@ func TestApplyDefaults(t *testing.T) {
 		{"cw.default_wpm", r.CW.DefaultWPM, 25},
 		{"cw.chunks_in_flight", r.CW.ChunksInFlight, 1},
 		{"limits.tx_timeout", r.Limits.TXTimeout.D(), 120 * time.Second},
-		{"civ.rig_address", r.CIV.RigAddress, 0x98},
+		// Left unset on purpose: the civ backend holds each model's factory
+		// address, so defaulting one here would override a known-correct value
+		// with a guess. It used to stamp the IC-7610's 0x98 onto every radio,
+		// which meant an ic-9700 addressed 0x98 and never connected.
+		{"civ.rig_address", r.CIV.RigAddress, 0},
 		{"civ.controller_address", r.CIV.ControllerAddress, 0xE0},
 		{"civ.transceive", r.CIV.Transceive, true},
 		{"name falls back to id", r.Name, "rig1"},

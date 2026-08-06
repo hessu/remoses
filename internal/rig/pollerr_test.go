@@ -109,6 +109,63 @@ func TestSlowPollRefusalStillConnects(t *testing.T) {
 	}
 }
 
+// TestPersistentRefusalNeverReconnects is the sharper version of the test
+// above, and the one an IC-9700 needed.
+//
+// TestSlowPollRefusalStillConnects watches four slow ticks, which is under
+// maxPollFailures, so it passed while a *persistent* refusal still tore the
+// connection down. That is what a real radio does: an IC-9700 sitting in FM NGs
+// the 1A 03 filter-width read on every single tick, because FM has no
+// adjustable passband. Five in a row killed a connection that was answering
+// frequency, mode, PTT and meters perfectly, and the reconnect put the radio
+// straight back into FM — a permanent loop.
+//
+// So the counter must ignore a refusal entirely rather than merely tolerate a
+// few: an NG is the radio talking to us, which is the opposite of the silence
+// the counter exists to catch.
+func TestPersistentRefusalNeverReconnects(t *testing.T) {
+	dev := newFakeDevice()
+	dl := newFakeDialer(dev)
+	r := &pickyRig{
+		fakeRig: newFakeRig(),
+		slowErr: errors.New("civ: read 1A/03: rejected: rig: command rejected by radio"),
+	}
+
+	s, err := NewSession(config.Radio{
+		ID:      "fm",
+		Backend: "fake",
+		Poll: config.Poll{
+			Interval:     config.Duration(20 * time.Millisecond),
+			SlowInterval: config.Duration(10 * time.Millisecond),
+		},
+	}, r, dl, WithLogger(testLogger()),
+		WithCommandTimeout(150*time.Millisecond), WithEventQueue(256))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	s.backoffMin = 2 * time.Millisecond
+	s.backoffMax = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); _ = s.Close() })
+	s.Start(ctx)
+	waitFor(t, "radio to connect", s.Connected)
+
+	inits := r.inits.Load()
+	// Well past maxPollFailures at a 10 ms slow tick: about thirty refusals.
+	waitFor(t, "the slow tier to be refused many times over", func() bool {
+		return r.pollSlow.Load() > int64(maxPollFailures)*3
+	})
+
+	if !s.Connected() {
+		t.Fatal("a radio refusing one optional command every tick was dropped")
+	}
+	if got := r.inits.Load(); got != inits {
+		t.Errorf("reconnected %d time(s) on a rig that answered every refusal; "+
+			"the failure counter is treating an NG as silence", got-inits)
+	}
+}
+
 // A busy answer is transient by definition, so the session must do nothing
 // durable about it: no reconnect, and no dropping the tier that reported it.
 // The next tick asking again is the entire recovery mechanism, and a rig that

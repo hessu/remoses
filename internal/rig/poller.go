@@ -63,6 +63,24 @@ func (s *Session) pollTier(ctx context.Context, c *conn, tier backend.PollTier, 
 		return false
 	}
 
+	// A radio that refuses a command is a radio that is talking to us, so a
+	// refusal must not count towards "it has stopped answering". The counter
+	// exists to catch silence — a rig switched off behind a live USB adapter —
+	// and an NG is the opposite of silence.
+	//
+	// Found on an IC-9700 sitting in FM, which NGs the 1A 03 filter-width read
+	// because FM has no adjustable passband. Every slow tick drew a rejection,
+	// five in a row tore down a working connection, and the reconnect put the
+	// radio straight back into the same state: a permanent loop on a rig that
+	// was answering everything else perfectly. isFatalPollErr already draws
+	// this line for the initial poll and for read-back; the failure counter was
+	// the one place that did not.
+	if !isFatalPollErr(err) {
+		s.log.Debug("radio declined a poll command; not counted as a failure",
+			"tier", tierName(tier), "err", err)
+		return true
+	}
+
 	*fails++
 	s.log.Warn("poll failed", "tier", tierName(tier), "fails", *fails, "err", err)
 	if *fails >= maxPollFailures {

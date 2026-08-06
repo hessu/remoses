@@ -83,6 +83,43 @@ func TestModelListMatchesConfig(t *testing.T) {
 	}
 }
 
+// TestConfigDefaultsDoNotOverrideTheModelAddress is the end-to-end version of
+// the address rule, and it exists because the unit tests either side of the
+// seam both passed while the daemon could not connect.
+//
+// config used to default civ.rig_address to the IC-7610's 0x98 whenever the
+// operator did not name one. The backend's own logic was right — model address
+// unless overridden — but it never saw a zero to fall back from, so every radio
+// was addressed 0x98 and an ic-9700 timed out at connect. Building through the
+// real config path is the only place that shows up.
+func TestConfigDefaultsDoNotOverrideTheModelAddress(t *testing.T) {
+	// Any valid bcrypt hash: config.Parse validates the whole document, and a
+	// radio cannot be reached through it without a user to authenticate.
+	const testBcrypt = "$2a$08$boRz/m7HqlHYSduBcNDLOOoJQoEut/wmkD.Mq98XiDINpdOiQ61iC"
+
+	for name, want := range map[string]byte{"ic-9700": 0xA2, "ic-905": 0xAC, "ic-7610": 0x98} {
+		cfg, err := config.Parse([]byte(`
+auth: { users: [{username: op, password_bcrypt: "` + testBcrypt + `"}] }
+radios:
+  - id: rig
+    backend: civ
+    port: { device: /dev/null }
+    civ: { model: ` + name + ` }
+`))
+		if err != nil {
+			t.Fatalf("parsing a config naming %s: %v", name, err)
+		}
+		r, err := New(&cfg.Radios[0])
+		if err != nil {
+			t.Fatalf("New(%s): %v", name, err)
+		}
+		if r.rigAddr != want {
+			t.Errorf("%s addressed 0x%02X, want its factory 0x%02X; a default has "+
+				"overridden the model", name, r.rigAddr, want)
+		}
+	}
+}
+
 // Factory bus addresses, transcribed from each radio's CI-V reference guide.
 func TestModelAddresses(t *testing.T) {
 	want := map[string]byte{

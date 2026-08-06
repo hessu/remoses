@@ -79,6 +79,24 @@ type Rig struct {
 	vfoB atomic.Pointer[radio.VFOState]
 }
 
+// filterWidthLegal reports whether 1A 03 carries a passband in the mode the rig
+// is in, so the poll can skip it rather than provoke a rejection.
+//
+// The same question the yaesu backend asks before sending SH. FM, DV, DD and
+// ATV have fixed filters and no row in the width table, and an IC-9700 in FM
+// answers the read with an NG.
+func (r *Rig) filterWidthLegal() bool {
+	m := radio.Mode(r.mode.Load())
+	if m == radio.ModeUnknown {
+		// Nothing has been read yet. Not knowing the mode is not the same as
+		// knowing it has no passband, and the cost of asking is now one
+		// tolerated refusal rather than a step towards a reconnect.
+		return true
+	}
+	_, ok := filterWidthHz(m, 0)
+	return ok
+}
+
 // vfoSnapshot is what the backend last read for one VFO, so a decode that
 // learns only part of it can fill in the rest.
 func (r *Rig) vfoSnapshot(vfo radio.VFO) radio.VFOState {
@@ -323,7 +341,13 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		// Asking a radio without 1A 03 would draw an NG every slow tick. The
 		// session tolerates that (a rig that refuses is still alive), but there
 		// is no reason to generate the noise.
-		if r.model.FilterWidth {
+		//
+		// The mode matters as well as the model. FM, DV, DD and ATV have no
+		// adjustable passband — filterWidthHz has no table for them — and an
+		// IC-9700 in FM answers the read with an NG rather than a value. Asking
+		// anyway would draw a rejection every slow tick for a setting that does
+		// not exist in that mode.
+		if r.model.FilterWidth && r.filterWidthLegal() {
 			reqs = append(reqs, request{KeyFilterWidth, r.frame(cmdMisc, subFilterWidth)})
 		}
 		// Both VFOs, split and dual watch. The slow tier because they move only

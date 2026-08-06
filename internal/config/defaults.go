@@ -37,9 +37,10 @@ const (
 
 	DefaultTXTimeout = 120 * time.Second
 
-	// DefaultCIVRigAddress is the IC-7610's factory address; DefaultCIVControllerAddress
-	// is the conventional address for a PC on the CI-V bus.
-	DefaultCIVRigAddress        = 0x98
+	// DefaultCIVControllerAddress is the conventional address for a PC on the
+	// CI-V bus. There is deliberately no default for the RIG address: that one
+	// is per model and the civ backend holds the table, so defaulting it here
+	// could only override a known-correct value with a guess.
 	DefaultCIVControllerAddress = 0xE0
 
 	// DefaultKenwoodAutoInformation selects AI2, which pushes state changes and
@@ -146,9 +147,13 @@ func applyRadioDefaults(r *Radio, p presenceRadio) {
 		if r.CIV == nil {
 			r.CIV = &CIV{}
 		}
-		if p.CIV == nil || p.CIV.RigAddress == nil {
-			r.CIV.RigAddress = DefaultCIVRigAddress
-		}
+		// rig_address is deliberately NOT defaulted here. Every Icom has its
+		// own factory address and the backend knows them all, so filling one in
+		// at this layer overrides the model with a guess: it used to stamp the
+		// IC-7610's 0x98 onto every radio, which meant `civ.model: ic-9700`
+		// silently addressed 0x98 and could not connect at all. Left at zero,
+		// the backend reads it as "not specified" and uses the model's own —
+		// and says so plainly for `generic`, which has none.
 		if p.CIV == nil || p.CIV.ControllerAddress == nil {
 			r.CIV.ControllerAddress = DefaultCIVControllerAddress
 		}
