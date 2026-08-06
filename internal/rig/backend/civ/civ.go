@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/radio"
@@ -46,6 +47,18 @@ type Rig struct {
 	rigAddr  byte
 	ctrlAddr byte
 	model    Model
+
+	// mode is the last mode the rig reported, and exists for one reason: the
+	// 1A 03 filter width is an index whose meaning depends on which of the
+	// four width tables applies, and only the mode says which. See decodeMode,
+	// which stores it, and filterWidthHz, which spends it.
+	//
+	// It is an atomic rather than a field because Decode runs on the session's
+	// reader goroutine while Poll and the setters run on the command goroutine,
+	// and the backend contract forbids a lock. It is a hint, never state: the
+	// session's cache holds the authoritative mode, and this is only ever used
+	// to choose a column.
+	mode atomic.Uint32
 }
 
 // Model reports the configured radio model.
@@ -245,6 +258,19 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		if r.model.FilterWidth {
 			reqs = append(reqs, request{KeyFilterWidth, r.frame(cmdMisc, subFilterWidth)})
 		}
+		// Data mode has to be read, not merely written. Nothing else reports it:
+		// there is no data-mode flag in any other answer, and the rig does not
+		// broadcast 1A 06, so without this state.data_mode never moves off its
+		// zero value and a radio sitting in USB-D is published as plain USB.
+		// Confirmed on an IC-7610, which acknowledged 1A 06 01 02 with FB while
+		// remoses went on reporting data mode off.
+		//
+		// Guarded by the model exactly as the setter and the decoder are: 1A 06
+		// is RIT on the IC-910H, and polling it there would read an RIT setting
+		// and publish it as a data-mode change every slow tick.
+		if r.model.DataMode {
+			reqs = append(reqs, request{KeyDataMode, r.frame(cmdMisc, subDataMode)})
+		}
 		return r.readAll(ctx, c, reqs...)
 	default:
 		return fmt.Errorf("civ: unknown poll tier %d", tier)
@@ -411,11 +437,10 @@ func (r *Rig) SetPTT(ctx context.Context, c backend.Conn, on bool) error {
 
 // SetFilterWidth sets the IF filter width (command 1A 03).
 //
-// The width is a mode-dependent index, so this reads the current mode first.
-// That round trip is the reason Decode leaves radio.State.PassbandHz alone when
-// a 1A 03 frame arrives: a decoder is pure and stateless and cannot know which
-// of the rig's four width tables the byte belongs to, whereas a setter can
-// afford to ask.
+// The width is a mode-dependent index, so this reads the current mode first
+// rather than trusting the hint Decode keeps. A setter can afford the round
+// trip, and this is the direction where being one fast-poll stale would put a
+// wrong filter into the operator's radio instead of merely reporting one.
 //
 // Requests that fall between steps snap down, matching how the Kenwood backend
 // treats an off-step FW; and erring towards the narrower filter.

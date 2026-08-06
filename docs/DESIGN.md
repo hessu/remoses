@@ -605,9 +605,45 @@ so `FE FE 00 E0 19 00 FD` makes every rig on a shared bus answer with its addres
 how a bus is enumerated, but it is discovery rather than identification, and it adds a
 failure mode (two rigs answering at once) for a station that already knows what it owns.
 
-Every column of the table above came out of a manual and none of it has been seen on a wire.
-`debug_wire` (§6.1) is how that changes: it prints the frame the radio actually answered
-`1A 03` with, next to the one remoses sent.
+#### Confirmed on hardware
+
+Every column of the table above came out of a manual. **The `ic-7610` row has now been seen on
+a wire**, with `debug_wire` (§6.1) on and the radio reached over its native USB — which
+presents two `cu.usbserial-*` ports, does not echo, and ignores the configured baud rate.
+
+Confirmed: bus address `0x98` (`19 00` → `98`); the five-byte little-endian BCD frequency field
+(`50 32 07 18 00` = 18.073250 MHz); mode `04` → `03 01`, CW on FIL1; **PTT on `1C 00`**, which
+is the sub-command the IC-718 does not share; `14 0A` as an uncalibrated `0000`–`0255`
+(`00 07` = 7, reported as a percentage with `watts` null); `15 02` on a 255 scale; `1A 03`
+answering a bare index; `1A 06` accepting a data-mode set; and command `17` carrying plain
+ASCII (`17 56 56 56 20 54 45 53 54` = `VVV TEST`) with `14 0C 00 85` setting 20 wpm — the value
+`nativeFromWPM` computes. Around 350 poll cycles produced no decode error, no unknown frame and
+no NG.
+
+**Transceive push updates work as designed.** With it enabled in the rig's menu, turning the
+VFO knob produced a stream of unsolicited `FE FE 00 98 00 <freq> FD` broadcasts, every one
+decoded and folded into the cache, which tracked the knob exactly. This is §3's "the reader
+never performs a request/response" paying off: the broadcasts go through the same decode path
+as a poll reply and match no waiter.
+
+**Two things the hardware found that the manuals could not**, both the same defect: a value
+that remoses wrote but never read, so `State` kept reporting the zero value for ever.
+
+- **`1A 03` was decoded to nothing.** The index means a different width per mode family and a
+  decoder holds no state, so the original decision was to publish no passband at all. The cost
+  was that `passband_hz` was permanently 0 on every Icom while `caps.filter_width` advertised
+  true — a promise to a client that nothing ever kept. Fixed by keeping the last mode the rig
+  reported, exactly as the `yaesu` backend does for `SH`, and inverting the width table that was
+  already there. The radio answered `16` in CW, which is 1200 Hz, and its front panel agreed.
+- **`1A 06` was never polled.** Data mode has no other source — no other answer carries the
+  flag and the rig does not broadcast it — so a radio sitting in USB-D was published as plain
+  USB. The rig acknowledged `1A 06 01 02` with `FB` while remoses went on reporting data mode
+  off. Fixed by adding the read to the slow tier, guarded by the model for the reason §5.4 gives
+  above: `1A 06` is RIT on an IC-910H, and polling it there would publish an RIT setting as a
+  data-mode change every tick.
+
+Both were invisible to a manual reading, because a manual documents the command and not whether
+anything asks for it. That is the argument for doing this on hardware at all.
 
 ### 5.5 Kenwood models
 

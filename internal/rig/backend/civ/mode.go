@@ -152,4 +152,48 @@ func ssbFamilyIndex(hz, maxIdx int) int {
 	return clampIndex(10+(hz-600)/100, 10, maxIdx)
 }
 
+// filterWidthHz is filterWidthIndex's inverse: what width the rig means by the
+// index it answered 1A 03 with, in the mode it is in.
+//
+// It reads the same table, from the same transcription, in the other direction,
+// and the two are tested against each other rather than separately — a pair of
+// tables that disagreed would report a passband the rig is not using, which is
+// worse than reporting none.
+//
+// An index outside the mode's range reports false rather than clamping. Unlike
+// a set, where clamping matches what the rig would do anyway, a read is a claim
+// about what the radio is doing: a value off the end of the table means the
+// premise is wrong — a mode hint that has gone stale, or a radio whose table
+// differs from the reference — and a made-up number would look exactly like a
+// real one.
+func filterWidthHz(m radio.Mode, idx int) (int, bool) {
+	switch m {
+	case radio.ModeAM:
+		if idx < 0 || idx > 49 {
+			return 0, false
+		}
+		return (idx + 1) * 200, true
+	case radio.ModeFSK, radio.ModeFSKR:
+		return ssbFamilyHz(idx, 31)
+	case radio.ModeLSB, radio.ModeUSB, radio.ModeCW, radio.ModeCWR, radio.ModePSK, radio.ModePSKR:
+		return ssbFamilyHz(idx, 40)
+	}
+	// FM, DV, DD, ATV and an unknown mode have no row in the table. Publishing
+	// nothing is the point: their filters are fixed, so any number here would be
+	// invented.
+	return 0, false
+}
+
+// ssbFamilyHz is ssbFamilyIndex's inverse.
+func ssbFamilyHz(idx, maxIdx int) (int, bool) {
+	switch {
+	case idx < 0 || idx > maxIdx:
+		return 0, false
+	case idx <= 9:
+		return (idx + 1) * 50, true
+	default:
+		return 600 + (idx-10)*100, true
+	}
+}
+
 func clampIndex(v, lo, hi int) int { return min(max(v, lo), hi) }

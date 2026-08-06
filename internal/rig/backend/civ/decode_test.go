@@ -145,16 +145,10 @@ func TestDecode(t *testing.T) {
 			wantOK:  true,
 			check:   wantEmpty,
 		},
-		{
-			name: "filter width stays opaque",
-			// The index means a different width in each mode, and a decoder has
-			// no mode to consult, so the reply resolves the read and reports no
-			// passband at all.
-			frame:   fromRig(cmdMisc, subFilterWidth, 0x31),
-			wantKey: KeyFilterWidth,
-			wantOK:  true,
-			check:   wantEmpty,
-		},
+		// 1A 03 is deliberately absent from this table. Its answer is an index
+		// whose width depends on the mode, so what it decodes to depends on the
+		// mode frames decoded before it — and every case here shares one Rig.
+		// TestFilterWidthNeedsTheMode covers it against an explicit mode.
 		{
 			name:    "data mode on with filter",
 			frame:   fromRig(cmdMisc, subDataMode, 0x01, 0x02),
@@ -402,5 +396,106 @@ func wantPTT(on bool) func(*testing.T, radio.Patch) {
 		if *p.PTT != on {
 			t.Errorf("PTT = %v, want %v", *p.PTT, on)
 		}
+	}
+}
+
+// TestFilterWidthNeedsTheMode covers the whole point of keeping a mode hint: a
+// 1A 03 answer is an index into one of four tables, and only the mode says
+// which.
+//
+// The CW case is not invented. An IC-7610 on 18.073 MHz answered 1A 03 with
+// exactly this byte, and its front panel agreed with the width below.
+func TestFilterWidthNeedsTheMode(t *testing.T) {
+	cases := []struct {
+		name string
+		mode radio.Mode
+		idx  byte // BCD, as it arrives
+		want int  // 0 means "publish nothing"
+	}{
+		{"CW index 16 is 1200 Hz", radio.ModeCW, 0x16, 1200},
+		{"SSB index 31 is 2700 Hz", radio.ModeUSB, 0x31, 2700},
+		{"CW index 0 is 50 Hz", radio.ModeCW, 0x00, 50},
+		{"CW index 9 is 500 Hz", radio.ModeCW, 0x09, 500},
+		{"CW index 10 is 600 Hz", radio.ModeCW, 0x10, 600},
+		{"CW index 40 is 3600 Hz", radio.ModeCW, 0x40, 3600},
+		{"AM index 0 is 200 Hz", radio.ModeAM, 0x00, 200},
+		{"AM index 49 is 10 kHz", radio.ModeAM, 0x49, 10000},
+		{"RTTY index 31 is 2700 Hz", radio.ModeFSK, 0x31, 2700},
+
+		// Off the end of the mode's own column: the premise is wrong, so
+		// nothing is published rather than a number that would look real.
+		{"RTTY stops at index 31", radio.ModeFSK, 0x32, 0},
+		{"SSB stops at index 40", radio.ModeUSB, 0x41, 0},
+		// Modes with fixed filters have no row in the table at all.
+		{"FM has no width table", radio.ModeFM, 0x16, 0},
+		{"an unknown mode has no width table", radio.ModeUnknown, 0x16, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := testRig(t)
+			// What decodeMode would have stored from the last 04 reply.
+			r.mode.Store(uint32(tc.mode))
+
+			u, err := r.Decode(fromRig(cmdMisc, subFilterWidth, tc.idx))
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if u.Key != KeyFilterWidth {
+				t.Fatalf("key = %q, want %q", u.Key, KeyFilterWidth)
+			}
+			switch {
+			case tc.want == 0:
+				if u.Patch.PassbandHz != nil {
+					t.Errorf("passband = %d Hz, want none published", *u.Patch.PassbandHz)
+				}
+			case u.Patch.PassbandHz == nil:
+				t.Errorf("no passband published, want %d Hz", tc.want)
+			case *u.Patch.PassbandHz != tc.want:
+				t.Errorf("passband = %d Hz, want %d", *u.Patch.PassbandHz, tc.want)
+			}
+		})
+	}
+}
+
+// TestFilterWidthTablesAgree is the reason the inverse was written beside the
+// forward table rather than anywhere else. Two transcriptions of one table that
+// disagreed would report a passband the rig is not using.
+func TestFilterWidthTablesAgree(t *testing.T) {
+	modes := []radio.Mode{radio.ModeUSB, radio.ModeCW, radio.ModeFSK, radio.ModeAM}
+	for _, m := range modes {
+		for idx := range 50 {
+			hz, ok := filterWidthHz(m, idx)
+			if !ok {
+				continue // off this mode's column
+			}
+			back, err := filterWidthIndex(m, hz)
+			if err != nil {
+				t.Errorf("%s: index %d is %d Hz, which does not convert back: %v", m, idx, hz, err)
+				continue
+			}
+			if back != idx {
+				t.Errorf("%s: index %d is %d Hz, which converts back to index %d", m, idx, hz, back)
+			}
+		}
+	}
+}
+
+// TestModeHintIsStoredByDecode proves the hint is fed by the ordinary mode read
+// rather than needing a caller to remember to set it.
+func TestModeHintIsStoredByDecode(t *testing.T) {
+	r := testRig(t)
+	if _, err := r.Decode(fromRig(cmdReadMode, 0x03, 0x01)); err != nil { // CW, FIL1
+		t.Fatalf("Decode: %v", err)
+	}
+	if got := radio.Mode(r.mode.Load()); got != radio.ModeCW {
+		t.Fatalf("mode hint = %v after a CW report, want CW", got)
+	}
+	u, err := r.Decode(fromRig(cmdMisc, subFilterWidth, 0x16))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if u.Patch.PassbandHz == nil || *u.Patch.PassbandHz != 1200 {
+		t.Fatalf("passband = %v, want 1200 Hz", u.Patch.PassbandHz)
 	}
 }

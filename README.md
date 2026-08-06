@@ -16,7 +16,7 @@ Scope for v1 is control only. Audio is a separate concern.
 
 ## Status
 
-**Experimental. No part of this has ever been connected to a real radio.**
+**Experimental. One radio out of the thirty below has ever been connected.**
 
 That is the single most important thing to know about the project right now.
 Every protocol detail below was transcribed from the manufacturers' own CI-V and
@@ -25,22 +25,30 @@ suite — but a test suite agreeing with a manual proves only that the code matc
 what the manual says. It does not prove the manual is right, that the transcription
 is right, or that a particular radio behaves the way its documentation claims.
 
+An **IC-7610** has now been on the wire: read, write and CW keying on the air, with
+push updates tracking the VFO knob. It found two bugs no amount of reading would
+have — a filter width and a data-mode flag that remoses wrote but never read back,
+so both reported a stale value for ever. Details in
+[docs/DESIGN.md](docs/DESIGN.md) §5.4. Expect the other twenty-nine models to be
+hiding something similar.
+
 Concretely, that means:
 
-- **Nothing has been verified on the air.** Treat every "supported" model below as
-  "implemented from documentation, awaiting confirmation".
+- **Only the IC-7610 has been verified.** Treat every other "supported" model below
+  as "implemented from documentation, awaiting confirmation".
 - **It keys transmitters.** The safety interlocks are implemented and tested
-  (dead-man TX timeout, lock expiry dropping PTT, power clamping, band limits),
-  but they have been tested against fakes, not against a transmitter.
+  (dead-man TX timeout, lock expiry dropping PTT, power clamping, band limits).
+  CAT keying and PTT have now been exercised on a real transmitter; the interlocks
+  themselves have still only been tested against fakes.
 - Expect to find protocol bugs. If you do, the per-model differences are collected
-  in [docs/DESIGN.md](docs/DESIGN.md) §5.2–§5.4, which is the place to look first.
+  in [docs/DESIGN.md](docs/DESIGN.md) §5.2–§5.7, which is the place to look first.
 
 Do not leave it running an unattended station yet.
 
 ## Supported radios
 
-The **Tested** column marks radios confirmed against real hardware. It is
-deliberately empty: see the status note above.
+The **Tested** column marks radios confirmed against real hardware. Exactly one
+entry is filled in: see the status note above.
 
 ### Icom (`civ` backend)
 
@@ -50,7 +58,7 @@ deliberately empty: see the status note above.
 | IC-7300 | `ic-7300` | | — |
 | IC-7300MK2 | `ic-7300mk2` | | — |
 | IC-7600 | `ic-7600` | | — |
-| IC-7610 | `ic-7610` | | — |
+| IC-7610 | `ic-7610` | Read, write, CW keying and Transceive push confirmed on the air | **yes** |
 | IC-7700 | `ic-7700` | | — |
 | IC-7760 | `ic-7760` | | — |
 | IC-7850 / IC-7851 | `ic-7850` | One profile; identical over CI-V | — |

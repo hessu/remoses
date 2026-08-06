@@ -122,13 +122,26 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		}
 		switch {
 		case body[0] == subFilterWidth && r.model.FilterWidth:
-			// Deliberately opaque. The 1A 03 index means a different width in
-			// each mode family, and a decoder holds no state, so there is no
-			// way to know which table applies. State.PassbandHz is left alone
-			// rather than filled with a guess; SetFilterWidth, which can afford
-			// to read the mode first, does the conversion in the other
-			// direction.
+			// The index means a different width in each mode family, so it can
+			// only be read against the mode the rig is in — which decodeMode
+			// keeps for exactly this. An earlier version of this decoder
+			// published nothing at all here, on the grounds that a decoder is
+			// stateless; the cost was that passband_hz stayed 0 for ever on
+			// every Icom while caps.filter_width advertised true, which is a
+			// promise to a client that nothing ever kept. Confirmed on an
+			// IC-7610: it answers 1A 03 with 16 in CW, which is 1200 Hz.
+			//
+			// Where the mode has no width table — FM, DV, DD, ATV — nothing is
+			// published, because a number taken from the wrong column would
+			// look exactly like a real one.
 			u.Key = KeyFilterWidth
+			if len(body) >= 2 {
+				if n, ok := unbcdByte(body[1]); ok {
+					if hz, ok := filterWidthHz(radio.Mode(r.mode.Load()), n); ok {
+						u.Patch.PassbandHz = &hz
+					}
+				}
+			}
 		// Guarded by the model for the same reason the setter is: 1A 06 is the
 		// data-mode setting on most of the family but RIT on the IC-910H, and
 		// decoding an RIT report as a data-mode change would put a wrong value
@@ -178,6 +191,12 @@ func (r *Rig) decodeMode(p *radio.Patch, body []byte) {
 		return
 	}
 	p.Mode = &m
+	// Kept so that a 1A 03 answer arriving later can be turned into a width.
+	// The mode is read on the fast tier and the filter width on the slow one,
+	// so by the time a filter frame arrives this is at most one fast tick old —
+	// and a mode change re-reads the width anyway, because the session's
+	// read-back after a write covers both tiers.
+	r.mode.Store(uint32(m))
 	// A radio with no filter selection (IC-718, IC-910H) reports FilterSlots 0,
 	// and then any trailing byte is not a slot and must not be read as one.
 	if n := r.model.FilterSlots; n > 0 && len(body) >= 2 && body[1] >= 1 && body[1] <= byte(n) {

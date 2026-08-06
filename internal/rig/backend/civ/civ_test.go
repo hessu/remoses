@@ -304,7 +304,10 @@ func TestPoll(t *testing.T) {
 		want []string
 	}{
 		{"fast", backend.PollFast, []string{"03", "04", "1C/00", "15/02"}},
-		{"slow", backend.PollSlow, []string{"14/0A", "1A/03"}},
+		// 1A 06 is in the slow tier because data mode has no other source: no
+		// other answer carries the flag and the rig does not broadcast it, so
+		// without the read state.data_mode would never move.
+		{"slow", backend.PollSlow, []string{"14/0A", "1A/03", "1A/06"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -608,5 +611,36 @@ func TestReadRejectsUnexpectedReply(t *testing.T) {
 	_, err := s.backend.read(context.Background(), s, KeyFrequency, s.backend.frame(cmdReadMode))
 	if err == nil {
 		t.Error("read accepted a reply to a different command")
+	}
+}
+
+// TestSlowPollSkipsWhatAModelLacks covers the two guards on the slow tier, and
+// the second one is not an optimisation.
+//
+// 1A 03 on a radio without it just draws an NG, which is noise. 1A 06 on an
+// IC-910H is RIT, so polling it there would read an RIT setting and publish it
+// every slow tick as a data-mode change — a wrong value in state rather than a
+// missing one, which is the failure DESIGN.md §5.4 records for that radio.
+func TestSlowPollSkipsWhatAModelLacks(t *testing.T) {
+	for _, model := range []string{"ic-718", "ic-910h"} {
+		t.Run(model, func(t *testing.T) {
+			s := newSim(t)
+			r, err := New(&config.Radio{
+				ID:      "rig",
+				Backend: "civ",
+				CIV:     &config.CIV{Model: model, RigAddress: int(s.backend.rigAddr), ControllerAddress: int(s.backend.ctrlAddr)},
+			})
+			if err != nil {
+				t.Fatalf("New(%s): %v", model, err)
+			}
+			s.backend = r
+
+			if err := r.Poll(context.Background(), s, backend.PollSlow); err != nil {
+				t.Fatalf("Poll: %v", err)
+			}
+			// Power only: neither radio has 1A 03, and neither has a data mode
+			// on 1A 06.
+			s.wantConversation(t, "14/0A")
+		})
 	}
 }
