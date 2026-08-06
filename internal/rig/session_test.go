@@ -11,6 +11,7 @@ import (
 
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/transport"
 )
 
 func testLogger() *slog.Logger {
@@ -525,5 +526,79 @@ func TestStateSnapshotIsACopy(t *testing.T) {
 	a.Frequency = 1
 	if b := h.s.State(); b.Frequency == 1 {
 		t.Fatal("State() handed out a mutable reference to the cache")
+	}
+}
+
+// TestCapsFollowTheInstalledCWSender is the bug an IC-7610 with cw.method:
+// serial_key exposed: the daemon installed a local DTR keyer and the API went
+// on advertising the rig's CAT keyer.
+//
+// The backend is right about the radio — an IC-7610 does have a CAT buffer —
+// but which keyer is in use is a configuration choice, and a client reading
+// cw_method to decide what it may send was being told the wrong one, along with
+// a charset and speed range belonging to a keyer that was not running.
+func TestCapsFollowTheInstalledCWSender(t *testing.T) {
+	h := startedHarness(t, nil)
+
+	// The backend's own answer, before any sender is installed.
+	if got := h.s.Caps().CWMethod; got != h.rig.caps.CWMethod {
+		t.Fatalf("caps report %q before a sender is installed, want the backend's %q",
+			got, h.rig.caps.CWMethod)
+	}
+
+	sender := newFakeSerialCW()
+	h.s.SetCWSender(sender)
+
+	caps := h.s.Caps()
+	if caps.CWMethod != radio.CWViaSerial {
+		t.Errorf("cw_method = %q, want %q: the installed sender keys a control line",
+			caps.CWMethod, radio.CWViaSerial)
+	}
+	if caps.CWCharset != sender.Charset() {
+		t.Errorf("cw_charset = %q, want the sender's %q", caps.CWCharset, sender.Charset())
+	}
+	if caps.CWMinWPM != 5 || caps.CWMaxWPM != 60 {
+		t.Errorf("wpm range = %d-%d, want the local keyer's 5-60", caps.CWMinWPM, caps.CWMaxWPM)
+	}
+}
+
+// TestCapsSurviveAReconnect is the other half. Every reconnect re-reads the
+// capabilities from the backend, so a correction applied once at startup would
+// be silently undone the first time somebody unplugged the radio.
+func TestCapsSurviveAReconnect(t *testing.T) {
+	h := startedHarness(t, nil)
+	h.s.SetCWSender(newFakeSerialCW())
+
+	// Drop the connection the way a pulled cable does, and wait for the
+	// supervisor to bring it back.
+	dials := h.dl.dialCount()
+	h.s.conn.Load().fail(transport.ErrDisconnected)
+	waitFor(t, "a redial", func() bool { return h.dl.dialCount() > dials })
+	waitFor(t, "reconnection", h.s.Connected)
+
+	if got := h.s.Caps().CWMethod; got != radio.CWViaSerial {
+		t.Errorf("cw_method = %q after a reconnect, want %q; the backend's answer "+
+			"was put back over the installed sender's", got, radio.CWViaSerial)
+	}
+}
+
+// TestCatSenderLeavesTheRigsSpeedRangeAlone guards the deliberate asymmetry: a
+// CAT sender must NOT override the range, because there the rig's own keyer
+// binds and the backend publishes it per model — 6-48 on an Icom, where this
+// package's local clamp is 5-60.
+func TestCatSenderLeavesTheRigsSpeedRangeAlone(t *testing.T) {
+	h := startedHarness(t, nil)
+	before := h.s.Caps()
+
+	h.s.SetCWSender(newFakeCW()) // the CAT shape
+
+	after := h.s.Caps()
+	if after.CWMinWPM != before.CWMinWPM || after.CWMaxWPM != before.CWMaxWPM {
+		t.Errorf("wpm range moved from %d-%d to %d-%d; a CAT sender has nothing "+
+			"better to say than the model profile",
+			before.CWMinWPM, before.CWMaxWPM, after.CWMinWPM, after.CWMaxWPM)
+	}
+	if after.CWMethod != radio.CWViaCAT {
+		t.Errorf("cw_method = %q, want cat", after.CWMethod)
 	}
 }

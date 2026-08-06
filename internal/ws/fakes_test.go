@@ -338,6 +338,8 @@ func (c *fakeCW) Enqueue(text string, _ cw.Mode) (int, error) { return len(text)
 func (c *fakeCW) Abort()                                      {}
 func (c *fakeCW) SetSpeed(int) error                          { return nil }
 func (c *fakeCW) Charset() string                             { return "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" }
+func (c *fakeCW) Method() radio.CWMethod                      { return radio.CWViaCAT }
+func (c *fakeCW) WPMRange() (int, int, bool)                  { return 0, 0, false }
 
 func (c *fakeCW) Status() radio.CWStatus {
 	q := 0

@@ -1545,6 +1545,27 @@ configurable lead-in and tail.
 This is viable **only because remoses runs next to the radio** (§1). Text is buffered
 server-side; the network is never in the timing path.
 
+**Capabilities are composed, not taken from the backend.** `cw_method`, `cw_charset` and the
+wpm range describe *the keyer that is installed*, which is a configuration choice, where a
+backend's `Caps` describes *the radio*. Those disagree exactly here: `civ` reports `cw_method:
+cat` because an IC-7610 does have a CAT buffer, but `cw.method: serial_key` on that radio keys
+a DTR line and never sends command `17`. Publishing the backend's answer told clients the radio
+was keying over CAT, offered them the rig keyer's restricted charset instead of the fuller local
+table (which has `*`, and no `^` run-marker), and understated the speed range at both ends —
+6–48 against the local keyer's 5–60. `Session.publishCaps` folds the sender's view over the
+backend's, and does so on **every** capability refresh: a reconnect re-reads them from the
+backend and would otherwise put the wrong answer back.
+
+The CAT sender deliberately declines to override the wpm range. There the rig's own keyer binds,
+its range is per model, and the backend already knows it; only the local keyer, which really
+does generate the elements, replaces it.
+
+**Confirmed on hardware.** An IC-7610 with `USB KEYING (CW)` set to DTR, keyed from its second
+USB port with full break-in and no `ptt_line`: 21 characters at 20 wpm estimated 11220 ms and
+took 11428 ms, with the rig's QSK raising PTT off the key line and `1C 00` reporting it. Note
+that opening a port wired this way produces a brief key-down click, for the reason §6 gives —
+which is a real if harmless transmission every time the daemon starts.
+
 **Timing.** A dedicated keyer goroutine with `runtime.LockOSThread()`:
 
 - Element unit is `1200 ms / wpm` (48 ms at 25 wpm). Dit = 1 unit, dah = 3, intra-character

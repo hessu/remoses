@@ -77,4 +77,24 @@ type Sender interface {
 
 	// Charset is the set of characters this radio will key.
 	Charset() string
+
+	// Method is how this sender keys, for radio.Caps.
+	//
+	// It belongs to the sender rather than to the backend, and that is the
+	// whole point of it existing. A backend reports what the *radio* can do —
+	// an IC-7610 has a CAT keyer, so civ.Caps says cw_method: cat — but which
+	// keyer is actually in use is a configuration choice, and cw.method:
+	// serial_key on that same radio keys a DTR line and never touches command
+	// 17. Publishing the backend's answer told a client the radio was keying
+	// over CAT while it was keying a control line.
+	Method() radio.CWMethod
+
+	// WPMRange is the speed range this sender accepts, and ok is false when it
+	// does not constrain the speed itself.
+	//
+	// False is the CAT sender: there the rig's own keyer sets the range, which
+	// the backend already publishes per model — 6-48 wpm on an Icom — and this
+	// has nothing better to say. The local keyer does constrain it, to its own
+	// MinWPM..MaxWPM, which is wider than any rig's.
+	WPMRange() (minWPM, maxWPM int, ok bool)
 }

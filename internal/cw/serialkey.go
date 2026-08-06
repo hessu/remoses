@@ -148,6 +148,18 @@ func NewSerialKey(cl transport.ControlLines, cfg config.CW) (Sender, error) {
 // guess.
 func (s *serialSender) Charset() string { return morse.Charset() }
 
+// Method reports local keying. The radio's own CW capabilities are irrelevant
+// once this sender is installed: the Morse is generated here and goes out on a
+// modem control line, so a rig with no CAT keyer at all keys exactly as well as
+// one with a good one.
+func (s *serialSender) Method() radio.CWMethod { return radio.CWViaSerial }
+
+// WPMRange is this package's own clamp, which is what actually binds when the
+// elements are generated locally. It is wider at both ends than the rig keyers
+// it replaces — 5-60 against an Icom's 6-48 — so publishing the backend's range
+// for a locally keyed radio understates it at both ends.
+func (s *serialSender) WPMRange() (int, int, bool) { return MinWPM, MaxWPM, true }
+
 func (s *serialSender) Enqueue(text string, mode Mode) (int, error) {
 	syms, err := morse.Parse(text)
 	if err != nil {

@@ -141,6 +141,15 @@ func NewCAT(ms backend.MorseSender, c backend.Conn, cfg config.CW) (Sender, erro
 
 func (s *catSender) Charset() string { return s.ms.Charset() }
 
+// Method reports CAT keying: this sender drives the rig's own buffer.
+func (s *catSender) Method() radio.CWMethod { return radio.CWViaCAT }
+
+// WPMRange declines to answer. The speed here is the rig's own keyer speed —
+// set with a backend command, clamped by the rig — and the range is per model,
+// which the backend's Caps already carries. Overriding it with this package's
+// wider clamp would advertise speeds the radio will not key.
+func (s *catSender) WPMRange() (int, int, bool) { return 0, 0, false }
+
 // Enqueue validates, translates and chunks text, then leaves it for the pacing
 // loop. It never blocks on the radio.
 func (s *catSender) Enqueue(text string, mode Mode) (int, error) {

@@ -270,10 +270,40 @@ func (s *Session) Subscribe() (<-chan Event, func()) { return s.subs.add() }
 // SetCWSender installs the Morse sender. Wiring is done by main, because the
 // sender needs the backend and the session's Conn, and the session must not
 // know which of the two CW methods is in use.
+//
+// The published capabilities are refreshed here, because installing a sender
+// can change them: see publishCaps.
 func (s *Session) SetCWSender(snd cw.Sender) {
 	s.cwMu.Lock()
 	s.cwSender = snd
 	s.cwMu.Unlock()
+	s.publishCaps()
+}
+
+// publishCaps stores the capabilities clients see: what the backend says about
+// the radio, corrected by what the installed CW sender says about keying.
+//
+// The correction is needed because those two can disagree, and did. A backend
+// reports the radio's own keyer — civ says cw_method: cat, because an IC-7610
+// has a CAT buffer — but cw.method: serial_key on that same radio installs a
+// local keyer that drives a DTR line and never sends command 17. Publishing the
+// backend's answer told clients the radio keyed over CAT, and handed them the
+// rig keyer's charset and speed range for a keyer that was not in use.
+//
+// It must be called wherever caps are stored, not once at startup: every
+// reconnect re-reads them from the backend (a backend may learn more from the
+// rig than it knew from the configuration) and would otherwise put the wrong
+// answer back.
+func (s *Session) publishCaps() {
+	caps := s.rig.Caps()
+	if snd := s.CW(); snd != nil {
+		caps.CWMethod = snd.Method()
+		caps.CWCharset = snd.Charset()
+		if lo, hi, ok := snd.WPMRange(); ok {
+			caps.CWMinWPM, caps.CWMaxWPM = lo, hi
+		}
+	}
+	s.caps.Store(&caps)
 }
 
 // CW returns the installed sender, or nil.

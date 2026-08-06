@@ -78,8 +78,10 @@ func (s *Session) runConnection(ctx context.Context) (connected bool, err error)
 	if err := s.rig.Init(ctx, s); err != nil {
 		return false, fmt.Errorf("init %s: %w", s.dialer.Describe(), err)
 	}
-	caps := s.rig.Caps()
-	s.caps.Store(&caps)
+	// Re-read: a backend may have learnt more from the rig than it knew from the
+	// configuration. Through publishCaps, so that an installed CW sender's view
+	// of keying survives the refresh — see there for what it is correcting.
+	s.publishCaps()
 
 	// A full state read before announcing the radio, so the first client to look
 	// sees real values rather than zeroes.

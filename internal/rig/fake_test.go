@@ -356,6 +356,15 @@ func newFakeRig() *fakeRig {
 		FilterSlots: 3,
 		SMeterScale: 30,
 		MaxPowerW:   100,
+
+		// The rig's own keyer, as a backend would report it. Deliberately
+		// narrower than internal/cw's local clamp of 5-60, so that a test can
+		// tell "the backend's range" from "the local keyer's" rather than
+		// comparing zero with zero.
+		CWMethod:  radio.CWViaCAT,
+		CWCharset: "ABC",
+		CWMinWPM:  6,
+		CWMaxWPM:  48,
 	}}
 }
 
@@ -513,9 +522,28 @@ type fakeCW struct {
 	aborts  int
 	status  radio.CWStatus
 	aborted chan struct{}
+
+	// How this sender describes its own keying, which the session folds into
+	// the published capabilities. Defaults to the CAT shape: a rig keyer, whose
+	// speed range belongs to the backend rather than to the sender.
+	method radio.CWMethod
+	wpmLo  int
+	wpmHi  int
+	wpmOK  bool
 }
 
-func newFakeCW() *fakeCW { return &fakeCW{aborted: make(chan struct{}, 16)} }
+func newFakeCW() *fakeCW {
+	return &fakeCW{aborted: make(chan struct{}, 16), method: radio.CWViaCAT}
+}
+
+// newFakeSerialCW is a locally keyed sender: it names its own method, charset
+// and speed range, all of which must win over whatever the backend claims.
+func newFakeSerialCW() *fakeCW {
+	c := newFakeCW()
+	c.method = radio.CWViaSerial
+	c.wpmLo, c.wpmHi, c.wpmOK = 5, 60, true
+	return c
+}
 
 func (c *fakeCW) Enqueue(text string, mode cw.Mode) (int, error) { return len(text), nil }
 
@@ -543,8 +571,10 @@ func (c *fakeCW) setStatus(s radio.CWStatus) {
 	c.mu.Unlock()
 }
 
-func (c *fakeCW) SetSpeed(wpm int) error { return nil }
-func (c *fakeCW) Charset() string        { return "ABC" }
+func (c *fakeCW) SetSpeed(wpm int) error     { return nil }
+func (c *fakeCW) Charset() string            { return "ABC" }
+func (c *fakeCW) Method() radio.CWMethod     { return c.method }
+func (c *fakeCW) WPMRange() (int, int, bool) { return c.wpmLo, c.wpmHi, c.wpmOK }
 
 func (c *fakeCW) abortCount() int {
 	c.mu.Lock()
