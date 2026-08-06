@@ -16,15 +16,15 @@ Scope for v1 is control only. Audio is a separate concern.
 
 ## Status
 
-**Experimental. One radio out of the thirty-three below has ever been connected — but
-that one has now been put through everything.**
+**Experimental. Two radios out of the thirty-three below have ever been connected —
+but both have been put through everything they can do.**
 
 Every protocol detail below was transcribed from the manufacturers' own CI-V and
 CAT reference documentation and is exercised against simulated rigs in the test
 suite. That proves the code matches what the manual says. It does not prove the
 manual is right, that the transcription is right, or that a particular radio
-behaves the way its documentation claims — which is why the one radio that has
-been on the wire matters more than the thirty-two that have not.
+behaves the way its documentation claims — which is why the two radios that have
+been on the wire matter more than the thirty-one that have not.
 
 ### What has been verified on hardware
 
@@ -32,8 +32,16 @@ An **IC-7610**, over its native USB, on the air. Everything remoses implements
 for it was exercised: connect and reconnect, the full poll, all ten modes, all
 three filter slots and the filter-width ladder, transmit power, PTT, Icom
 Transceive push updates tracking the VFO knob, the REST and WebSocket APIs, the
-lock lifecycle including steal and expiry, and CW both ways — the rig's own CAT
-keyer and locally generated Morse keying DTR and RTS.
+lock lifecycle including steal and expiry, both its VFOs with split and dual
+watch, and CW both ways — the rig's own CAT keyer and locally generated Morse
+keying DTR and RTS.
+
+An **IC-9700**, on 2 m and 70 cm with real antennas. Its CAT surface end to end:
+Main's two VFOs addressed without disturbing each other, split, every mode it has
+including **DV**, band limits, explicit PTT, leaving memory mode, CW break-in,
+and CW keyed and **heard on the air**. Not a re-run of the whole daemon — locking,
+the WebSocket and the interlocks are shared code already exercised on the
+IC-7610 — but everything CI-V-specific to that radio.
 
 **The safety interlocks were fired for real**, not against fakes: band limits
 refusing an out-of-band tune, power clamping, the dead-man `tx_timeout` forcing
@@ -41,19 +49,29 @@ receive mid-transmission, and lock expiry cutting a live CW transmission inside 
 character. CW pacing was measured at **61 ms of drift over 18.3 seconds** on a rig
 whose buffer cannot be queried, so the timing is dead reckoning.
 
-**It found five bugs that no amount of reading the reference would have.** Two
-values remoses wrote but never read back, so both reported a stale figure for
-ever; two setters that quietly changed a neighbouring setting, because on CI-V
-several settings share one command; and capabilities that described the radio's
-own keyer while a different one was installed. All five are fixed, with the
-measurements and reasoning in [docs/DESIGN.md](docs/DESIGN.md) §5.4 and §11.2.
-**Expect the other thirty-two models to be hiding something similar.**
+**Between them they found nine bugs that no amount of reading the reference
+would have.** Values written but never read back, so they reported a stale
+figure for ever; setters that quietly changed a neighbouring setting, because on
+CI-V several settings share one command; capabilities describing the radio's own
+keyer while a different one was installed; a config default that addressed every
+Icom as an IC-7610; a poll counter that treated a refusal as silence and
+reconnect-looped a healthy radio; and a `Mode` that could not decode its own
+output. All nine are fixed, with the measurements and reasoning in
+[docs/DESIGN.md](docs/DESIGN.md) §5.4 and §11.2.
+
+The worst of them was invisible from this side: **CW accepted, queued, drained
+on schedule — and never transmitted**, because the radio's break-in was off. Only
+an operator listening could have caught it. **Expect the other thirty-one models
+to be hiding something similar.**
 
 ### What that still does not tell you
 
-- **Only the IC-7610 has been verified.** Treat every other model below as
-  "implemented from documentation, awaiting confirmation". The Yaesu, Kenwood and
-  remaining Icom backends have never seen a radio.
+- **Only two Icoms have been verified.** Treat every other model below as
+  "implemented from documentation, awaiting confirmation". The Yaesu and Kenwood
+  backends, and the remaining ten Icom profiles, have never seen a radio.
+- **`limits.bands` gates tuning, not transmitting.** There is no transmit-only
+  band limit, so it cannot express "receive anywhere, transmit only here" — which
+  is what you want if a band has no antenna on it.
 - **One failure mode is untested and unfixable here:** pulling the cable *while
   transmitting*. The rig stays keyed and remoses cannot reach it — the link it
   would send the unkey over is the one that vanished. Only the radio's own
@@ -69,11 +87,18 @@ Do not leave it running an unattended station yet.
 
 ## Supported radios
 
-The **Tested** column marks radios confirmed against real hardware. Exactly one
-entry is filled in: see the status note above.
+The **Tested** column marks radios confirmed against real hardware. Two entries
+are filled in: see the status note above.
 
-"Tested" there means every feature remoses implements for that radio was
-exercised on the air, not that the radio was seen to connect.
+"Tested" there means every CAT feature remoses implements **for that radio** was
+exercised on the air — frequency, all its modes, filters, power, PTT, whatever
+VFO and split it has, and CW actually heard — not that the radio was seen to
+connect.
+
+It does not mean each radio re-ran the whole daemon. The parts that are not
+radio-specific — locking, the WebSocket, the safety interlocks, reconnect —
+were exercised once, on the IC-7610, and are shared code; the IC-9700 confirmed
+the protocol surface and CW, not those again.
 
 ### Icom (`civ` backend)
 
@@ -90,7 +115,7 @@ exercised on the air, not that the radio was seen to connect.
 | IC-905 | `ic-905` | 6-byte frequency field on the 10 GHz band | — |
 | IC-910H | `ic-910h` | Own mode-code table; no CAT CW buffer | — |
 | IC-9100 | `ic-9100` | | — |
-| IC-9700 | `ic-9700` | Main's two VFOs and split; sub band present but not readable | — |
+| IC-9700 | `ic-9700` | Main's two VFOs and split; sub band present but not readable; CW break-in | **yes** |
 | other Icom | `generic` | Requires an explicit `civ.rig_address` | — |
 
 **The IC-7610 is the only radio here whose second VFO remoses can reach.** Its commands `25` and
