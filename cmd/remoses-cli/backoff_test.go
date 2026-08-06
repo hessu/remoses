@@ -8,6 +8,10 @@ import (
 // A schedule without jitter, so the shape is asserted rather than a range: it
 // doubles from half a second and stops at the ceiling instead of growing
 // without bound.
+//
+// The ceiling is the number that matters to somebody sitting in front of the
+// monitor — it is how long a daemon that has come back can go unnoticed — so it
+// is asserted here rather than left to the constant.
 func TestBackoffSchedule(t *testing.T) {
 	b := newBackoff()
 	b.rnd = func() float64 { return 0 }
@@ -17,11 +21,11 @@ func TestBackoffSchedule(t *testing.T) {
 		time.Second,
 		2 * time.Second,
 		4 * time.Second,
-		8 * time.Second,
-		16 * time.Second,
-		30 * time.Second,
-		30 * time.Second,
-		30 * time.Second,
+		5 * time.Second,
+		5 * time.Second,
+		5 * time.Second,
+		5 * time.Second,
+		5 * time.Second,
 	}
 	for i, w := range want {
 		attempt, got := b.next()

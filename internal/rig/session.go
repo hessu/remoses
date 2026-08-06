@@ -70,11 +70,27 @@ var (
 
 // Defaults applied when the corresponding configuration value is zero.
 const (
-	defaultCmdTimeout  = time.Second
-	defaultPollFast    = 500 * time.Millisecond
-	defaultPollSlow    = 5 * time.Second
-	defaultBackoffMin  = 100 * time.Millisecond
-	defaultBackoffMax  = 30 * time.Second
+	defaultCmdTimeout = time.Second
+	defaultPollFast   = 500 * time.Millisecond
+	defaultPollSlow   = 5 * time.Second
+	defaultBackoffMin = 100 * time.Millisecond
+	// defaultBackoffMax bounds how long a replugged radio can go unnoticed,
+	// which is the number an operator actually experiences.
+	//
+	// It was 30 s, on the reasoning that an absent radio should not have the
+	// daemon enumerating ports forever. Measured on hardware, that reasoning
+	// bought very little and cost a lot: a USB cable pulled and reseated took
+	// 56 s to come back, of which about 35 s was the supervisor asleep at the
+	// ceiling. A rig that takes half a minute to return after you reseat a
+	// cable reads as broken.
+	//
+	// What a failed dial actually costs decides the trade. With port.device it
+	// is one open() on a path that is not there — microseconds, and free even
+	// once a second. With port.match it is a USB enumeration, which is heavier
+	// but still nothing at this interval. Five seconds is the compromise:
+	// six-fold better worst-case latency for a syscall every five seconds on a
+	// radio that is switched off anyway.
+	defaultBackoffMax  = 5 * time.Second
 	maxPollFailures    = 5
 	forceRXTimeoutMult = 2
 )

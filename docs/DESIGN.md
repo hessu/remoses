@@ -670,6 +670,32 @@ The general lesson is worth keeping: on CI-V several settings share a command, s
 of them rewrites its neighbours. Any new setter here should ask what else its command carries
 before assuming it is narrow.
 
+**The rest of the surface was exercised on the same radio**, and passed: authentication;
+the whole lock lifecycle including steal and expiry; WebSocket streaming and `ws-ticket`; all
+ten modes; all three filter slots; the filter-width ladder with its snapping; explicit PTT;
+CW charset rejection, abort, chunking and `replace`; and **every safety interlock** — band
+limits refusing out-of-band with the rig not moving, power clamping 50 % down to the configured
+8 %, and `tx_timeout` forcing receive after 4.2 s against a 5 s limit and taking an in-flight CW
+queue with it.
+
+Two results are worth recording as numbers. **CW pacing is accurate**: a 43-character message
+at 25 wpm was estimated at 18288 ms and took 18349 ms — 61 ms of drift, on a rig whose buffer
+cannot be queried, so the whole thing is dead reckoning (§11.1). And **lock expiry does cut a
+live transmission**: with a lease deliberately shorter than the message, `17 FF` and `1C 00 00`
+went out mid-word and the operator heard the transmission stop inside a character.
+
+That last one exposed a sharp edge that is **not** a bug but is worth knowing: the lease slides
+on accepted API commands, and a CW transmission is one command followed by minutes of the
+pacing loop talking to the rig directly. So `lock.ttl` must exceed the longest message, or the
+interlock will truncate it — the opposite of §7's intent that active use keeps a lock alive.
+
+**Reconnect** was tested by pulling the cable: detection was clean (`device not configured` →
+`ErrDisconnected`, logged at INFO because a pulled cable is an expected ending), the CW abort on
+teardown failed quietly as designed, backoff doubled correctly, and the reconnect re-ran `Init`
+in full — identity re-checked, all of state re-read. The device path happened to survive the
+replug on this hardware, so `port.match` was not needed; that is not guaranteed and is why the
+option exists.
+
 ### 5.5 Kenwood models
 
 The Kenwood family splits in two, and the split is deeper than Icom's. The TS-480 and TS-590
@@ -1123,8 +1149,18 @@ queries. On Icom the fast poll is `03`, `04`, `1C 00`, `15 02`.
 
 **Disconnect** — USB serial dies when a cable is pulled or the rig is switched off. Treat the
 port as a supervised resource: on read error, close, mark `connected: false`, publish a WS
-event, and retry with exponential backoff (capped ~30 s). Re-open **by VID/PID + serial**
-where configured, not by device path — `/dev/ttyUSB0` is not stable across replug.
+event, and retry with exponential backoff (100 ms doubling, **capped at 5 s**). Re-open **by
+VID/PID + serial** where configured, not by device path — `/dev/ttyUSB0` is not stable across
+replug.
+
+The ceiling was 30 s until it was measured. Pulling and reseating a USB cable on the IC-7610
+took **56 seconds** to recover, of which roughly 35 were the supervisor asleep at the ceiling
+after the cable was already back. The ceiling is not a throughput knob: it is *how long a radio
+that is plugged in can go on being reported as disconnected*, and half a minute of that reads
+as a broken daemon. What it buys is proportionally tiny — a failed dial on `port.device` is one
+`open()` on a path that is not there, and even `port.match`'s USB enumeration is nothing every
+five seconds. `remoses-cli` uses the same 5 s ceiling for its reconnect to the daemon, where
+the argument is stronger still: somebody is watching that display.
 
 A dead port is not the only failure mode. A rig switched off behind a powered USB adapter
 leaves the port open and readable while answering nothing, so the session also counts

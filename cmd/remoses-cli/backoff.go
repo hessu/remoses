@@ -7,12 +7,20 @@ import (
 
 // Reconnect backoff. The floor is short because the common cause of a dropped
 // stream is the daemon being restarted, and waiting seconds to notice it came
-// back is worse than one wasted dial. The ceiling exists so that a monitor left
-// running against a daemon that is off for the night settles into one attempt
-// every half minute instead of spinning.
+// back is worse than one wasted dial. The ceiling bounds how long a daemon that
+// has come back can go unnoticed.
+//
+// The ceiling was 30 s, so that a monitor left running against a daemon that is
+// off for the night settled into one attempt every half minute. Five seconds
+// matches what the session's own supervisor now uses for a radio, and for the
+// same reason: the measured cost of that ceiling is the operator watching a
+// restarted daemon for up to half a minute before the display comes back, and
+// the thing being economised is one refused TCP connect to localhost. The
+// monitor is something a person sits in front of, which makes the trade even
+// more one-sided here than it is for the daemon.
 const (
 	backoffBase   = 500 * time.Millisecond
-	backoffMax    = 30 * time.Second
+	backoffMax    = 5 * time.Second
 	backoffFactor = 2.0
 	// backoffJitter spreads reconnects. Several clients watching the same
 	// instance all lose the stream at the same instant when it restarts, and

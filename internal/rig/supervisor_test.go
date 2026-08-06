@@ -195,3 +195,27 @@ func TestCloseIsIdempotentAndStopsEverything(t *testing.T) {
 		t.Error("command accepted after Close")
 	}
 }
+
+// TestDefaultBackoffCeiling pins the number an operator actually experiences:
+// the ceiling is how long a radio that has been plugged back in can go
+// unnoticed, because the supervisor is asleep between dials.
+//
+// TestBackoffDoublesAndIsBounded above tests the function against bounds it is
+// handed; this tests the default the daemon ships with, which is the one that
+// was measured on hardware and found wanting at 30 s.
+func TestDefaultBackoffCeiling(t *testing.T) {
+	if defaultBackoffMax > 5*time.Second {
+		t.Errorf("default backoff ceiling is %s; a replugged radio can go unnoticed that long, "+
+			"and a failed dial costs one open() on a missing path", defaultBackoffMax)
+	}
+
+	// And the ceiling is actually reached from the floor, rather than the floor
+	// being so large the schedule skips it.
+	d := defaultBackoffMin
+	for range 20 {
+		d = nextBackoff(d, defaultBackoffMin, defaultBackoffMax)
+	}
+	if d != defaultBackoffMax {
+		t.Errorf("schedule settles at %s, want the ceiling %s", d, defaultBackoffMax)
+	}
+}
