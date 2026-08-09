@@ -887,6 +887,45 @@ thing that does not vary.
   instead. This is documented ambiguity, not an assumption — it is the one place the two
   manuals disagree about a command they otherwise share.
 
+**Both VFOs are addressable, and `FA`/`FB` are how.** They read and set VFO A and VFO B
+directly, without selecting either, which is real addressing rather than "the VFO the radio is
+on" — the same property that makes the IC-7610's `25` usable. `FR` and `FT` select the receive
+and transmit VFO, and split is the relationship between them: this protocol has no split flag to
+write. The reference describes the two only by their side effects — "when using the FR command
+to select VFO A or VFO B, the selected VFO changes to the simplex state. When using the FT
+command, the selected VFO changes to the split state" — so switching split *off* is an `FR`
+naming the receive VFO and switching it *on* is an `FT` naming the other one. Which VFO is being
+received therefore has to be known before either can be sent, and `SetSplit` reads `FR;` rather
+than guessing: guessing wrong transmits on the wrong frequency.
+
+Reading it back is free where the model has `IF;`. Its P10 is the FR/FT selection and its P12 is
+simplex/split, both already in this backend's field table and neither previously decoded — which
+is why split was never published on a radio that reports it twice a second. The TS-890S has no
+`IF;`, so `FR;` and `FT;` are read on the slow poll for every model.
+
+There is **no per-VFO mode**: `MD` addresses whichever VFO is selected and nothing addresses the
+other one's, so `Caps.PerVFOMode` is false and `SetVFOMode` refuses. Selecting the named VFO,
+sending `MD` and selecting back would move the operator's radio under them and leave it wrong if
+the sequence failed halfway, which is worse than not offering it.
+
+Knowing the selection fixed a quieter bug along the way. `SetFrequency` with `VFOCurrent` used to
+mean VFO A unconditionally, and the discrete fast poll always read `FA;` — so on a rig parked on
+VFO B, remoses reported the frequency of the VFO nobody was listening to and tuning moved that
+one instead. Both now follow `FR`, falling back to A only until the radio has said.
+
+**On the TS-990S none of the above applies, because its `FA` and `FB` are not two VFOs.** Its
+reference names them "Main Band Frequency" and "Sub Band Frequency" — two receivers, each with
+its own VFO A and B underneath, reached by commands this backend does not implement. That is the
+same trap as the Icom side, where the IC-7610's `25`/`26` name main and sub bands and the
+IC-9700's name the selected and unselected VFO of one band: one opcode, two axes. So remoses
+publishes `caps.vfos: ["current"]` there and refuses VFO addressing outright, rather than
+labelling that radio's Sub band "VFO B" and moving the wrong receiver.
+
+This is also what `Caps.VFOs` had been getting wrong. It advertised `current`, `A` and `B` on
+every model in the family while no model implemented `backend.DualVFO`, so the session refused
+every request that named a VFO — a capability list promising something the next call rejected,
+which is the same failure the break-in work above was about.
+
 **CW break-in is four different commands across five radios**, and getting it wrong is not
 cosmetic: with break-in off, `KY` is accepted, the rig's buffer drains on schedule and nothing
 is transmitted. The whole reason remoses reads and writes this is covered under §11.1; what

@@ -86,7 +86,39 @@ type Model struct {
 	// BreakIn is which command switches CW break-in, which is four different
 	// answers across the family. See BreakInStyle.
 	BreakIn BreakInStyle
+
+	// VFOPair is what this model's FA and FB actually name. See VFOStyle: on
+	// one radio here they are not two VFOs at all.
+	VFOPair VFOStyle
 }
+
+// VFOStyle is what a model's FA and FB commands address.
+//
+// The two values are the same opcodes pointing at different axes, which is the
+// trap this backend has already met once on the Icom side: the IC-7610's 25/26
+// name main and sub bands where the IC-9700's name the selected and unselected
+// VFO of one band. Reading FB as "VFO B" on a radio where it means "sub band"
+// would set the wrong receiver's frequency and report it as the wrong thing.
+type VFOStyle int
+
+const (
+	// VFOPairAB is two VFOs of one receiver: FA is VFO A, FB is VFO B, and
+	// FR/FT select which is received and which is transmitted. The TS-480,
+	// TS-590S/SG and TS-890S, and what generic assumes.
+	VFOPairAB VFOStyle = iota
+	// VFOPairMainSub is the TS-990S, where "FA Main Band Frequency" and "FB Sub
+	// Band Frequency" address its two receivers rather than two VFOs of one.
+	// Each band has its own VFO A and B underneath, reached by commands this
+	// backend does not implement.
+	//
+	// So remoses offers no VFO addressing at all on that radio: calling its Sub
+	// band "VFO B" would be a different radio's model wearing the same letters.
+	VFOPairMainSub
+)
+
+// twoVFOs reports whether FA and FB name two VFOs that remoses can address as A
+// and B.
+func (v VFOStyle) twoVFOs() bool { return v == VFOPairAB }
 
 // BreakInStyle is how a model reads and sets CW break-in.
 //
@@ -265,6 +297,7 @@ func md(name, label string, id int) Model {
 		FilterSelect:  FilterSelectAB,
 		MaxPowerW:     100,
 		BreakIn:       BreakInVX,
+		VFOPair:       VFOPairAB,
 	}
 }
 
@@ -379,6 +412,12 @@ var models = map[string]Model{
 	"ts990s": func() Model {
 		m := om("ts990s", "TS-990S", 22)
 		m.MaxPowerW = 200
+		// And the only one whose FA and FB are not VFO A and VFO B. Its
+		// reference names them "Main Band Frequency" and "Sub Band Frequency":
+		// two receivers, each with its own pair of VFOs underneath. See
+		// VFOPairMainSub for why that means no VFO addressing rather than
+		// addressing under different names.
+		m.VFOPair = VFOPairMainSub
 		return m
 	}(),
 }

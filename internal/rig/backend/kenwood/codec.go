@@ -13,6 +13,8 @@ import (
 const (
 	keyFA backend.Key = "FA"
 	keyFB backend.Key = "FB"
+	keyFR backend.Key = "FR"
+	keyFT backend.Key = "FT"
 	keyMD backend.Key = "MD"
 	keyOM backend.Key = "OM"
 	keyDA backend.Key = "DA"
@@ -147,18 +149,43 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 	}
 
 	switch backend.Key(cmd) {
-	case keyFA:
-		u.Key = keyFA
-		if hz, err := parseFrequency(string(arg)); err == nil {
-			u.Patch.Frequency = &hz
+	case keyFA, keyFB:
+		// Each names its own VFO, so both are published into that VFO's slot.
+		// State.Frequency follows only when this is the VFO being received:
+		// otherwise a poll of the parked VFO would overwrite the operating
+		// frequency with one the operator is not listening to.
+		//
+		// Until the radio has said which VFO it is on, FA is taken as the
+		// operating one. That is this backend's long-standing assumption and it
+		// is right far more often than not — but it is now an assumption with a
+		// short life, because FR; settles it at connect.
+		u.Key = backend.Key(cmd)
+		hz, err := parseFrequency(string(arg))
+		if err != nil {
+			break
 		}
+		vfo := radio.VFOA
+		if u.Key == keyFB {
+			vfo = radio.VFOB
+		}
+		k.storeVFOFrequency(&u, vfo, hz)
 
-	case keyFB:
-		// VFO B is decoded only far enough to complete a transaction. State
-		// carries a single frequency, and this backend treats VFO A as the
-		// operating VFO throughout (Poll reads FA;, IF; reports the displayed
-		// frequency), so publishing VFO B here would fight with that.
-		u.Key = keyFB
+	case keyFR, keyFT:
+		// Which VFO is received and which transmitted. Split is the
+		// relationship between them rather than a field either one carries, so
+		// both are stored and the flag recomputed from the pair.
+		u.Key = backend.Key(cmd)
+		if len(arg) < 1 {
+			break
+		}
+		if u.Key == keyFR {
+			k.decodeReceiveVFO(&u, arg[0])
+		} else if v, ok := vfoFromParam(arg[0]); ok {
+			k.transmitVFO.Store(v)
+		}
+		if split, ok := k.storeSplit(); ok {
+			u.Patch.Split = &split
+		}
 
 	case keyMD:
 		u.Key = keyMD
@@ -407,6 +434,26 @@ func (k *Rig) decodeIF(u *backend.Update, f []byte) {
 	if m, ok := decodeMode(f[ifMode]); ok {
 		u.Patch.Mode = &m
 		k.mode.Store(uint32(m))
+	}
+
+	// P10 and P12: which VFO is selected, and simplex or split. Both were
+	// already in the field table and neither was read, which is why split was
+	// never published on a radio that reports it on every fast poll.
+	//
+	// Only where FA and FB are two VFOs. On the TS-990S the same field means
+	// something this backend does not model, so it is left alone.
+	if k.profile.VFOPair.twoVFOs() {
+		k.decodeReceiveVFO(u, f[ifFunc])
+		switch f[ifSplit] {
+		case '0', '1':
+			split := f[ifSplit] == '1'
+			// IF names the receive VFO, not the transmit one, so the pair FR/FT
+			// tracks cannot be completed from here. The flag is authoritative
+			// on its own, and the transmit VFO is recorded to match so that a
+			// later FR or FT answer does not contradict it.
+			k.transmitVFO.Store(transmitVFOFor(k.rxVFO(), split))
+			u.Patch.Split = &split
+		}
 	}
 
 	// A well-formed IF answer is proof that the rig is answering IF; again.

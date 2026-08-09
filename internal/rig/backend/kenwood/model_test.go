@@ -57,6 +57,13 @@ func answersFor(m Model) map[string]string {
 		a[reqMD] = "MD3"
 		a[reqDA] = "DA0"
 	}
+	// The parked VFO and the receive/transmit selection, where FA and FB are
+	// two VFOs at all.
+	if m.VFOPair == VFOPairAB {
+		a[reqFB] = "FB00007050000"
+		a[reqFR] = "FR0"
+		a[reqFT] = "FT0"
+	}
 	// Break-in is VX on the TS-590 generation and BI on the newer one, and the
 	// two-value styles need the SD delay to tell semi from full.
 	switch m.BreakIn {
@@ -450,13 +457,15 @@ func TestPollSlowPerModel(t *testing.T) {
 	}{
 		// No DA and no FL to read, but break-in is read like the TS-590's:
 		// SD; for the delay, then VX; for the switch.
-		{"ts480", []string{"PC;", "SD;", "VX;", "FW;"}},
-		{"ts590sg", []string{"PC;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
+		{"ts480", []string{"PC;", "FB;", "FR;", "FT;", "SD;", "VX;", "FW;"}},
+		{"ts590sg", []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
 		// DATA came with the mode code, and FW is not a width here. The TS-890S
 		// asks for no filter at all: its FL0 read form carries the selection, so
 		// there is no way to ask without also setting. Its BI is two-valued, so
 		// SD comes first; the TS-990S's is three-valued and needs no delay.
-		{"ts890s", []string{"PC;", "SD;", "BI;"}},
+		{"ts890s", []string{"PC;", "FB;", "FR;", "FT;", "SD;", "BI;"}},
+		// And no FB;/FR;/FT; at all on the TS-990S: its FA and FB are the Main
+		// and Sub bands rather than two VFOs, so remoses does not address them.
 		{"ts990s", []string{"PC;", "FL00;", "BI;"}},
 	}
 	for _, tt := range tests {
@@ -477,10 +486,11 @@ func TestInitPerModel(t *testing.T) {
 		model string
 		want  []string
 	}{
-		{"ts480", []string{"AI2;", "ID;", "FA;", "MD;", "PC;", "IF;"}},
-		{"ts590s", []string{"AI2;", "ID;", "FA;", "MD;", "DA;", "PC;", "FL;", "IF;"}},
+		{"ts480", []string{"AI2;", "ID;", "FA;", "MD;", "FB;", "FR;", "FT;", "PC;", "IF;"}},
+		{"ts590s", []string{"AI2;", "ID;", "FA;", "MD;", "FB;", "FR;", "FT;", "DA;", "PC;", "FL;", "IF;"}},
 		// No IF; to end on, so PTT is unknown until the rig pushes a TX; or RX;.
-		{"ts890s", []string{"AI2;", "ID;", "FA;", "OM0;", "PC;"}},
+		{"ts890s", []string{"AI2;", "ID;", "FA;", "OM0;", "FB;", "FR;", "FT;", "PC;"}},
+		// The TS-990S addresses no VFOs, so it asks for none of them.
 		{"ts990s", []string{"AI2;", "ID;", "FA;", "OM0;", "PC;", "FL00;"}},
 	}
 	for _, tt := range tests {

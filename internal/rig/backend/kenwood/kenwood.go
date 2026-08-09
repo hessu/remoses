@@ -93,6 +93,8 @@ const (
 	reqSMNoSelector = "SM;"
 	reqKY           = "KY;"
 	reqSD           = "SD;" // CW break-in delay; 0 ms means full break-in
+	reqFR           = "FR;" // receive VFO; sending it also forces simplex
+	reqFT           = "FT;" // transmit VFO; sending it also forces split
 )
 
 // Rig is the Kenwood ASCII CAT backend. Construct it with New.
@@ -132,6 +134,13 @@ type Rig struct {
 	// has only two values it is the only thing that separates semi from full,
 	// so it is kept even though State does not publish it.
 	breakInDelayMS atomic.Int32
+
+	// receiveVFO and transmitVFO each hold a radio.VFO, from FR;, FT; or the
+	// P10 and P12 fields of an IF answer. Split is the relationship between
+	// them rather than a flag either one carries, and SetSplit needs the
+	// receive one before it can name a transmit VFO.
+	receiveVFO  atomic.Value
+	transmitVFO atomic.Value
 }
 
 // New builds the backend from a radio's configuration. A missing kenwood block
@@ -195,7 +204,24 @@ func (k *Rig) Caps() radio.Caps {
 		// Fresh slice per call: Caps is published through the API and a shared
 		// backing array would be one mutation away from a data race.
 		Modes: append([]radio.Mode(nil), k.profile.Modes...),
-		VFOs:  []radio.VFO{radio.VFOCurrent, radio.VFOA, radio.VFOB},
+		// Only the models whose FA and FB are two VFOs of one receiver. This
+		// used to advertise A and B on every radio here while nothing could
+		// address either, so a client that believed the list got a 422 for
+		// every request naming one.
+		VFOs: k.vfos(),
+
+		// FA and FB address a VFO by name, so the labels are stable: A is
+		// always A. Contrast the IC-9700, where the protocol only offers
+		// "selected" and "unselected" and remoses has to say so.
+		VFOAddressing: k.vfoAddressing(),
+		// FR and FT set which VFO is received and which transmitted, which is
+		// what split is on this protocol.
+		Split: k.profile.VFOPair.twoVFOs(),
+		// But there is no per-VFO mode: MD applies to the selected VFO and
+		// nothing addresses the other one's. See SetVFOMode.
+		PerVFOMode: false,
+		// One receiver, one VFO received at a time.
+		DualWatch: false,
 
 		// PC is in real watts, which is unusual enough to be worth advertising:
 		// clients can show a watt slider instead of a meaningless percentage.
@@ -221,6 +247,25 @@ func (k *Rig) Caps() radio.Caps {
 		CWMinWPM:  minWPM,
 		CWMaxWPM:  maxWPM,
 	}
+}
+
+// vfos is the addressable VFO list for this model.
+func (k *Rig) vfos() []radio.VFO {
+	if k.profile.VFOPair.twoVFOs() {
+		return []radio.VFO{radio.VFOCurrent, radio.VFOA, radio.VFOB}
+	}
+	return []radio.VFO{radio.VFOCurrent}
+}
+
+// vfoAddressing is empty where there is no addressing to describe, so the field
+// stays out of the published capabilities rather than claiming a scheme.
+func (k *Rig) vfoAddressing() string {
+	if k.profile.VFOPair.twoVFOs() {
+		// Stable labels: FA is VFO A on every one of these radios, unlike the
+		// IC-9700's selected/unselected pair.
+		return "named"
+	}
+	return ""
 }
 
 // read is one query and the key its answer arrives under. The poll and Init
@@ -249,6 +294,13 @@ func (k *Rig) Init(ctx context.Context, c backend.Conn) error {
 		{reqID, keyID},
 		{reqFA, keyFA},
 		{k.profile.modeReq(), k.profile.modeKey()},
+	}
+	// Both VFOs and the receive/transmit selection at connect, so the first
+	// client to look sees VFO B filled in rather than a zero, and so that
+	// State.Frequency is anchored on the VFO the operator is actually on before
+	// the first poll rather than assuming it is A.
+	if k.profile.VFOPair.twoVFOs() {
+		reads = append(reads, read{reqFB, keyFB}, read{reqFR, keyFR}, read{reqFT, keyFT})
 	}
 	// DA; must precede IF;: it decides whether IF; will answer at all. On the OM
 	// models there is nothing to ask — the mode read above already settled DATA
@@ -379,7 +431,12 @@ func (k *Rig) pollFast(ctx context.Context, c backend.Conn) error {
 		return err
 	}
 
-	if _, err := do(ctx, c, reqFA, keyFA); err != nil {
+	// The frequency of the VFO being received, which is not always A: on a
+	// radio parked on VFO B, polling FA; would keep overwriting State with the
+	// frequency of the VFO the operator is not listening to. The bulk path
+	// above has no such problem, since IF; reports the displayed frequency.
+	req, key := k.receiveFreqRead()
+	if _, err := do(ctx, c, req, key); err != nil {
 		return err
 	}
 	if _, err := do(ctx, c, k.profile.modeReq(), k.profile.modeKey()); err != nil {
@@ -389,8 +446,24 @@ func (k *Rig) pollFast(ctx context.Context, c backend.Conn) error {
 	return err
 }
 
+// receiveFreqRead is the frequency query for whichever VFO is being received.
+// FA until something says otherwise, which is both the safe default and what
+// this backend did before it could tell the two apart.
+func (k *Rig) receiveFreqRead() (string, backend.Key) {
+	if k.profile.VFOPair.twoVFOs() && k.rxVFO() == radio.VFOB {
+		return reqFB, keyFB
+	}
+	return reqFA, keyFA
+}
+
 func (k *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 	reads := []read{{reqPC, keyPC}}
+	// The parked VFO and the split selection. The received VFO's frequency is
+	// already on the fast tier; this is the other one, which changes only when
+	// somebody moves it.
+	if k.profile.VFOPair.twoVFOs() {
+		reads = append(reads, read{reqFB, keyFB}, read{reqFR, keyFR}, read{reqFT, keyFT})
+	}
 	if fl := k.profile.filterSlotRead(); fl != "" {
 		reads = append(reads, read{fl, keyFL})
 	}
@@ -437,22 +510,37 @@ func (k *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 
 // SetFrequency writes FA; or FB;.
 //
-// VFOCurrent maps to VFO A. The backend has no FR;/FT; tracking, and every read
-// path it has — the FA; fast poll, the frequency inside IF; — is anchored on
-// VFO A, so quietly following the rig's VFO selection here would produce a State
-// whose frequency and its own writes disagreed.
+// VFOCurrent means the VFO the radio is receiving on, which FR; reports and
+// which an IF answer carries on every fast poll. It used to mean VFO A
+// unconditionally, because nothing tracked the selection — so tuning a rig
+// parked on VFO B moved the other VFO and the operator's frequency did not
+// change. Until something has reported the selection it still falls back to A,
+// which is the same assumption as before and settled at connect.
+//
+// On a model whose FA and FB are not two VFOs, A is all there is to write and a
+// request naming B is refused; see SetVFOFrequency.
 func (k *Rig) SetFrequency(ctx context.Context, c backend.Conn, vfo radio.VFO, hz uint64) error {
-	var cmd string
-	var key backend.Key
-	switch vfo {
-	case radio.VFOCurrent, radio.VFOA:
-		cmd, key = "FA", keyFA
-	case radio.VFOB:
-		cmd, key = "FB", keyFB
-	default:
-		return fmt.Errorf("kenwood: the TS-590 has no %s VFO", vfo)
+	if vfo == radio.VFOCurrent {
+		vfo = radio.VFOA
+		if k.rxVFO() == radio.VFOB {
+			vfo = radio.VFOB
+		}
 	}
+	switch vfo {
+	case radio.VFOA, radio.VFOB:
+	default:
+		return fmt.Errorf("kenwood: the %s has no %s VFO: %w",
+			k.profile.Label, vfo, backend.ErrUnsupported)
+	}
+	if vfo == radio.VFOA && !k.profile.VFOPair.twoVFOs() {
+		// The one frequency this radio's FA addresses, whatever it is called.
+		return k.writeFrequency(ctx, c, "FA", keyFA, hz)
+	}
+	return k.SetVFOFrequency(ctx, c, vfo, hz)
+}
 
+// writeFrequency is the set-then-read-back both paths share.
+func (k *Rig) writeFrequency(ctx context.Context, c backend.Conn, cmd string, key backend.Key, hz uint64) error {
 	digits, err := formatFrequency(hz)
 	if err != nil {
 		return err

@@ -26,6 +26,9 @@ func initAnswers() map[string]string {
 		reqSD: "SD0300",
 		"VX;": "VX1", // break-in on the TS-590 generation
 		"BI;": "BI1", // and on the TS-890S/TS-990S
+		reqFB: "FB00007050000",
+		reqFR: "FR0", // receiving on VFO A
+		reqFT: "FT0", // transmitting on it too, so simplex
 	}
 }
 
@@ -140,7 +143,7 @@ func TestInit(t *testing.T) {
 	// on), then ID; as the link check, then the state reads. DA; precedes IF;
 	// because it decides whether IF; will answer at all, and MD; precedes PC;
 	// because the watt ceiling depends on the mode.
-	c.wantSent(t, "AI2;", "ID;", "FA;", "MD;", "DA;", "PC;", "FL;", "IF;")
+	c.wantSent(t, "AI2;", "ID;", "FA;", "MD;", "FB;", "FR;", "FT;", "DA;", "PC;", "FL;", "IF;")
 
 	if k.Model() != "TS-590SG" {
 		t.Errorf("Model = %q after ID023, want TS-590SG", k.Model())
@@ -183,7 +186,7 @@ func TestInitSkipsIFInDataMode(t *testing.T) {
 	if err := k.Init(context.Background(), c); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	c.wantSent(t, "AI2;", "ID;", "FA;", "MD;", "DA;", "PC;", "FL;")
+	c.wantSent(t, "AI2;", "ID;", "FA;", "MD;", "FB;", "FR;", "FT;", "DA;", "PC;", "FL;")
 
 	if !k.dataMode.Load() {
 		t.Error("data mode not recorded from DA1")
@@ -308,22 +311,24 @@ func TestPollSlow(t *testing.T) {
 		mode radio.Mode
 		want []string
 	}{
-		// FW carries a bandwidth only in CW and FSK. Break-in (SD; then VX; on
-		// this model) is read only in CW, where the command means break-in
-		// rather than VOX.
+		// FB;, FR; and FT; are the parked VFO and the split selection, read on
+		// every slow poll whatever the mode. FW carries a bandwidth only in CW
+		// and FSK. Break-in (SD; then VX; on this model) is read only in CW,
+		// where the command means break-in rather than VOX.
 		{"CW includes the filter width and break-in", radio.ModeCW,
-			[]string{"PC;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
+			[]string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
 		{"CW-R includes the filter width and break-in", radio.ModeCWR,
-			[]string{"PC;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
+			[]string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
 		{"FSK includes the filter width but not break-in", radio.ModeFSK,
-			[]string{"PC;", "FL;", "DA;", "FW;"}},
+			[]string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;", "FW;"}},
 		// In SSB and AM the rig refuses FW outright; in FM it answers with a
 		// modulation-degree switch that would land in State as a 0 Hz passband.
-		{"USB skips it", radio.ModeUSB, []string{"PC;", "FL;", "DA;"}},
-		{"LSB skips it", radio.ModeLSB, []string{"PC;", "FL;", "DA;"}},
-		{"AM skips it", radio.ModeAM, []string{"PC;", "FL;", "DA;"}},
-		{"FM skips it", radio.ModeFM, []string{"PC;", "FL;", "DA;"}},
-		{"an unknown mode skips it", radio.ModeUnknown, []string{"PC;", "FL;", "DA;"}},
+		{"USB skips it", radio.ModeUSB, []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
+		{"LSB skips it", radio.ModeLSB, []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
+		{"AM skips it", radio.ModeAM, []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
+		{"FM skips it", radio.ModeFM, []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
+		{"an unknown mode skips it", radio.ModeUnknown,
+			[]string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -351,17 +356,30 @@ func TestSetFrequency(t *testing.T) {
 		name string
 		vfo  radio.VFO
 		hz   uint64
+		// rx is the VFO the radio is receiving on, VFOCurrent for "not yet
+		// reported".
+		rx   radio.VFO
 		want []string
 	}{
-		{"VFO A", radio.VFOA, 14_025_000, []string{"FA00014025000;", "FA;"}},
-		// Nothing in this backend tracks FR;/FT;, and every read path is
-		// anchored on VFO A, so "current" means A.
-		{"current means A", radio.VFOCurrent, 7_050_000, []string{"FA00007050000;", "FA;"}},
-		{"VFO B", radio.VFOB, 14_200_000, []string{"FB00014200000;", "FB;"}},
+		{"VFO A", radio.VFOA, 14_025_000, radio.VFOCurrent, []string{"FA00014025000;", "FA;"}},
+		{"VFO B", radio.VFOB, 14_200_000, radio.VFOCurrent, []string{"FB00014200000;", "FB;"}},
+		// "current" is the VFO being received. Until FR; or an IF answer has
+		// said which that is, it falls back to A.
+		{"current before the selection is known means A", radio.VFOCurrent, 7_050_000,
+			radio.VFOCurrent, []string{"FA00007050000;", "FA;"}},
+		{"current follows a radio parked on A", radio.VFOCurrent, 7_050_000,
+			radio.VFOA, []string{"FA00007050000;", "FA;"}},
+		// The case that used to tune the wrong VFO: on a rig receiving on B,
+		// "current" wrote FA and the operator's frequency did not move.
+		{"current follows a radio parked on B", radio.VFOCurrent, 7_050_000,
+			radio.VFOB, []string{"FB00007050000;", "FB;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			k := newRig(t, 2, true)
+			if tt.rx != radio.VFOCurrent {
+				k.receiveVFO.Store(tt.rx)
+			}
 			c := newTestConn(t, k, map[string]string{
 				reqFA: "FA00014025000",
 				reqFB: "FB00014200000",

@@ -178,7 +178,7 @@ left there refuses the per-VFO commands and its readings go stale.
 | TS-590S | `ts590s` | Frequency, modes, filters, power, PTT, break-in and CW exercised on the air | **yes** |
 | TS-590SG | `ts590sg` | Same command set as the S; the two differ only in `ID` | — |
 | TS-890S | `ts890s` | PTT cannot be polled, only pushed | — |
-| TS-990S | `ts990s` | 200 W; PTT cannot be polled, only pushed | — |
+| TS-990S | `ts990s` | 200 W; PTT cannot be polled, only pushed; **`FA`/`FB` are Main/Sub bands, not VFOs** | — |
 | other Kenwood | `generic` | TS-590 shape, but no break-in — see below | — |
 
 **The TS-590SG shares the S's command set entirely.** Their reference is one document, which
@@ -190,6 +190,24 @@ somebody put an SG on the air.
 The TS-890S and TS-990S are a noticeably different dialect: `OM` in place of
 `MD`, data mode folded into the mode code, no `IF;` bulk status — and with it no
 way to poll PTT at all, so it arrives only through auto-information pushes.
+
+**Both VFOs are addressable, and split with them.** `FA` and `FB` read and set
+VFO A and VFO B directly without selecting either, so a client can park a
+frequency on B while the operator works A; `FR` and `FT` then say which is
+received and which transmitted, and that relationship *is* split on this
+protocol — there is no split flag to write. What the family does not offer is a
+per-VFO **mode**: `MD` applies to whichever VFO is selected and nothing
+addresses the other one's, so `caps.per_vfo_mode` is false and `state.vfo_a` /
+`state.vfo_b` carry frequencies only. Reaching the other VFO's mode would mean
+selecting it, sending `MD` and selecting back — moving the operator's radio
+under them, and leaving it wrong if the sequence failed halfway.
+
+**Except on the TS-990S, where `FA` and `FB` are not VFOs at all.** Its
+reference names them "Main Band Frequency" and "Sub Band Frequency": two
+receivers, each with its own VFO A and B underneath. That is the same opcode
+pointing at a different axis, exactly as the IC-7610's `25`/`26` differ from the
+IC-9700's — so remoses reports `caps.vfos: ["current"]` there and refuses to
+address A or B, rather than calling that radio's Sub band "VFO B".
 
 **CW break-in is spelled four different ways across these five radios**, and it
 is not a cosmetic difference: with break-in off, a `KY` message is accepted, the
