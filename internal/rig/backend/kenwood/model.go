@@ -99,14 +99,19 @@ type Model struct {
 type BreakInStyle int
 
 const (
-	// BreakInNone is a radio with no break-in on/off command: the TS-480, whose
-	// reference has SD for the delay and nothing to switch the function itself.
+	// BreakInNone is a radio whose break-in remoses will not touch. Only
+	// generic, and by choice rather than for want of a command: see the
+	// registry entry for why an unidentified radio is the one case where
+	// guessing at VX is not worth it.
 	BreakInNone BreakInStyle = iota
 	// BreakInVX is the TS-590S/SG arrangement, and the surprising one: there is
 	// no break-in command at all. VX sets VOX, except that "when transmitting
 	// the VX command in CW mode, the Break-in function is set and read, rather
 	// than the VOX function". One command, two meanings, chosen by the mode the
 	// rig happens to be in — so remoses only touches it in CW.
+	//
+	// The TS-480 is given this style too, on inference rather than on its own
+	// reference; the registry entry sets out the argument.
 	BreakInVX
 	// BreakInBI2 is BI with two values, off and on: the TS-890S. Semi and full
 	// are not distinguished by BI; the SD delay decides, 0 ms being full.
@@ -303,17 +308,22 @@ var models = map[string]Model{
 		m := md("generic", "generic Kenwood", 0)
 		// No break-in, unlike the TS-590 shape this otherwise copies.
 		//
-		// That shape's break-in command is VX, which sets VOX everywhere except
-		// CW. Claiming it here would mean writing VX to a radio remoses cannot
-		// identify — an Elecraft, or a Yaesu speaking this dialect — on the
-		// strength of a Kenwood footnote, and being wrong would switch voice VOX
-		// on rather than break-in. An unsent message is a worse-than-nothing
-		// outcome; a rig that starts transmitting on room noise is a dangerous
-		// one, so this is the asymmetry that decides it.
+		// The inference that makes VX safe to write on a TS-480 — no BI
+		// command, an SD delay, and a family where those two facts move
+		// together — is an inference about Kenwood. It says nothing about the
+		// Elecrafts and modern Yaesus that also speak this dialect, and this is
+		// the one command in the profile that WRITES on the strength of the
+		// guess rather than merely reading.
 		//
-		// The cost is that CW on a generic radio can still be accepted and not
-		// transmitted, which is exactly where every unidentified radio already
-		// stood. Name the model to get the check.
+		// Being wrong leaves VOX switched on. remoses only writes VX in CW, so
+		// nothing happens there — it surfaces later, when the operator moves to
+		// SSB and finds the radio keying on room noise. A fault that appears
+		// somewhere other than where it was caused is a bad one to introduce
+		// into an unidentified radio.
+		//
+		// The cost of abstaining is that CW on a generic radio can still be
+		// accepted and not transmitted, which is exactly where every
+		// unidentified radio already stood. Name the model to get the check.
 		m.BreakIn = BreakInNone
 		return m
 	}(),
@@ -327,10 +337,22 @@ var models = map[string]Model{
 		m.DataMode = DataModeNone
 		m.SMeterScale = 20
 		m.FilterSelect = FilterSelectNone
-		// Its VX is documented as the VOX function alone, with none of the
-		// TS-590's "in CW mode this means break-in" note, and there is no BI.
-		// So break-in is not switchable over CAT on this radio.
-		m.BreakIn = BreakInNone
+		// Break-in on VX here is INFERRED, not transcribed. Its reference
+		// documents VX as "the VOX function status" and says nothing about CW,
+		// unlike the TS-590's, which spells the overload out.
+		//
+		// Three things say it is nonetheless the same radio underneath. It has
+		// SD, "the CW Break-in time delay", where 0000 is full break-in — so
+		// break-in exists and is switchable somehow. It has no BI. And across
+		// this family the two facts move together: the TS-890S and TS-990S,
+		// which do have BI, both fence VX off with "cannot be set in modes
+		// other than SSB/AM/FM", while the TS-590, which does not, overloads
+		// it. The TS-480 has no BI and no such fence.
+		//
+		// So the silence reads as an omission rather than a denial. If it turns
+		// out to be wrong the cost is bounded: remoses writes VX only in CW,
+		// where the effect would be VOX switched on rather than break-in.
+		m.BreakIn = BreakInVX
 		return m
 	}(),
 

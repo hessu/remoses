@@ -892,12 +892,12 @@ cosmetic: with break-in off, `KY` is accepted, the rig's buffer drains on schedu
 is transmitted. The whole reason remoses reads and writes this is covered under §11.1; what
 differs here is the spelling.
 
-| Model | Command | Values | Semi vs full |
-|---|---|---|---|
-| TS-990S | `BI` | `0` off, `1` semi, `2` full | direct |
-| TS-890S | `BI` | `0` off, `1` on | `SD` delay: `0000` ms **is** full |
-| TS-590S / SG | **`VX`** | `0` off, `1` on | `SD` delay, as above |
-| TS-480 | **none** | — | — |
+| Model | Command | Values | Semi vs full | `VX` in CW |
+|---|---|---|---|---|
+| TS-990S | `BI` | `0` off, `1` semi, `2` full | direct | fenced off: "cannot be set in modes other than SSB/AM/FM" |
+| TS-890S | `BI` | `0` off, `1` on | `SD` delay: `0000` ms **is** full | fenced off, same wording |
+| TS-590S / SG | **`VX`** | `0` off, `1` on | `SD` delay, as above | **is** break-in, stated outright |
+| TS-480 | **`VX`**, inferred | `0` off, `1` on | `SD` delay, as above | not documented either way |
 
 The TS-590 row is the trap. That radio has no break-in command at all: `VX` sets VOX, and its
 reference adds that "when transmitting the VX command in CW mode, the Break-in function is set
@@ -907,18 +907,34 @@ the VOX setting published as break-in, which is a confident wrong answer feeding
 decides whether Morse will be heard — and refuses a break-in *set* outside CW rather than
 switching voice VOX on behind the operator.
 
+**The TS-480 row is an inference, and the last column is why.** Its reference documents `VX` as
+the VOX function and is silent about CW. But the two facts in that table move together: the
+radios with a dedicated `BI` both fence `VX` off from CW, and the radio without one overloads it.
+The TS-480 has no `BI` and no fence — and it does have `SD`, "the CW Break-in time delay", so
+break-in exists on the radio and something must switch it. `VX` is the only candidate. The
+silence therefore reads as an omission rather than a denial; the TS-590's reference had to say it
+out loud precisely because it is surprising.
+
+The bounded downside is what makes the inference worth acting on: remoses writes `VX` only in CW,
+so if it is wrong the radio gets VOX switched on rather than break-in, and nothing transmits from
+it in CW. That is recoverable and reportable. It is recorded here as an assumption to revisit,
+alongside the AM power ceiling below, rather than as something transcribed.
+
 On the two-value styles, semi and full are the same `1` and are told apart by `SD`. Writing full
 means `SD0000;` first; writing semi when the rig is already on full has to invent a delay, since
 full *is* zero and there is no previous value to restore. remoses uses 300 ms — mid-scale, and
 about a character at 20 wpm — and leaves any non-zero delay the operator already had alone.
 
-`caps.break_in_control` is false on the TS-480, which has nothing to switch, and on `generic`,
-which is a deliberate abstention. `generic` copies the TS-590 shape everywhere else, but this is
-the one command where being wrong is dangerous rather than merely useless: a radio that is not a
-TS-590 reads `VX` as VOX in CW too, so writing it blind could leave an unidentified rig
-transmitting on room noise. Weigh that against the cost of abstaining — CW accepted and not
-transmitted, which is where every unidentified radio already stood — and the asymmetry decides
-it. The same reasoning is why remoses records capabilities per model instead of probing for them.
+`caps.break_in_control` is false on `generic` alone, and that is a deliberate abstention.
+`generic` copies the TS-590 shape everywhere else, but the reasoning that licenses `VX` on a
+TS-480 is reasoning about *Kenwood*, and this dialect is also spoken by Elecraft and by modern
+Yaesu. Break-in is the one command in the profile that **writes** on the strength of the guess
+rather than merely reading, and being wrong leaves VOX enabled — invisibly, since the write only
+happens in CW, so it surfaces later when the operator moves to SSB and the rig keys on room
+noise. A fault that appears somewhere other than where it was caused is a bad one to introduce
+into a radio remoses cannot identify. Weigh that against the cost of abstaining — CW accepted and
+not transmitted, which is where every unidentified radio already stood — and the asymmetry
+decides it. The same reasoning is why remoses records capabilities per model instead of probing.
 
 **Assumptions worth revisiting on hardware:**
 
@@ -928,6 +944,9 @@ it. The same reasoning is why remoses records capabilities per model instead of 
   every write means the operator still sees what the rig actually took.
 - The TS-480 is profiled at 100 W. The 200 W TS-480HX answers the same `ID020`, so an HX would
   be capped at half its output until the profile learns to tell them apart.
+- The TS-480's break-in is on `VX`, inferred from the family rather than read from its reference
+  (above). Sending CW to one and watching whether it transmits settles it in a minute; so does
+  reading `VX;` in CW and comparing against the front panel.
 
 Both are answerable in one session with `debug_wire` on (§6.1), which is the point of it: the
 `PC` the rig accepts and the `PC` it reports back appear as bytes, side by side.

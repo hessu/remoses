@@ -174,7 +174,7 @@ left there refuses the per-VFO commands and its readings go stale.
 
 | Model | `kenwood.model` | Notes | Tested |
 |---|---|---|---|
-| TS-480 | `ts480` | No DATA mode, no filter selection, no break-in command | — |
+| TS-480 | `ts480` | No DATA mode, no filter selection; break-in on `VX` is **inferred**, see below | — |
 | TS-590S | `ts590s` | Frequency, modes, filters, power, PTT, break-in and CW exercised on the air | **yes** |
 | TS-590SG | `ts590sg` | Same command set as the S; the two differ only in `ID` | — |
 | TS-890S | `ts890s` | PTT cannot be polled, only pushed | — |
@@ -201,14 +201,22 @@ TS-590S and SG have no break-in command at all: they use `VX`, which sets VOX,
 is set and read, rather than the VOX function" — one command with two meanings,
 chosen by the mode the radio happens to be in, so remoses only touches it in CW
 and refuses a break-in request in any other mode rather than switching voice VOX
-on behind you. The TS-480 has no way to switch it at all, and reports
-`caps.break_in_control: false`.
+on behind you.
 
-`generic` reports false too, and that one is a refusal rather than a gap. It copies the TS-590
-shape everywhere else, but writing `VX` blind to a radio remoses cannot identify — an Elecraft,
-or a Yaesu speaking this dialect — would put it into **voice VOX** if the Kenwood footnote does
-not apply there. A rig that starts transmitting on room noise is a worse outcome than a message
-that goes unsent, so remoses declines to guess. Name your model to get the check.
+**The TS-480 is treated the same way, and that one is an inference.** Its reference documents
+`VX` as the VOX function and says nothing about CW. But it has `SD`, the CW break-in *delay*, so
+break-in exists on the radio; it has no `BI`; and across this family those two facts move
+together — the TS-890S and TS-990S, which do have `BI`, both fence `VX` off with "cannot be set
+in modes other than SSB/AM/FM", while the TS-590, which does not, overloads it. The TS-480 has
+neither a `BI` nor that fence, so the silence reads as an omission. If an operator reports VOX
+switching on when they send CW, this is the assumption that was wrong.
+
+`generic` gets **no** break-in, and that is a refusal rather than a gap. The inference above is
+one about Kenwood; it says nothing about the Elecrafts and modern Yaesus that also speak this
+dialect, and break-in is the one command in the profile that *writes* on the strength of a guess.
+Being wrong there leaves VOX switched on — invisibly, since remoses only writes `VX` in CW, so it
+surfaces later when the operator moves to SSB and the radio starts keying on room noise. Name
+your model to get the check.
 
 **The TS-590S needed its control lines raised, not merely set high.** Opening the
 port with DTR and RTS already asserted produced a radio that answered nothing

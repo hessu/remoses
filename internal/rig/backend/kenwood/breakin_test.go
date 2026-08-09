@@ -32,6 +32,14 @@ func TestSetBreakInPerModel(t *testing.T) {
 		// IS full, so semi has to pick a value.
 		{"ts590sg", radio.BreakInSemi, 0, []string{"SD0300;", "SD;", "VX1;", "VX;"}},
 
+		// The TS-480 is the same VX shape. Its reference does not say so — see
+		// the profile for why remoses reads the silence as an omission — so
+		// this is the assertion to revisit first if an operator reports VOX
+		// coming on when they send CW.
+		{"ts480", radio.BreakInOff, 300, []string{"VX0;", "VX;"}},
+		{"ts480", radio.BreakInSemi, 300, []string{"VX1;", "VX;"}},
+		{"ts480", radio.BreakInFull, 300, []string{"SD0000;", "SD;", "VX1;", "VX;"}},
+
 		// TS-890S: the same two-value shape on BI instead of VX.
 		{"ts890s", radio.BreakInOff, 300, []string{"BI0;", "BI;"}},
 		{"ts890s", radio.BreakInFull, 300, []string{"SD0000;", "SD;", "BI1;", "BI;"}},
@@ -87,13 +95,13 @@ func TestTS590SAndSGAreOneProfile(t *testing.T) {
 }
 
 func TestSetBreakInUnsupported(t *testing.T) {
-	// The TS-480's reference has SD for the delay and no command to switch the
-	// function. generic is a deliberate abstention rather than a gap: it copies
-	// the TS-590 shape, whose break-in command is VX, and VX means VOX on a
-	// radio that turns out not to be a TS-590. Writing it blind could put an
-	// unidentified rig into voice VOX, which is a worse failure than an unsent
-	// message, so remoses declines to guess.
-	for _, name := range []string{"ts480", "generic"} {
+	// generic is a deliberate abstention rather than a gap. It copies the
+	// TS-590 shape, whose break-in command is VX, and VX means VOX on a radio
+	// that turns out not to be a Kenwood of that era — this dialect is spoken
+	// by Elecraft and modern Yaesu too. Writing it blind would leave VOX on,
+	// which surfaces later in SSB rather than where it was caused, so remoses
+	// declines to guess for an unidentified radio.
+	for _, name := range []string{"generic"} {
 		t.Run(name, func(t *testing.T) {
 			k := newModelRig(t, name)
 			k.mode.Store(uint32(radio.ModeCW))

@@ -448,9 +448,9 @@ func TestPollSlowPerModel(t *testing.T) {
 		model string
 		want  []string
 	}{
-		// No DA and no FL to read, and no break-in command either: the TS-480
-		// has none of the three.
-		{"ts480", []string{"PC;", "FW;"}},
+		// No DA and no FL to read, but break-in is read like the TS-590's:
+		// SD; for the delay, then VX; for the switch.
+		{"ts480", []string{"PC;", "SD;", "VX;", "FW;"}},
 		{"ts590sg", []string{"PC;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
 		// DATA came with the mode code, and FW is not a width here. The TS-890S
 		// asks for no filter at all: its FL0 read form carries the selection, so
