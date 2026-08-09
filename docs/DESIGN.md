@@ -912,7 +912,13 @@ means `SD0000;` first; writing semi when the rig is already on full has to inven
 full *is* zero and there is no previous value to restore. remoses uses 300 ms — mid-scale, and
 about a character at 20 wpm — and leaves any non-zero delay the operator already had alone.
 
-`caps.break_in_control` is false on the TS-480, which has nothing to switch.
+`caps.break_in_control` is false on the TS-480, which has nothing to switch, and on `generic`,
+which is a deliberate abstention. `generic` copies the TS-590 shape everywhere else, but this is
+the one command where being wrong is dangerous rather than merely useless: a radio that is not a
+TS-590 reads `VX` as VOX in CW too, so writing it blind could leave an unidentified rig
+transmitting on room noise. Weigh that against the cost of abstaining — CW accepted and not
+transmitted, which is where every unidentified radio already stood — and the asymmetry decides
+it. The same reasoning is why remoses records capabilities per model instead of probing for them.
 
 **Assumptions worth revisiting on hardware:**
 

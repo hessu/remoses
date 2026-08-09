@@ -179,7 +179,13 @@ left there refuses the per-VFO commands and its readings go stale.
 | TS-590SG | `ts590sg` | Same command set as the S; the two differ only in `ID` | — |
 | TS-890S | `ts890s` | PTT cannot be polled, only pushed | — |
 | TS-990S | `ts990s` | 200 W; PTT cannot be polled, only pushed | — |
-| other Kenwood | `generic` | TS-590 shape | — |
+| other Kenwood | `generic` | TS-590 shape, but no break-in — see below | — |
+
+**The TS-590SG shares the S's command set entirely.** Their reference is one document, which
+marks every command remoses uses "[TS-590S / TS-590SG common]"; the two differ only in the `ID`
+they answer with, so everything verified on the S holds for the SG. A test asserts the profiles
+stay identical, because a fix applied to one and not the other would stay invisible until
+somebody put an SG on the air.
 
 The TS-890S and TS-990S are a noticeably different dialect: `OM` in place of
 `MD`, data mode folded into the mode code, no `IF;` bulk status — and with it no
@@ -197,6 +203,12 @@ chosen by the mode the radio happens to be in, so remoses only touches it in CW
 and refuses a break-in request in any other mode rather than switching voice VOX
 on behind you. The TS-480 has no way to switch it at all, and reports
 `caps.break_in_control: false`.
+
+`generic` reports false too, and that one is a refusal rather than a gap. It copies the TS-590
+shape everywhere else, but writing `VX` blind to a radio remoses cannot identify — an Elecraft,
+or a Yaesu speaking this dialect — would put it into **voice VOX** if the Kenwood footnote does
+not apply there. A rig that starts transmitting on room noise is a worse outcome than a message
+that goes unsent, so remoses declines to guess. Name your model to get the check.
 
 **The TS-590S needed its control lines raised, not merely set high.** Opening the
 port with DTR and RTS already asserted produced a radio that answered nothing

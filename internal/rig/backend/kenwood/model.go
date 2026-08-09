@@ -299,7 +299,24 @@ var models = map[string]Model{
 	// profile for, and there are many: the dialect is spoken by Elecraft and by
 	// modern Yaesu too. It claims the TS-590 shape, which is the most widely
 	// copied one, and no ID, so identification never claims a model.
-	"generic": md("generic", "generic Kenwood", 0),
+	"generic": func() Model {
+		m := md("generic", "generic Kenwood", 0)
+		// No break-in, unlike the TS-590 shape this otherwise copies.
+		//
+		// That shape's break-in command is VX, which sets VOX everywhere except
+		// CW. Claiming it here would mean writing VX to a radio remoses cannot
+		// identify — an Elecraft, or a Yaesu speaking this dialect — on the
+		// strength of a Kenwood footnote, and being wrong would switch voice VOX
+		// on rather than break-in. An unsent message is a worse-than-nothing
+		// outcome; a rig that starts transmitting on room noise is a dangerous
+		// one, so this is the asymmetry that decides it.
+		//
+		// The cost is that CW on a generic radio can still be accepted and not
+		// transmitted, which is exactly where every unidentified radio already
+		// stood. Name the model to get the check.
+		m.BreakIn = BreakInNone
+		return m
+	}(),
 
 	// The TS-480 predates DATA mode as a CAT concept: it has no DA command, so a
 	// DATA request has to be refused rather than approximated. Its S-meter is

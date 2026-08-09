@@ -3,6 +3,7 @@ package kenwood
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/hessu/remoses/internal/radio"
@@ -55,21 +56,60 @@ func TestSetBreakInPerModel(t *testing.T) {
 	}
 }
 
+// The S and the SG are one radio as far as this backend is concerned: their
+// reference is a single document, which marks the commands remoses uses
+// "[TS-590S / TS-590SG common]" throughout, and the two differ only in the ID
+// they answer with. Everything verified on the S therefore holds for the SG,
+// and this test is what keeps that true — a fix applied to one profile and not
+// the other would be invisible until somebody put an SG on the air.
+func TestTS590SAndSGAreOneProfile(t *testing.T) {
+	s, err := LookupModel("ts590s")
+	if err != nil {
+		t.Fatalf("LookupModel(ts590s): %v", err)
+	}
+	sg, err := LookupModel("ts590sg")
+	if err != nil {
+		t.Fatalf("LookupModel(ts590sg): %v", err)
+	}
+	if s.ID == sg.ID {
+		t.Errorf("both report ID %d; the ID is the one thing that separates them", s.ID)
+	}
+	// Normalise away the three fields that are allowed to differ, then require
+	// everything else — break-in style included — to match exactly.
+	s.Name, s.Label, s.ID = "", "", 0
+	sg.Name, sg.Label, sg.ID = "", "", 0
+	if !reflect.DeepEqual(s, sg) {
+		t.Errorf("the TS-590S and TS-590SG profiles have diverged:\n S = %+v\nSG = %+v", s, sg)
+	}
+	if s.BreakIn != BreakInVX {
+		t.Errorf("break-in style = %v, want BreakInVX: this generation has no BI command", s.BreakIn)
+	}
+}
+
 func TestSetBreakInUnsupported(t *testing.T) {
 	// The TS-480's reference has SD for the delay and no command to switch the
-	// function, so this must refuse rather than send something plausible.
-	k := newModelRig(t, "ts480")
-	k.mode.Store(uint32(radio.ModeCW))
-	c := newTestConn(t, k, answersFor(k.profile))
-	err := k.SetBreakIn(context.Background(), c, radio.BreakInSemi)
-	if err == nil {
-		t.Fatal("SetBreakIn accepted on a radio with no break-in command")
-	}
-	if !errors.Is(err, backend.ErrUnsupported) {
-		t.Errorf("error = %v, want backend.ErrUnsupported", err)
-	}
-	if k.Caps().BreakInControl {
-		t.Error("Caps advertises break-in control on a radio that has none")
+	// function. generic is a deliberate abstention rather than a gap: it copies
+	// the TS-590 shape, whose break-in command is VX, and VX means VOX on a
+	// radio that turns out not to be a TS-590. Writing it blind could put an
+	// unidentified rig into voice VOX, which is a worse failure than an unsent
+	// message, so remoses declines to guess.
+	for _, name := range []string{"ts480", "generic"} {
+		t.Run(name, func(t *testing.T) {
+			k := newModelRig(t, name)
+			k.mode.Store(uint32(radio.ModeCW))
+			c := newTestConn(t, k, answersFor(k.profile))
+			err := k.SetBreakIn(context.Background(), c, radio.BreakInSemi)
+			if err == nil {
+				t.Fatal("SetBreakIn accepted on a radio with no break-in command")
+			}
+			if !errors.Is(err, backend.ErrUnsupported) {
+				t.Errorf("error = %v, want backend.ErrUnsupported", err)
+			}
+			if k.Caps().BreakInControl {
+				t.Error("Caps advertises break-in control on a radio that has none")
+			}
+			c.wantSent(t) // and nothing went to the radio
+		})
 	}
 }
 
