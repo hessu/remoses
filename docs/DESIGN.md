@@ -779,17 +779,41 @@ schedule, PTT never rises and nothing goes out. Every signal remoses has says su
 real Morse at a real radio and having the operator report they heard none of it.
 
 So remoses reads break-in onto the slow tier, publishes it as `state.break_in` with
-`caps.break_in_control`, lets a client set it, and **refuses to queue CW that would go nowhere**:
-`Session.CheckCWWillTransmit` fails the request with 422 naming the fix. Two rules keep that from
-becoming its own outage. An *unknown* break-in never blocks — a radio whose reference has not been
-read for `16 47` must still be able to send — and PTT already being up is accepted, because that
-is one of the three conditions the footnote names.
+`caps.break_in_control`, lets a client set it, and **will not queue CW that would go nowhere**:
+`Session.EnsureCWWillTransmit` runs before every send.
+
+What it does about it is `cw.break_in`, which is `semi` (the default), `full` or `manual`. Under
+`semi` or `full` the setting is *written* — a remote operator has no way to reach the front
+panel, and a knob they cannot turn is not a safety feature. Under `manual` nothing is written and
+a rig known to have break-in off is refused with a 422 naming the fix, which is what a station
+that sequences its own T/R path wants.
+
+The default is semi rather than full deliberately. Full break-in is QSK: the rig switches between
+transmit and receive *inside the gaps between elements*, and on the TS-590S that was audible as
+the relays clocking rapidly through every transmission. Not every station's relays, sequencer or
+amplifier will tolerate that, so it is the operator's call to make on purpose — never something a
+remote client turns on for them. For the same reason the check only ever raises break-in to a
+state that transmits: it will not downgrade a rig already on full, nor force QSK onto one running
+semi.
+
+Three rules keep the guard from becoming its own outage. An *unknown* break-in never blocks — a
+radio whose reference has not been read for `16 47` must still be able to send; a failed *write*
+on an unknown does not block either, since the command not applying is not evidence the Morse
+will go nowhere; and PTT already being up is accepted, because that is one of the three
+conditions the footnote names.
 
 Setting it exposed a second bug in the same hour: `16 47` is read on the slow tier, and
 `ApplyPatch` did not mark a break-in request as needing that tier, so the write succeeded while
 the response carried the value from before it. The radio's own display showed BKIN on while
 remoses reported it off and went on refusing to send. **Any field read on the slow tier has to be
 in that list**; there is now a test per field rather than trust.
+
+**And then it happened again, on a TS-590S** — the same silent failure, after it had been found,
+understood, documented and fixed here. The fix had been written into the `civ` backend, so the
+Kenwood backend, which had no notion of break-in at all, sent Morse into a rig that was never
+going to transmit it and reported success. A guard that lives in one backend protects one
+backend; this one now lives in the session, where every backend that can report break-in gets it.
+See §5.5 for the four different commands Kenwood needs to do so.
 
 **The rest of the surface was exercised on the same radio**, and passed: authentication;
 the whole lock lifecycle including steal and expiry; WebSocket streaming and `ws-ticket`; all
@@ -862,6 +886,33 @@ thing that does not vary.
   also telling. remoses does not read it back there and relies on the AI echo of the set
   instead. This is documented ambiguity, not an assumption — it is the one place the two
   manuals disagree about a command they otherwise share.
+
+**CW break-in is four different commands across five radios**, and getting it wrong is not
+cosmetic: with break-in off, `KY` is accepted, the rig's buffer drains on schedule and nothing
+is transmitted. The whole reason remoses reads and writes this is covered under §11.1; what
+differs here is the spelling.
+
+| Model | Command | Values | Semi vs full |
+|---|---|---|---|
+| TS-990S | `BI` | `0` off, `1` semi, `2` full | direct |
+| TS-890S | `BI` | `0` off, `1` on | `SD` delay: `0000` ms **is** full |
+| TS-590S / SG | **`VX`** | `0` off, `1` on | `SD` delay, as above |
+| TS-480 | **none** | — | — |
+
+The TS-590 row is the trap. That radio has no break-in command at all: `VX` sets VOX, and its
+reference adds that "when transmitting the VX command in CW mode, the Break-in function is set
+and read, rather than the VOX function". One command, two meanings, selected by the mode the
+radio happens to be in. So remoses reads `VX` **only in CW** — a reading taken in SSB would be
+the VOX setting published as break-in, which is a confident wrong answer feeding the guard that
+decides whether Morse will be heard — and refuses a break-in *set* outside CW rather than
+switching voice VOX on behind the operator.
+
+On the two-value styles, semi and full are the same `1` and are told apart by `SD`. Writing full
+means `SD0000;` first; writing semi when the rig is already on full has to invent a delay, since
+full *is* zero and there is no previous value to restore. remoses uses 300 ms — mid-scale, and
+about a character at 20 wpm — and leaves any non-zero delay the operator already had alone.
+
+`caps.break_in_control` is false on the TS-480, which has nothing to switch.
 
 **Assumptions worth revisiting on hardware:**
 
@@ -1258,6 +1309,25 @@ see §5.2) → full state read → mark `connected` → start poller.
 > produce a brief key/PTT blip on any rig whose PTT or key line is driven from that port. This
 > is a driver limitation, not something the daemon can fully suppress — prefer a dedicated
 > keying adapter, or an RC delay on the line, where it matters.
+
+**Every port is opened with DTR and RTS low, then driven to its configured state.** The levels
+are `port.dtr` and `port.rts`, defaulted to `high` for a CAT port and left low for the keying
+port, which remoses builds in code.
+
+That is two steps rather than one argument to the open, and the second step is not belt and
+braces: it is the only part that works on some hardware. A **TS-590S** on its built-in USB
+bridge answered *nothing whatsoever* when the port was opened with both lines already
+high — correct speed, correct device, `AI2;` and `ID;` going out well-formed, and not one byte
+coming back, for as long as the daemon cared to retry. The same port opened with both lines low
+and then raised answers `ID021;` immediately. What that radio reacts to is the **low-to-high
+transition**, not the level, and passing the levels in `Mode.InitialStatusBits` produces no
+transition at all.
+
+It cost an evening to find, because a standalone probe using the library the same way worked on
+the first try and the daemon never did; the difference was three lines of setup that looked
+equivalent and were not. Opening low also happens to be the safe direction for the other kind of
+port, where DTR or RTS is a key or PTT and asserting one at open would transmit — such a port is
+configured low and never gets raised.
 
 **Poll** at two rates: `interval` for volatile values (frequency, mode, PTT, S-meter) and
 `slow_interval` for stable ones (power, filter). With transceive/AI enabled the poller is

@@ -87,9 +87,17 @@ func yaesuModelKey(s string) string {
 var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 var (
-	parities  = []string{"none", "odd", "even", "mark", "space"}
-	stopBits  = []string{"1", "1.5", "2"}
-	cwMethods = []string{"cat", "serial_key"}
+	parities = []string{"none", "odd", "even", "mark", "space"}
+	stopBits = []string{"1", "1.5", "2"}
+	// lineLevels are the accepted values of port.dtr and port.rts. Both are
+	// defaulted, so an empty one only appears in a Config assembled in code.
+	lineLevels = []string{"high", "low"}
+	cwMethods  = []string{"cat", "serial_key"}
+	// cwBreakIn are the accepted values of cw.break_in. "manual" is the way to
+	// keep remoses from writing the setting at all; there is deliberately no
+	// "off", because turning break-in off is the one thing that would stop CAT
+	// Morse reaching the air.
+	cwBreakIn = []string{"semi", "full", "manual"}
 	lines     = []string{"dtr", "rts"}
 )
 
@@ -267,6 +275,15 @@ func validatePort(p *Port, label string, add addFunc) {
 		add("%s: port.stop_bits %q, want one of %s",
 			label, p.StopBits, strings.Join(stopBits, ", "))
 	}
+	// Caught here rather than at the first dial, because getting these wrong on
+	// a port whose lines key a transmitter is not a mistake to discover at run
+	// time.
+	for _, l := range []struct{ name, value string }{{"dtr", p.DTR}, {"rts", p.RTS}} {
+		if !slices.Contains(lineLevels, l.value) {
+			add("%s: port.%s %q, want one of %s",
+				label, l.name, l.value, strings.Join(lineLevels, ", "))
+		}
+	}
 }
 
 // set reports whether the match block names anything to match on. An empty
@@ -345,6 +362,10 @@ func validateCW(cw *CW, label string, add addFunc) {
 		add("%s: cw.method %q, want one of %s",
 			label, cw.Method, strings.Join(cwMethods, ", "))
 		return
+	}
+	if !slices.Contains(cwBreakIn, cw.BreakIn) {
+		add("%s: cw.break_in %q, want one of %s",
+			label, cw.BreakIn, strings.Join(cwBreakIn, ", "))
 	}
 	if cw.Method != "serial_key" {
 		return

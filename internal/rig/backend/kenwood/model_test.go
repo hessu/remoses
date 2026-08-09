@@ -57,6 +57,18 @@ func answersFor(m Model) map[string]string {
 		a[reqMD] = "MD3"
 		a[reqDA] = "DA0"
 	}
+	// Break-in is VX on the TS-590 generation and BI on the newer one, and the
+	// two-value styles need the SD delay to tell semi from full.
+	switch m.BreakIn {
+	case BreakInVX:
+		a[reqSD] = "SD0300"
+		a["VX;"] = "VX1"
+	case BreakInBI2:
+		a[reqSD] = "SD0300"
+		a["BI;"] = "BI1"
+	case BreakInBI3:
+		a["BI;"] = "BI1"
+	}
 	// FL is not one command with one shape: FL1/FL2 on the TS-590, FL0 plus a
 	// selection on the TS-890S, FL0 plus band and selection on the TS-990S. The
 	// TS-890S has no read form that does not also set, so it asks for nothing.
@@ -436,14 +448,16 @@ func TestPollSlowPerModel(t *testing.T) {
 		model string
 		want  []string
 	}{
-		// No DA and no FL to read: the TS-480 has neither command.
+		// No DA and no FL to read, and no break-in command either: the TS-480
+		// has none of the three.
 		{"ts480", []string{"PC;", "FW;"}},
-		{"ts590sg", []string{"PC;", "FL;", "DA;", "FW;"}},
+		{"ts590sg", []string{"PC;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
 		// DATA came with the mode code, and FW is not a width here. The TS-890S
 		// asks for no filter at all: its FL0 read form carries the selection, so
-		// there is no way to ask without also setting.
-		{"ts890s", []string{"PC;"}},
-		{"ts990s", []string{"PC;", "FL00;"}},
+		// there is no way to ask without also setting. Its BI is two-valued, so
+		// SD comes first; the TS-990S's is three-valued and needs no delay.
+		{"ts890s", []string{"PC;", "SD;", "BI;"}},
+		{"ts990s", []string{"PC;", "FL00;", "BI;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {

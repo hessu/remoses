@@ -90,11 +90,12 @@ func (s *server) sendCW(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Refuse Morse that would go nowhere. On a radio whose break-in is off,
-	// the rig accepts the message, drains its buffer on schedule and transmits
-	// nothing — every signal here says success and the operator hears silence.
-	// Better a 422 naming the fix than a message that was never sent.
-	if err := sess.CheckCWWillTransmit(); err != nil {
+	// Do not queue Morse that would go nowhere. On a radio whose break-in is
+	// off, the rig accepts the message, drains its buffer on schedule and
+	// transmits nothing — every signal here says success and the operator hears
+	// silence. This switches break-in on where cw.break_in allows it, and
+	// otherwise returns a 422 naming the fix.
+	if err := sess.EnsureCWWillTransmit(r.Context()); err != nil {
 		s.fail(w, r, id, actionSendCW, err)
 		return
 	}

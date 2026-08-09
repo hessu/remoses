@@ -29,9 +29,18 @@ const (
 	DefaultDataBits = 8
 	DefaultParity   = "none"
 	DefaultStopBits = "1"
+	// DefaultPortLine is the resting state of DTR and RTS on a CAT port. See
+	// applyRadioDefaults for why it is high and why that default does not
+	// reach the keying port.
+	DefaultPortLine = "high"
 
 	DefaultCWWPM            = 25
 	DefaultCWChunksInFlight = 1
+	// DefaultCWBreakIn is semi, not full: see CW.BreakIn. remoses enables
+	// break-in because CAT Morse is silently discarded without it, but it
+	// picks the setting that does not put the rig's T/R switching inside the
+	// element gaps.
+	DefaultCWBreakIn = "semi"
 	// DefaultSerialKeyWeight is neutral dit/dah weighting.
 	DefaultSerialKeyWeight = 50
 
@@ -122,6 +131,22 @@ func applyRadioDefaults(r *Radio, p presenceRadio) {
 		if r.Port.StopBits == "" {
 			r.Port.StopBits = DefaultStopBits
 		}
+		// DTR and RTS high on a CAT port. This is what the rigs expect and what
+		// every other CAT program does: a TS-590S on its built-in USB answers
+		// nothing whatever with them low, at the correct speed on the correct
+		// port. The serial library's own default is high too.
+		//
+		// It is defaulted here rather than in the transport so that a Port
+		// built in code stays low — the keying port is built that way, and
+		// there DTR or RTS is the key or PTT, where asserting one transmits.
+		// An operator whose CAT port shares those lines with such an interface
+		// sets them back to low explicitly.
+		if r.Port.DTR == "" {
+			r.Port.DTR = DefaultPortLine
+		}
+		if r.Port.RTS == "" {
+			r.Port.RTS = DefaultPortLine
+		}
 	}
 
 	if r.CW.DefaultWPM == 0 {
@@ -129,6 +154,9 @@ func applyRadioDefaults(r *Radio, p presenceRadio) {
 	}
 	if r.CW.ChunksInFlight == 0 {
 		r.CW.ChunksInFlight = DefaultCWChunksInFlight
+	}
+	if r.CW.BreakIn == "" {
+		r.CW.BreakIn = DefaultCWBreakIn
 	}
 	if r.CW.SerialKey != nil && r.CW.SerialKey.Weight == 0 {
 		r.CW.SerialKey.Weight = DefaultSerialKeyWeight

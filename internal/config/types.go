@@ -135,6 +135,18 @@ type Port struct {
 	DataBits int    `yaml:"data_bits"`
 	Parity   string `yaml:"parity"` // none | odd | even | mark | space
 	StopBits string `yaml:"stop_bits"`
+
+	// DTR and RTS are the modem control outputs' resting state: "high" or
+	// "low". Both default to high on a CAT port, which is what the rigs
+	// expect — a TS-590S answers nothing at all with them low, and the serial
+	// library's own default is high.
+	//
+	// Set them low on a port whose DTR or RTS is wired to PTT or a CW key,
+	// where asserting one transmits. remoses will not use the CAT port for its
+	// own keying (see cw.serial_key.device), so this is for interfaces that
+	// borrow those lines behind its back.
+	DTR string `yaml:"dtr"`
+	RTS string `yaml:"rts"`
 }
 
 // Networked reports whether this port is reached over TCP rather than a local
@@ -244,8 +256,21 @@ type CW struct {
 	// ChunksInFlight is how many chunks beyond the one being sent may sit in
 	// the rig's buffer. Too few gives audible gaps between chunks; too many
 	// lengthens abort latency.
-	ChunksInFlight int        `yaml:"chunks_in_flight"`
-	SerialKey      *SerialKey `yaml:"serial_key"`
+	ChunksInFlight int `yaml:"chunks_in_flight"`
+	// BreakIn is the break-in setting remoses puts the rig into before it sends
+	// Morse over CAT: "semi" (the default), "full", or "manual" to leave the
+	// rig's own setting alone.
+	//
+	// It exists because with break-in off a CAT CW command is accepted, the
+	// rig's buffer drains on schedule, and nothing is transmitted — every
+	// signal says success and the operator hears silence. Semi is the default
+	// rather than full because full break-in (QSK) switches the rig between
+	// transmit and receive inside the gaps between elements, which not every
+	// station's relays, sequencer or amplifier will tolerate; that is the
+	// operator's call to make deliberately, not something to be turned on for
+	// them by a remote client.
+	BreakIn   string     `yaml:"break_in"`
+	SerialKey *SerialKey `yaml:"serial_key"`
 }
 
 // SerialKey configures locally generated keying on RS-232 control lines.

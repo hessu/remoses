@@ -92,6 +92,7 @@ const (
 	// character shorter. See Model.SMeterRequest.
 	reqSMNoSelector = "SM;"
 	reqKY           = "KY;"
+	reqSD           = "SD;" // CW break-in delay; 0 ms means full break-in
 )
 
 // Rig is the Kenwood ASCII CAT backend. Construct it with New.
@@ -122,6 +123,15 @@ type Rig struct {
 	ifBlocked atomic.Bool
 	// id is the numeric ID; answer, e.g. 21 for a TS-590S. See ModelForID.
 	id atomic.Uint32
+
+	// breakIn holds a radio.BreakIn, the last reading of the break-in setting.
+	// The CW path consults it before every send, so it must not cost a round
+	// trip; nil until the first BI/VX answer is decoded.
+	breakIn atomic.Value
+	// breakInDelayMS is the last SD reading. On the styles whose on/off command
+	// has only two values it is the only thing that separates semi from full,
+	// so it is kept even though State does not publish it.
+	breakInDelayMS atomic.Int32
 }
 
 // New builds the backend from a radio's configuration. A missing kenwood block
@@ -199,6 +209,10 @@ func (k *Rig) Caps() radio.Caps {
 		// reads and writes one of them, so claiming otherwise would promise
 		// control it does not implement.
 		SubReceiver: false,
+
+		// Break-in is per model, and on the TS-480 there is no command for it
+		// at all. See BreakInStyle.
+		BreakInControl: k.profile.BreakIn != BreakInNone,
 
 		// KY and KS are family-wide, so CW is not per model: a 24-character
 		// buffer and a 4-60 wpm keyer on every radio here.
@@ -388,6 +402,23 @@ func (k *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 	}
 	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
+			return err
+		}
+	}
+
+	// Break-in, but only in CW: on the TS-890S and TS-990S the reference says
+	// BI "can only be performed in CW mode" and returns 0 in any other, and on
+	// the TS-590 the VX it shares with VOX would answer about VOX instead. In
+	// both cases a reading taken outside CW would be a confident wrong answer,
+	// which is worse than not asking.
+	if req := k.breakInRead(); req != "" {
+		// The delay first: it is what turns "on" into semi or full.
+		if k.profile.BreakIn.binary() {
+			if _, err := do(ctx, c, reqSD, keySD); err != nil {
+				return err
+			}
+		}
+		if _, err := do(ctx, c, req, breakInKey(k.profile.BreakIn)); err != nil {
 			return err
 		}
 	}

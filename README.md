@@ -43,32 +43,43 @@ and CW keyed and **heard on the air**. Not a re-run of the whole daemon — lock
 the WebSocket and the interlocks are shared code already exercised on the
 IC-7610 — but everything CI-V-specific to that radio.
 
+A **TS-590S** on its built-in USB — the first non-Icom radio to be tried, and the
+first test of the Kenwood backend against anything but its own unit tests.
+Frequency, mode, transmit power, the filter width and both IF filter slots,
+explicit PTT, CW break-in in all three states, and CW **heard on the air** at 5 W
+on 28.030 MHz, both semi and full break-in. It found two bugs in the process: one
+that stopped it connecting at all, and the break-in gap again.
+
 **The safety interlocks were fired for real**, not against fakes: band limits
 refusing an out-of-band tune, power clamping, the dead-man `tx_timeout` forcing
 receive mid-transmission, and lock expiry cutting a live CW transmission inside a
 character. CW pacing was measured at **61 ms of drift over 18.3 seconds** on a rig
 whose buffer cannot be queried, so the timing is dead reckoning.
 
-**Between them they found nine bugs that no amount of reading the reference
+**Between them they found eleven bugs that no amount of reading the reference
 would have.** Values written but never read back, so they reported a stale
 figure for ever; setters that quietly changed a neighbouring setting, because on
 CI-V several settings share one command; capabilities describing the radio's own
 keyer while a different one was installed; a config default that addressed every
 Icom as an IC-7610; a poll counter that treated a refusal as silence and
-reconnect-looped a healthy radio; and a `Mode` that could not decode its own
-output. All nine are fixed, with the measurements and reasoning in
-[docs/DESIGN.md](docs/DESIGN.md) §5.4 and §11.2.
+reconnect-looped a healthy radio; a `Mode` that could not decode its own output;
+and a serial port opened with its control lines already high, which one radio
+answered by saying nothing whatsoever. All eleven are fixed, with the
+measurements and reasoning in [docs/DESIGN.md](docs/DESIGN.md) §5.4, §6 and §11.2.
 
 The worst of them was invisible from this side: **CW accepted, queued, drained
 on schedule — and never transmitted**, because the radio's break-in was off. Only
-an operator listening could have caught it. **Expect the other thirty-one models
-to be hiding something similar.**
+an operator listening could have caught it — and it happened again, on the
+TS-590S, after it had already been found and fixed on the IC-9700, because the
+Kenwood backend had no notion of break-in at all. **Expect the other thirty
+models to be hiding something similar.**
 
 ### What that still does not tell you
 
-- **Only two Icoms have been verified.** Treat every other model below as
-  "implemented from documentation, awaiting confirmation". The Yaesu and Kenwood
-  backends, and the remaining ten Icom profiles, have never seen a radio.
+- **Three radios have been verified**, two Icoms and one Kenwood. Treat every
+  other model below as "implemented from documentation, awaiting confirmation".
+  The Yaesu backends, the remaining ten Icom profiles and the other four Kenwood
+  profiles have never seen a radio.
 - **`limits.bands` gates tuning, not transmitting.** There is no transmit-only
   band limit, so it cannot express "receive anywhere, transmit only here" — which
   is what you want if a band has no antenna on it.
@@ -87,7 +98,7 @@ Do not leave it running an unattended station yet.
 
 ## Supported radios
 
-The **Tested** column marks radios confirmed against real hardware. Two entries
+The **Tested** column marks radios confirmed against real hardware. Three entries
 are filled in: see the status note above.
 
 "Tested" there means every CAT feature remoses implements **for that radio** was
@@ -97,8 +108,8 @@ connect.
 
 It does not mean each radio re-ran the whole daemon. The parts that are not
 radio-specific — locking, the WebSocket, the safety interlocks, reconnect —
-were exercised once, on the IC-7610, and are shared code; the IC-9700 confirmed
-the protocol surface and CW, not those again.
+were exercised once, on the IC-7610, and are shared code; the IC-9700 and the
+TS-590S confirmed the protocol surface and CW, not those again.
 
 ### Icom (`civ` backend)
 
@@ -144,11 +155,16 @@ operator's focus and fight whoever is holding the dial. So `caps.sub_receiver` i
 
 **CW break-in is controllable, and it matters more than it sounds.** On an Icom a CW message sent
 over CAT is transmitted only if break-in is on or the transmitter is already keyed — otherwise
-the rig accepts the message, empties its buffer on schedule and puts nothing on the air. remoses
-reads the setting (`state.break_in`, `caps.break_in_control`), lets you change it
-(`{"break_in": "semi"}`), and **refuses to queue CW that would go nowhere**, with a 422 naming
-the fix rather than a message you never hear. Radios whose reference has not been read for the
-command are never blocked by that check.
+the rig accepts the message, empties its buffer on schedule and puts nothing on the air.
+
+This is not Icom-specific; it caught a Kenwood too. remoses reads the setting
+(`state.break_in`, `caps.break_in_control`), lets you change it (`{"break_in": "semi"}`), and
+**never lets CW be queued that would go nowhere**. What it does about it is `cw.break_in`:
+`semi` (the default) or `full` switch break-in on before sending, because a remote operator
+cannot reach the front panel; `manual` writes nothing and returns a 422 naming the fix, for a
+station that sequences its own transmit path. Semi is the default because full is QSK and will
+clock your relays between elements — that is a choice to make deliberately. Radios whose
+reference has not been read for the command are never blocked by the check.
 
 **Memory mode is not modelled — but getting out of it is.** `{"vfo_mode": true}` returns the
 radio to VFO operation, which is what an operator stuck on a memory channel actually needs; a rig
@@ -158,9 +174,9 @@ left there refuses the per-VFO commands and its readings go stale.
 
 | Model | `kenwood.model` | Notes | Tested |
 |---|---|---|---|
-| TS-480 | `ts480` | No DATA mode, no filter selection | — |
-| TS-590S | `ts590s` | | — |
-| TS-590SG | `ts590sg` | | — |
+| TS-480 | `ts480` | No DATA mode, no filter selection, no break-in command | — |
+| TS-590S | `ts590s` | Frequency, modes, filters, power, PTT, break-in and CW exercised on the air | **yes** |
+| TS-590SG | `ts590sg` | Same command set as the S; the two differ only in `ID` | — |
 | TS-890S | `ts890s` | PTT cannot be polled, only pushed | — |
 | TS-990S | `ts990s` | 200 W; PTT cannot be polled, only pushed | — |
 | other Kenwood | `generic` | TS-590 shape | — |
@@ -168,6 +184,26 @@ left there refuses the per-VFO commands and its readings go stale.
 The TS-890S and TS-990S are a noticeably different dialect: `OM` in place of
 `MD`, data mode folded into the mode code, no `IF;` bulk status — and with it no
 way to poll PTT at all, so it arrives only through auto-information pushes.
+
+**CW break-in is spelled four different ways across these five radios**, and it
+is not a cosmetic difference: with break-in off, a `KY` message is accepted, the
+rig's buffer drains on schedule and nothing is transmitted. The TS-990S has a
+`BI` command taking off, semi and full directly. The TS-890S has `BI` with only
+off and on, and the `SD` delay decides which kind — 0 ms *is* full break-in. The
+TS-590S and SG have no break-in command at all: they use `VX`, which sets VOX,
+"except that when transmitting the VX command in CW mode, the Break-in function
+is set and read, rather than the VOX function" — one command with two meanings,
+chosen by the mode the radio happens to be in, so remoses only touches it in CW
+and refuses a break-in request in any other mode rather than switching voice VOX
+on behind you. The TS-480 has no way to switch it at all, and reports
+`caps.break_in_control: false`.
+
+**The TS-590S needed its control lines raised, not merely set high.** Opening the
+port with DTR and RTS already asserted produced a radio that answered nothing
+whatsoever — correct speed, correct device, well-formed frames going out, not one
+byte coming back. remoses now opens every port with both lines low and drives
+them to their configured state immediately afterwards, so a port configured high
+gets a low-to-high transition. See `port.dtr` / `port.rts` below.
 
 ### Yaesu (`yaesu` backend)
 

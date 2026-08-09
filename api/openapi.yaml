@@ -589,9 +589,11 @@ components:
             CW break-in. Absent on a radio remoses cannot ask. It decides
             whether CW sent over CAT reaches the air: with it off and the
             transmitter not already keyed, the rig accepts a message and
-            transmits nothing, so `POST /cw` is refused with 422 rather than
-            silently going nowhere. A client offering a CW box should show this
-            beside it.
+            transmits nothing. `POST /cw` will not let that happen silently —
+            depending on the server's `cw.break_in` policy it either switches
+            break-in on first or refuses with 422. A client offering a CW box
+            should show this beside it, and may see it change by itself after a
+            send for that reason.
 
         connected: { type: boolean }
         seq: { type: integer, format: int64 }
@@ -706,8 +708,13 @@ components:
           description: |
             remoses can read and set CW break-in on this radio. Worth checking
             before offering a CW box: where it is true, `state.break_in` says
-            whether Morse sent now would actually be transmitted, and `POST /cw`
-            refuses when it would not.
+            whether Morse sent now would actually be transmitted.
+
+            `POST /cw` acts on that by itself. Under the default server-side
+            `cw.break_in` policy it switches break-in on before sending, so a
+            client need not; configured `manual` it refuses instead, with 422.
+            Either way a message is never accepted and then silently not
+            transmitted, which is what a rig with break-in off does on its own.
         cw_method:
           type: string
           enum: [none, cat, serial_key]

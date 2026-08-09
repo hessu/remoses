@@ -23,6 +23,9 @@ func initAnswers() map[string]string {
 		reqIF: sampleIF,
 		reqSM: "SM00000",
 		reqFW: "FW0500",
+		reqSD: "SD0300",
+		"VX;": "VX1", // break-in on the TS-590 generation
+		"BI;": "BI1", // and on the TS-890S/TS-990S
 	}
 }
 
@@ -305,10 +308,15 @@ func TestPollSlow(t *testing.T) {
 		mode radio.Mode
 		want []string
 	}{
-		// FW carries a bandwidth only in CW and FSK.
-		{"CW includes the filter width", radio.ModeCW, []string{"PC;", "FL;", "DA;", "FW;"}},
-		{"CW-R includes the filter width", radio.ModeCWR, []string{"PC;", "FL;", "DA;", "FW;"}},
-		{"FSK includes the filter width", radio.ModeFSK, []string{"PC;", "FL;", "DA;", "FW;"}},
+		// FW carries a bandwidth only in CW and FSK. Break-in (SD; then VX; on
+		// this model) is read only in CW, where the command means break-in
+		// rather than VOX.
+		{"CW includes the filter width and break-in", radio.ModeCW,
+			[]string{"PC;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
+		{"CW-R includes the filter width and break-in", radio.ModeCWR,
+			[]string{"PC;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
+		{"FSK includes the filter width but not break-in", radio.ModeFSK,
+			[]string{"PC;", "FL;", "DA;", "FW;"}},
 		// In SSB and AM the rig refuses FW outright; in FM it answers with a
 		// modulation-degree switch that would land in State as a 0 Hz passband.
 		{"USB skips it", radio.ModeUSB, []string{"PC;", "FL;", "DA;"}},

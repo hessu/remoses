@@ -3,6 +3,7 @@ package serial
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ type Dialer struct {
 	device string
 	match  *config.PortMatch
 	mode   *bugst.Mode
+	lines  lineState
 }
 
 var _ transport.Dialer = (*Dialer)(nil)
@@ -33,7 +35,7 @@ var _ transport.Dialer = (*Dialer)(nil)
 // NewDialer validates a port configuration up front, so that a bad baud rate or
 // a misspelled parity fails at startup rather than at the first reconnect.
 func NewDialer(p config.Port) (*Dialer, error) {
-	mode, err := newMode(p)
+	mode, lines, err := newMode(p)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +43,7 @@ func NewDialer(p config.Port) (*Dialer, error) {
 	if device == "" && p.Match == nil {
 		return nil, fmt.Errorf("serial: port needs a device path or a vid/pid match")
 	}
-	d := &Dialer{ReadTimeout: defaultReadTimeout, device: device, mode: mode}
+	d := &Dialer{ReadTimeout: defaultReadTimeout, device: device, mode: mode, lines: lines}
 	if p.Match != nil {
 		m := *p.Match
 		if describeMatch(m) == "" {
@@ -77,6 +79,26 @@ func (d *Dialer) Dial(ctx context.Context) (transport.Transport, error) {
 		p.Close()
 		return nil, deviceErr(name, "set read timeout", err)
 	}
+
+	// Drive the control lines to their configured state now that the port is
+	// open. newMode opened it with both low, so a port configured high gets a
+	// low->high transition here rather than merely a high level — which is what
+	// some rigs actually respond to, and why this is a separate step instead of
+	// an argument to the open.
+	//
+	// Failures are reported rather than tolerated: on a port configured low the
+	// lines may be a CW key or PTT, and not knowing their state is not
+	// something to carry on from.
+	if err := p.SetDTR(d.lines.dtr); err != nil {
+		p.Close()
+		return nil, deviceErr(name, "set DTR", err)
+	}
+	if err := p.SetRTS(d.lines.rts); err != nil {
+		p.Close()
+		return nil, deviceErr(name, "set RTS", err)
+	}
+	slog.Debug("serial: opened", "device", name, "dtr", d.lines.dtr, "rts", d.lines.rts)
+
 	if err := ctx.Err(); err != nil {
 		p.Close()
 		return nil, err

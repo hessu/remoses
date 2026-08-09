@@ -536,34 +536,79 @@ func (s *Session) SetBreakIn(ctx context.Context, v radio.BreakIn) (radio.State,
 	return s.readback(ctx, backend.PollSlow, backend.PollFast)
 }
 
-// CheckCWWillTransmit reports why Morse queued now would not reach the air.
+// EnsureCWWillTransmit makes sure Morse queued now would actually reach the
+// air, switching break-in on if configuration allows it.
 //
-// It exists because the failure it catches is invisible: with break-in off and
-// nothing keying by hand, an Icom accepts command 17, drains its buffer on
+// It exists because the failure it prevents is invisible: with break-in off and
+// nothing keying by hand, the rig accepts the CW command, drains its buffer on
 // schedule and transmits nothing. Every signal remoses has says success — the
-// queue empties, no error comes back — and the operator hears silence. That
-// happened on an IC-9700 the first time CW was sent to it.
+// queue empties, no error comes back — and the operator hears silence. That has
+// now happened twice on real radios, an IC-9700 and a TS-590S, and both times
+// it was the operator noticing, not remoses.
 //
-// Only a radio that can actually report break-in is checked. Where the setting
-// is unknown, or the backend cannot read it, this says nothing rather than
-// blocking a rig whose reference has not been read for the command: refusing on
-// an unknown is how a safety check turns into an outage.
+// cw.break_in decides what is done about it. Under "semi" or "full" the setting
+// is written, because a remote operator has no way to reach the rig's front
+// panel and a knob they cannot turn is not a safety feature. Under "manual"
+// nothing is written and a rig known to have break-in off is refused, which is
+// for the station that sequences its own transmit path.
 //
-// PTT already being up is accepted, because that is one of the three conditions
-// the reference names, and an operator holding the transmitter down is entitled
-// to send into it.
-func (s *Session) CheckCWWillTransmit() error {
+// The asymmetry between known-off and unknown is deliberate throughout: a
+// refusal on an unknown is how a safety check turns into an outage. Where the
+// backend cannot report break-in at all, this says nothing.
+//
+// PTT already being up is accepted, because that is one of the conditions the
+// references name, and an operator holding the transmitter down is entitled to
+// send into it.
+func (s *Session) EnsureCWWillTransmit(ctx context.Context) error {
 	b := s.breakInController()
 	if b == nil {
 		return nil
 	}
 	v := b.BreakIn()
-	if v == radio.BreakInUnknown || v.Transmits() || s.State().PTT {
+	if v.Transmits() || s.State().PTT {
 		return nil
 	}
-	return fmt.Errorf("radio %s: break-in is off, so CW sent over CAT would be "+
-		"accepted and never transmitted; set break_in to semi or full, or key the "+
-		"transmitter another way first: %w", s.id, ErrUnsupported)
+
+	want, manage := configuredBreakIn(s.cfg.CW.BreakIn)
+	if !manage {
+		if v == radio.BreakInUnknown {
+			return nil
+		}
+		return fmt.Errorf("radio %s: break-in is off, so CW sent over CAT would be "+
+			"accepted and never transmitted; set break_in to semi or full, or key the "+
+			"transmitter another way first (cw.break_in is manual, so remoses will not "+
+			"set it): %w", s.id, ErrUnsupported)
+	}
+
+	if err := b.SetBreakIn(ctx, s, want); err != nil {
+		if v == radio.BreakInUnknown {
+			// Never read one, and setting it did not work either. The radio may
+			// simply not be in a state where the command applies, which is not
+			// evidence that the Morse will go nowhere.
+			s.log.Debug("cw: could not set break-in before sending, and its state is unknown",
+				"want", want, "err", err)
+			return nil
+		}
+		return fmt.Errorf("radio %s: break-in is off and setting it to %s failed, so CW "+
+			"sent over CAT would be accepted and never transmitted: %w", s.id, want, err)
+	}
+	s.log.Info("cw: enabled break-in so the message will be transmitted", "break_in", want)
+	return nil
+}
+
+// configuredBreakIn maps cw.break_in onto the value to write. The second result
+// is false for "manual", the setting that tells remoses to keep its hands off.
+func configuredBreakIn(s string) (radio.BreakIn, bool) {
+	switch s {
+	case "full":
+		return radio.BreakInFull, true
+	case "manual":
+		return radio.BreakInUnknown, false
+	default:
+		// Semi, and also the default for an empty value: a Session built in a
+		// test does not go through the config layer's defaulting.
+		return radio.BreakInSemi, true
+	}
 }
 
 // vfoModeSelector reports the backend's way out of memory mode, or nil.

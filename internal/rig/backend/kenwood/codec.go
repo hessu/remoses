@@ -25,6 +25,9 @@ const (
 	keyKS backend.Key = "KS"
 	keyID backend.Key = "ID"
 	keyAI backend.Key = "AI"
+	keyBI backend.Key = "BI"
+	keyVX backend.Key = "VX"
+	keySD backend.Key = "SD"
 	keyTX backend.Key = "TX"
 	keyRX backend.Key = "RX"
 )
@@ -207,6 +210,34 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 			if v, err := strconv.Atoi(string(arg[n-4:])); err == nil {
 				m := radio.Meter{Raw: v, Scale: k.profile.SMeterScale}
 				u.Patch.SMeter = &m
+			}
+		}
+
+	case keySD:
+		// The break-in delay. It is decoded before BI/VX in the poll order so
+		// that "on" can be resolved into semi or full, and it is stored rather
+		// than published: State carries the break-in mode, not the delay.
+		u.Key = keySD
+		if ms, ok := parseDelay(arg); ok {
+			k.breakInDelayMS.Store(int32(ms))
+		}
+
+	case keyBI, keyVX:
+		// Both are decoded on every model for the same reason as the two mode
+		// commands: only one can arrive from a given radio, and a decoder that
+		// depends on the configured model reads a misconfigured station wrong
+		// rather than merely incompletely.
+		//
+		// A VX frame is taken as break-in only in CW. In any other mode the
+		// same frame is the VOX setting, and storing that as break-in would
+		// make EnsureCWWillTransmit trust a number about something else.
+		u.Key = backend.Key(cmd)
+		if u.Key == keyVX && !isCW(k.lastMode()) {
+			break
+		}
+		if len(arg) >= 1 && arg[0] >= '0' && arg[0] <= '2' {
+			if v, ok := k.storeBreakIn(int(arg[0] - '0')); ok {
+				u.Patch.BreakIn = &v
 			}
 		}
 

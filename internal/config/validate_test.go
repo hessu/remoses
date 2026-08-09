@@ -33,10 +33,12 @@ func validConfig() *Config {
 				DataBits: 8,
 				Parity:   "none",
 				StopBits: "1",
+				DTR:      "high",
+				RTS:      "high",
 			},
 			CIV:    &CIV{RigAddress: 0x98, ControllerAddress: 0xE0, Transceive: true},
 			Poll:   Poll{Interval: Duration(500 * time.Millisecond), SlowInterval: Duration(5 * time.Second)},
-			CW:     CW{Enabled: true, Method: "cat", DefaultWPM: 25, ChunksInFlight: 1},
+			CW:     CW{Enabled: true, Method: "cat", DefaultWPM: 25, ChunksInFlight: 1, BreakIn: "semi"},
 			Limits: Limits{MaxPowerPct: 80, TXTimeout: Duration(120 * time.Second)},
 		}},
 	}

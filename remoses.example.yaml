@@ -65,6 +65,15 @@ radios:
       data_bits: 8
       parity: none
       stop_bits: "1"
+      # Resting state of the control lines: high | low, both default high on a
+      # CAT port. The port is always OPENED with them low and driven here a
+      # moment later, so "high" is a low-to-high transition — which is what a
+      # TS-590S needs before it will answer at all.
+      #
+      # Set them low only if this port's DTR or RTS is wired to a key or PTT
+      # interface, where asserting one transmits.
+      dtr: high
+      rts: high
     civ:
       # Which Icom this is. Sets the default bus address and the modes remoses
       # will offer, so a client is not shown PSK on a radio that has DV instead.
@@ -121,6 +130,15 @@ radios:
       # be asked how full it is, so this trades gap-free sending against abort
       # latency. Raise it only if you hear gaps between chunks.
       chunks_in_flight: 1
+      # Break-in to put the rig into before sending: semi | full | manual.
+      #
+      # This is not a preference. With break-in off the rig accepts the CW
+      # command, drains its buffer on schedule and transmits NOTHING — remoses
+      # sees success and you hear silence. Semi is the default; full is QSK,
+      # which switches the rig between transmit and receive between elements
+      # and will clock your relays hard. "manual" writes nothing and refuses to
+      # send while break-in is off, for a station that sequences its own T/R.
+      break_in: semi
     limits:
       # Icom reports power on a relative 0..255 scale with no watt meaning, so
       # the limit is a percentage. max_power_pct and max_power_w are mutually
@@ -160,6 +178,11 @@ radios:
       enabled: true
       method: cat # KY, fixed 24-character blocks
       default_wpm: 25
+      # The TS-590 has no break-in command: VX sets VOX, except in CW where the
+      # same command sets break-in. remoses only touches it in CW for that
+      # reason. On this model semi and full are told apart by the SD delay,
+      # where 0 ms is full break-in.
+      break_in: semi
     limits:
       # Kenwood PC is in watts: 005..100, 005..025 in AM.
       max_power_w: 80

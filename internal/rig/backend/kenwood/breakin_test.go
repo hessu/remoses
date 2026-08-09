@@ -1,0 +1,155 @@
+package kenwood
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/rig/backend"
+)
+
+// The family spells break-in four ways, and two of them cannot say semi from
+// full without the SD delay. These tests pin the wire traffic for each, because
+// a wrong command here is the failure that transmits nothing while reporting
+// success.
+
+func TestSetBreakInPerModel(t *testing.T) {
+	tests := []struct {
+		model string
+		v     radio.BreakIn
+		// delay is the SD reading the rig starts from, in ms.
+		delay int32
+		want  []string
+	}{
+		// TS-590: VX, plus SD to choose between semi and full.
+		{"ts590sg", radio.BreakInOff, 300, []string{"VX0;", "VX;"}},
+		{"ts590sg", radio.BreakInFull, 300, []string{"SD0000;", "SD;", "VX1;", "VX;"}},
+		// Already on a non-zero delay, so the operator's own value is left alone.
+		{"ts590sg", radio.BreakInSemi, 300, []string{"VX1;", "VX;"}},
+		// Coming from full there is no previous delay to keep: SD is 0, which
+		// IS full, so semi has to pick a value.
+		{"ts590sg", radio.BreakInSemi, 0, []string{"SD0300;", "SD;", "VX1;", "VX;"}},
+
+		// TS-890S: the same two-value shape on BI instead of VX.
+		{"ts890s", radio.BreakInOff, 300, []string{"BI0;", "BI;"}},
+		{"ts890s", radio.BreakInFull, 300, []string{"SD0000;", "SD;", "BI1;", "BI;"}},
+		{"ts890s", radio.BreakInSemi, 0, []string{"SD0300;", "SD;", "BI1;", "BI;"}},
+
+		// TS-990S: three values on BI, so the delay is never touched.
+		{"ts990s", radio.BreakInOff, 0, []string{"BI0;", "BI;"}},
+		{"ts990s", radio.BreakInSemi, 0, []string{"BI1;", "BI;"}},
+		{"ts990s", radio.BreakInFull, 300, []string{"BI2;", "BI;"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model+"/"+string(tt.v), func(t *testing.T) {
+			k := newModelRig(t, tt.model)
+			k.mode.Store(uint32(radio.ModeCW))
+			k.breakInDelayMS.Store(tt.delay)
+			c := newTestConn(t, k, answersFor(k.profile))
+			if err := k.SetBreakIn(context.Background(), c, tt.v); err != nil {
+				t.Fatalf("SetBreakIn: %v", err)
+			}
+			c.wantSent(t, tt.want...)
+		})
+	}
+}
+
+func TestSetBreakInUnsupported(t *testing.T) {
+	// The TS-480's reference has SD for the delay and no command to switch the
+	// function, so this must refuse rather than send something plausible.
+	k := newModelRig(t, "ts480")
+	k.mode.Store(uint32(radio.ModeCW))
+	c := newTestConn(t, k, answersFor(k.profile))
+	err := k.SetBreakIn(context.Background(), c, radio.BreakInSemi)
+	if err == nil {
+		t.Fatal("SetBreakIn accepted on a radio with no break-in command")
+	}
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Errorf("error = %v, want backend.ErrUnsupported", err)
+	}
+	if k.Caps().BreakInControl {
+		t.Error("Caps advertises break-in control on a radio that has none")
+	}
+}
+
+// The VX style is the dangerous one: outside CW the very same command is VOX,
+// so a break-in request there would switch voice VOX on behind the operator.
+func TestSetBreakInRefusedOutsideCWOnVXModels(t *testing.T) {
+	k := newModelRig(t, "ts590sg")
+	k.mode.Store(uint32(radio.ModeUSB))
+	c := newTestConn(t, k, answersFor(k.profile))
+	if err := k.SetBreakIn(context.Background(), c, radio.BreakInSemi); err == nil {
+		t.Fatal("SetBreakIn wrote VX in USB, which sets VOX rather than break-in")
+	}
+	c.wantSent(t) // nothing at all
+}
+
+func TestBreakInDecode(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		mode  radio.Mode
+		// frames are decoded in order; the last one's patch is checked.
+		frames []string
+		want   radio.BreakIn
+		// wantPatch is whether the final frame should publish a value.
+		wantPatch bool
+	}{
+		{"VX1 with a delay is semi", "ts590sg", radio.ModeCW,
+			[]string{"SD0300", "VX1"}, radio.BreakInSemi, true},
+		{"VX1 with no delay is full", "ts590sg", radio.ModeCW,
+			[]string{"SD0000", "VX1"}, radio.BreakInFull, true},
+		{"VX0 is off", "ts590sg", radio.ModeCW,
+			[]string{"SD0300", "VX0"}, radio.BreakInOff, true},
+		// A VX frame in USB is the VOX setting. Publishing it as break-in would
+		// make the CW guard trust a number about something else entirely.
+		{"VX in USB is not break-in", "ts590sg", radio.ModeUSB,
+			[]string{"VX1"}, radio.BreakInUnknown, false},
+		{"BI2 is full without any delay read", "ts990s", radio.ModeCW,
+			[]string{"BI2"}, radio.BreakInFull, true},
+		{"BI1 is semi on the three-value style", "ts990s", radio.ModeCW,
+			[]string{"BI1"}, radio.BreakInSemi, true},
+		// The two-value style needs the delay, and BI1 alone with SD unread
+		// leaves the delay at its zero value, which reads as full.
+		{"BI1 with a delay is semi", "ts890s", radio.ModeCW,
+			[]string{"SD0300", "BI1"}, radio.BreakInSemi, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			k := newModelRig(t, tt.model)
+			k.mode.Store(uint32(tt.mode))
+			var last backend.Update
+			for _, f := range tt.frames {
+				u, err := k.Decode([]byte(f))
+				if err != nil {
+					t.Fatalf("Decode(%q): %v", f, err)
+				}
+				last = u
+			}
+			if got := k.BreakIn(); got != tt.want {
+				t.Errorf("BreakIn() = %q, want %q", got, tt.want)
+			}
+			if got := last.Patch.BreakIn != nil; got != tt.wantPatch {
+				t.Errorf("patch published = %v, want %v", got, tt.wantPatch)
+			}
+			if tt.wantPatch && *last.Patch.BreakIn != tt.want {
+				t.Errorf("patch = %q, want %q", *last.Patch.BreakIn, tt.want)
+			}
+		})
+	}
+}
+
+// A frame still has to complete its transaction even when it says nothing
+// publishable, or the poll that asked for it sits out the full timeout.
+func TestBreakInFrameAlwaysCompletesItsTransaction(t *testing.T) {
+	k := newModelRig(t, "ts590sg")
+	k.mode.Store(uint32(radio.ModeUSB))
+	u, err := k.Decode([]byte("VX1"))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if u.Key != keyVX {
+		t.Errorf("key = %q, want %q so the pending VX; read is answered", u.Key, keyVX)
+	}
+}

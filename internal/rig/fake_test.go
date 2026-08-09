@@ -331,9 +331,14 @@ type fakeRig struct {
 	pollFast atomic.Int64
 	pollSlow atomic.Int64
 
-	mu      sync.Mutex
-	initErr error
-	sets    []string // ordered log of the set commands the session issued
+	// breakIn holds a radio.BreakIn, read by the CW send guard without a round
+	// trip, exactly as a real backend's does.
+	breakIn atomic.Value
+
+	mu         sync.Mutex
+	initErr    error
+	breakInErr error
+	sets       []string // ordered log of the set commands the session issued
 }
 
 func (r *fakeRig) setInitErr(err error) {
@@ -513,6 +518,34 @@ func (r *fakeRig) SetFilterSlot(ctx context.Context, c backend.Conn, slot int) e
 	r.record(fmt.Sprintf("slot=%d", slot))
 	_, err := c.Do(ctx, []byte(fmt.Sprintf("FL%d;", slot)), "FL")
 	return err
+}
+
+// Break-in, so the CW send guard can be exercised. A real backend reads this
+// from the rig; here it is whatever a test last stored, plus an optional error
+// to stand in for a radio that refuses the command.
+func (r *fakeRig) SetBreakIn(ctx context.Context, c backend.Conn, v radio.BreakIn) error {
+	r.record("break_in=" + string(v))
+	r.mu.Lock()
+	err := r.breakInErr
+	r.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	r.breakIn.Store(v)
+	return nil
+}
+
+func (r *fakeRig) BreakIn() radio.BreakIn {
+	v, _ := r.breakIn.Load().(radio.BreakIn)
+	return v
+}
+
+func (r *fakeRig) setBreakInState(v radio.BreakIn) { r.breakIn.Store(v) }
+
+func (r *fakeRig) setBreakInErr(err error) {
+	r.mu.Lock()
+	r.breakInErr = err
+	r.mu.Unlock()
 }
 
 // fakeCW is a cw.Sender that records aborts, so the safety paths can be

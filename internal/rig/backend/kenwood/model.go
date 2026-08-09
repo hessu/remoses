@@ -82,6 +82,45 @@ type Model struct {
 	// MaxPowerW is the top of the PC range. The per-mode ceiling can be lower;
 	// see maxPowerW.
 	MaxPowerW int
+
+	// BreakIn is which command switches CW break-in, which is four different
+	// answers across the family. See BreakInStyle.
+	BreakIn BreakInStyle
+}
+
+// BreakInStyle is how a model reads and sets CW break-in.
+//
+// This matters more than a settings switch usually would. With break-in off, a
+// KY message is accepted, the rig's buffer drains on schedule and nothing is
+// transmitted — so remoses has to be able to read and set this, or CAT Morse
+// silently goes nowhere. It was found exactly that way, twice: on an IC-9700
+// and then on a TS-590S, both times by the operator reporting that they heard
+// none of what remoses reported as sent.
+type BreakInStyle int
+
+const (
+	// BreakInNone is a radio with no break-in on/off command: the TS-480, whose
+	// reference has SD for the delay and nothing to switch the function itself.
+	BreakInNone BreakInStyle = iota
+	// BreakInVX is the TS-590S/SG arrangement, and the surprising one: there is
+	// no break-in command at all. VX sets VOX, except that "when transmitting
+	// the VX command in CW mode, the Break-in function is set and read, rather
+	// than the VOX function". One command, two meanings, chosen by the mode the
+	// rig happens to be in — so remoses only touches it in CW.
+	BreakInVX
+	// BreakInBI2 is BI with two values, off and on: the TS-890S. Semi and full
+	// are not distinguished by BI; the SD delay decides, 0 ms being full.
+	BreakInBI2
+	// BreakInBI3 is BI with three: off, semi and full directly. Only the
+	// TS-990S states the three values, and there SD does not decide the mode.
+	BreakInBI3
+)
+
+// binary reports whether this style's on/off command cannot itself distinguish
+// semi from full, so that the SD delay has to be read and written to tell them
+// apart.
+func (b BreakInStyle) binary() bool {
+	return b == BreakInVX || b == BreakInBI2
 }
 
 // ModeCommand is the command a model uses to read and set the operating mode.
@@ -220,6 +259,7 @@ func md(name, label string, id int) Model {
 		FilterWidth:   true,
 		FilterSelect:  FilterSelectAB,
 		MaxPowerW:     100,
+		BreakIn:       BreakInVX,
 	}
 }
 
@@ -241,6 +281,9 @@ func om(name, label string, id int) Model {
 	m.FilterWidth = false
 	// The band-selected form is the TS-990S's; the TS-890S overrides it below.
 	m.FilterSelect = FilterSelectBandABC
+	// Both of this generation have a real BI command instead of VX's double
+	// meaning. How many values it takes differs, so the TS-890S overrides this.
+	m.BreakIn = BreakInBI3
 	return m
 }
 
@@ -267,6 +310,10 @@ var models = map[string]Model{
 		m.DataMode = DataModeNone
 		m.SMeterScale = 20
 		m.FilterSelect = FilterSelectNone
+		// Its VX is documented as the VOX function alone, with none of the
+		// TS-590's "in CW mode this means break-in" note, and there is no BI.
+		// So break-in is not switchable over CAT on this radio.
+		m.BreakIn = BreakInNone
 		return m
 	}(),
 
@@ -281,6 +328,9 @@ var models = map[string]Model{
 		// Single receiver, so FL0 takes the selection directly with no band
 		// parameter in front of it — unlike the TS-990S.
 		m.FilterSelect = FilterSelectABC
+		// Its BI is off/on only, where the TS-990S's takes semi and full
+		// directly; here the SD delay is what separates them.
+		m.BreakIn = BreakInBI2
 		return m
 	}(),
 
