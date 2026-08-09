@@ -223,6 +223,13 @@ func (y *Rig) Caps() radio.Caps {
 		// Opcode 08/88 keys the transmitter, so PTT is available even though
 		// almost nothing else in this command set is.
 		PTTControl: true,
+		// The transmit status byte carries a forward-power reading and a
+		// high-SWR flag, and nothing else: there is no ALC meter here, and the
+		// SWR "meter" is one bit rather than a deflection. Both are published
+		// only while the radio reports itself keyed.
+		PowerMeter: true,
+		SWRMeter:   true,
+		ALCMeter:   false,
 		// There is no power command of any kind, so there is no scale and no
 		// ceiling to publish. Leaving MaxPowerW at zero rather than filling in
 		// the nameplate 100 W is what makes the session refuse a request in

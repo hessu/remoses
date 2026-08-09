@@ -20,6 +20,9 @@ const (
 	KeyPower       backend.Key = "14/0A"
 	KeyKeyerSpeed  backend.Key = "14/0C"
 	KeySMeter      backend.Key = "15/02"
+	KeyPOMeter     backend.Key = "15/11"
+	KeySWRMeter    backend.Key = "15/12"
+	KeyALCMeter    backend.Key = "15/13"
 	KeyFilterWidth backend.Key = "1A/03"
 	KeyDataMode    backend.Key = "1A/06"
 	KeyPTT         backend.Key = "1C/00"
@@ -181,13 +184,40 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		return u, nil
 
 	case cmdMeter:
-		if len(body) < 1 || body[0] != subSMeter {
+		if len(body) < 1 {
 			return u, nil
 		}
-		if n, ok := decodeBCD2(body[1:]); ok {
+		n, ok := decodeBCD2(body[1:])
+		if !ok {
+			return u, nil
+		}
+		switch body[0] {
+		case subSMeter:
 			u.Key = KeySMeter
 			m := radio.Meter{Raw: n, Scale: sMeterScale}
 			u.Patch.SMeter = &m
+		case subPOMeter:
+			// Full scale is per model: 255 on an IC-7610, 213 on an IC-9700.
+			u.Key = KeyPOMeter
+			m := radio.Meter{Raw: n, Scale: r.model.POScale}
+			u.Patch.PowerMeter = &m
+		case subSWRMeter:
+			u.Key = KeySWRMeter
+			m := radio.Meter{Raw: n, Scale: sMeterScale}
+			u.Patch.SWR = &m
+			// And a ratio too, but only where this radio's own reference
+			// prints the four points that define one.
+			if r.model.SWRCal {
+				if ratio, ok := swrRatio(n); ok {
+					u.Patch.SWRRatio = &ratio
+				}
+			}
+		case subALCMeter:
+			// "0000=Minimum to 0120=Maximum": the ALC meter runs to 120, not
+			// to the 255 its data field could hold.
+			u.Key = KeyALCMeter
+			m := radio.Meter{Raw: n, Scale: alcScale}
+			u.Patch.ALC = &m
 		}
 		return u, nil
 
@@ -252,6 +282,10 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		u.Key = KeyPTT
 		tx := body[1] == 0x01
 		u.Patch.PTT = &tx
+		// Remembered for the poll, which asks for the transmit meters only
+		// while this is set. Storing it here rather than in SetPTT means a
+		// transmission started at the radio's own PTT switch counts too.
+		r.transmitting.Store(tx)
 		return u, nil
 	}
 	return u, nil

@@ -76,6 +76,30 @@ type Model struct {
 	// False on the IC-706 family, whose output is a front-panel control with no
 	// bus equivalent.
 	Power bool
+	// TXMeters is true when the radio has the transmit meters, 15 11 (PO),
+	// 15 12 (SWR) and 15 13 (ALC).
+	//
+	// The three arrived together on the modern radios and are absent together
+	// on the older ones: the IC-706MKIIG's 15 stops at 02 and the IC-703's at
+	// 13 but with all three present. Recorded as one flag because no reference
+	// read so far has any one of them without the others.
+	TXMeters bool
+	// SWRCal is true when this radio's reference prints the calibration points
+	// for 15 12 — "0000=SWR1.0, 0048=SWR1.5, 0080=SWR2.0, 0120=SWR3.0" — so a
+	// ratio can be derived from the deflection.
+	//
+	// Both current references carry the same four points, but the IC-703's
+	// manual names the command and stops there. Publishing a ratio for it on
+	// the strength of the others would be remoses inventing a figure about
+	// somebody's antenna; the bar is still published.
+	SWRCal bool
+	// POScale is the raw 15 11 reading that means 100% output.
+	//
+	// It is not the same everywhere and the difference is not cosmetic: the
+	// IC-7610's table reads "0000=0% ~ 0143=50% ~ 0255=100%" and the IC-9700's
+	// "0000=0% to 0143=50% to 0213=100%". Publishing 213 against a scale of 255
+	// would show 84% for a radio at full power.
+	POScale int
 	// SMeter is true when the radio has command 15 02.
 	//
 	// The IC-706 and IC-706MKII have no readable meter of any kind; the MKIIG
@@ -210,6 +234,9 @@ func modern(name, label string, addr byte, modes []radio.Mode) Model {
 		PTTSub:         0x00,
 		Power:          true,
 		SMeter:         true,
+		TXMeters:       true,
+		SWRCal:         true,
+		POScale:        255,
 		CWBuffer:       true,
 		FilterWidth:    true,
 		DataMode:       true,
@@ -382,6 +409,8 @@ var models = map[string]Model{
 		m.VFOModeSelect = true
 		m.VFOSelect = true // 07 00 and 07 01 select VFO A and VFO B
 		m.BreakIn = true
+		// Its PO meter reaches 100% at 213, not the 255 of the IC-7610.
+		m.POScale = 213
 		return m
 	}(),
 
@@ -537,7 +566,14 @@ var models = map[string]Model{
 		PTTSub:      0x00, // 1C 00, "set/read the transceiver's condition"
 		Power:       true, // 14 0A
 		SMeter:      true, // 15 02
-		CWBuffer:    false,
+		// Its table has all three transmit meters — 15 11 RF power, 15 12 SWR,
+		// 15 13 ALC — but, unlike the newer references, no calibration for any
+		// of them. So the deflections are published and no SWR ratio is, and
+		// the PO scale is taken as the family's 255 rather than measured.
+		TXMeters: true,
+		SWRCal:   false,
+		POScale:  255,
+		CWBuffer: false,
 		FilterWidth: false,
 		DataMode:    true,
 		DataModeSub: 0x04,

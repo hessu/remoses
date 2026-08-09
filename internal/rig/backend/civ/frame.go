@@ -73,6 +73,10 @@ const (
 	subRFPower     = 0x0A // 14 0A, 0000-0255 relative
 	subKeyerSpeed  = 0x0C // 14 0C, 0000-0255 mapped to 6-48 wpm
 	subSMeter      = 0x02 // 15 02, 0000-0255
+	// The transmit meters, all 0000-0255 and all meaningful only while keyed.
+	subPOMeter  = 0x11 // 15 11, forward power
+	subSWRMeter = 0x12 // 15 12, SWR
+	subALCMeter = 0x13 // 15 13, ALC
 	subFilterWidth = 0x03 // 1A 03, mode-dependent index
 	subDataMode    = 0x06 // 1A 06, data mode plus filter
 	subPTT         = 0x00 // 1C 00, 00 RX / 01 TX

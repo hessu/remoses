@@ -65,6 +65,15 @@ type Rig struct {
 	// asking for and would be a stale number if it were.
 	dualWatch atomic.Bool
 
+	// transmitting is the last PTT reading, and shapes the poll the same way:
+	// the transmit meters are asked for only while the transmitter is up,
+	// because in receive all three read zero and mean nothing.
+	//
+	// It comes from every 1C answer and every 1C transceive push, so a
+	// transmission started at the radio's own PTT switch is picked up as
+	// readily as one remoses keyed itself.
+	transmitting atomic.Bool
+
 	// breakIn is the last 16 47 reading, held as a string so the CW path can
 	// ask whether a message would actually be transmitted before queueing one.
 	breakIn atomic.Value // radio.BreakIn
@@ -224,6 +233,11 @@ func (r *Rig) Caps() radio.Caps {
 		// Zero where there is no meter to read, which a client can tell from a
 		// meter that reads zero.
 		SMeterScale: r.sMeterScale(),
+		// 15 11, 15 12 and 15 13 arrive together on the radios that have them
+		// and are absent together on the ones that do not.
+		PowerMeter: r.model.TXMeters,
+		SWRMeter:   r.model.TXMeters,
+		ALCMeter:   r.model.TXMeters,
 
 		// SubReceiver is whether the radio *has* a second receiver;
 		// SubReceiverReadable is whether remoses can report it. They differ on
@@ -367,6 +381,21 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		}
 		if r.model.SMeter {
 			reqs = append(reqs, request{KeySMeter, r.frame(cmdMeter, subSMeter)})
+		}
+		// The transmit meters, and only while the transmitter is up. In receive
+		// they read zero and mean nothing — there is no forward power to
+		// measure and no ALC acting — so asking would spend three transactions
+		// a tick to publish three zeroes that a client cannot tell from a real
+		// reading. Which is also why State drops them when PTT falls.
+		//
+		// This uses the PTT the last poll decoded rather than a fresh read: one
+		// tick of lag at the start of a transmission costs a single sample, and
+		// the alternative is serialising every fast poll behind a PTT read.
+		if r.model.TXMeters && r.transmitting.Load() {
+			reqs = append(reqs,
+				request{KeyPOMeter, r.frame(cmdMeter, subPOMeter)},
+				request{KeySWRMeter, r.frame(cmdMeter, subSWRMeter)},
+				request{KeyALCMeter, r.frame(cmdMeter, subALCMeter)})
 		}
 		// The second receiver's meter belongs in the fast tier for the same
 		// reason the first one does — it is a signal level, and a client draws

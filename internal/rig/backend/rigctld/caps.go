@@ -72,15 +72,21 @@ type dumpState struct {
 // Level bit positions from include/hamlib/rig.h. The has_get_level and
 // has_set_level masks in \dump_state are bitfields over these.
 const (
-	bitRFPOWER  = 12
-	bitKEYSPD   = 14
-	bitSTRENGTH = 30
+	bitRFPOWER      = 12
+	bitKEYSPD       = 14
+	bitSWR          = 28
+	bitALC          = 29
+	bitSTRENGTH     = 30
+	bitRFPOWERMETER = 32
 )
 
 var levelBits = map[string]uint{
-	levelRFPOWER:  bitRFPOWER,
-	levelKEYSPD:   bitKEYSPD,
-	levelSTRENGTH: bitSTRENGTH,
+	levelRFPOWER:      bitRFPOWER,
+	levelKEYSPD:       bitKEYSPD,
+	levelSWR:          bitSWR,
+	levelALC:          bitALC,
+	levelSTRENGTH:     bitSTRENGTH,
+	levelRFPOWERMETER: bitRFPOWERMETER,
 }
 
 func (s *dumpState) hasGetLevel(name string) bool { return hasBit(s.getLevel, levelBits[name]) }
@@ -411,6 +417,12 @@ func buildCaps(st *dumpState, dc *dumpCaps, minWPM, maxWPM int) radio.Caps {
 		// every rig rather than the few that cannot use them.
 		PTTControl:   true,
 		PowerControl: true,
+		// Unlike the two above, these are reported per rig rather than assumed:
+		// dump_state's has_get_level mask says which meters the backend behind
+		// this daemon implements, and most implement none of them.
+		PowerMeter: st.hasGetLevel(levelRFPOWERMETER),
+		SWRMeter:   st.hasGetLevel(levelSWR),
+		ALCMeter:   st.hasGetLevel(levelALC),
 		// RFPOWER is a 0..1 fraction. See powerFromLevel for why no watt figure
 		// is derived from it, even though the tx range list carries one.
 		PowerWattAccurate: false,

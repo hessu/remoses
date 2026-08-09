@@ -170,6 +170,25 @@ station that sequences its own transmit path. Semi is the default because full i
 clock your relays between elements — that is a choice to make deliberately. Radios whose
 reference has not been read for the command are never blocked by the check.
 
+**Transmit metering: forward power, SWR and ALC.** Where a radio reports them, remoses polls
+them **only while the transmitter is keyed** and publishes them as `state.power_meter`,
+`state.swr` and `state.alc`, with `caps.power_meter`, `caps.swr_meter` and `caps.alc_meter`
+saying which exist. In receive the three fields are **absent rather than zero**, because a bar
+drawn at 0 cannot be told from a real reading into a dead load — and because a 3:1 SWR left on
+the display after a transmission ends reads as a fault that is still happening.
+
+The Icom command set puts each on its own read: `15 11`, `15 12` and `15 13`. Two details there
+are not guessable — an Icom's ALC runs to **120** of a possible 255, and the IC-9700's power
+meter reaches 100% at **213** where the IC-7610's reaches 255 — so `scale` is per meter and per
+model, and a client should compare `raw` against it rather than assume a range.
+
+**SWR is also published as a number** in `state.swr_ratio`, but only where the radio's own
+documentation calibrates its meter: Icom prints four points (`0`, `48`, `80`, `120` → 1.0, 1.5,
+2.0, 3.0) and gets a figure, Kenwood and Yaesu print none and get only the bar. Above the top
+calibrated point remoses stops rather than extrapolating — the curve is undocumented, an SWR that
+high is a fault either way, and "7.4:1" would be a number invented about your antenna. A rigctld
+radio is the exception: Hamlib reports a true ratio, so that one arrives calibrated.
+
 **The IC-706 family cannot be keyed over CI-V at all.** None of the three has a transmitter
 command — no `1C` at any sub-command — so remoses can neither key them nor tell whether they are
 keyed, and none has an RF power level either. Both are front-panel controls, and PTT is a

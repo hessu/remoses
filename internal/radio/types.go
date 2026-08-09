@@ -347,9 +347,30 @@ type State struct {
 	Power      Power    `json:"power"`
 	PTT        bool     `json:"ptt"`
 	SMeter     Meter    `json:"s_meter"`
-	SWR        *Meter   `json:"swr,omitempty"`
-	ALC        *Meter   `json:"alc,omitempty"`
 	CW         CWStatus `json:"cw"`
+
+	// The transmit meters. All three are absent in receive rather than zero,
+	// because a transmitter that is not keyed has no forward power, no SWR and
+	// no ALC action — and a client drawing 0 on a bar cannot tell "not
+	// transmitting" from "transmitting into a dead load". They are read only
+	// while PTT is up and cleared when it drops, so their presence is itself
+	// the statement that the radio is transmitting and these are live.
+	//
+	// Each is a raw deflection with the full-scale value that goes with it, in
+	// whatever units the radio's own meter uses: Icom counts 0-255, Kenwood
+	// counts meter dots. Compare Raw against Scale rather than assuming either.
+	PowerMeter *Meter `json:"power_meter,omitempty"`
+	SWR        *Meter `json:"swr,omitempty"`
+	ALC        *Meter `json:"alc,omitempty"`
+	// SWRRatio is the standing-wave ratio as a number — 1.5, 2.0, 3.0 — where
+	// the radio's own documentation calibrates its meter well enough to say.
+	//
+	// It is absent rather than computed where it is not documented, which is
+	// most radios: a raw deflection means nothing without the manufacturer's
+	// scale, and a ratio invented from a linear guess would be a number remoses
+	// made up about somebody's antenna. Icom prints four calibration points and
+	// gets a figure; Kenwood and Yaesu print none and get only the bar.
+	SWRRatio *float64 `json:"swr_ratio,omitempty"`
 
 	// VFO names which of the two the fields above describe, so a client can
 	// tell whether it is looking at A or B without inferring it.
@@ -422,8 +443,10 @@ type Patch struct {
 	Power      *Power
 	PTT        *bool
 	SMeter     *Meter
+	PowerMeter *Meter
 	SWR        *Meter
 	ALC        *Meter
+	SWRRatio   *float64
 	CWBusy     *bool
 	Connected  *bool
 
@@ -445,7 +468,8 @@ type Patch struct {
 func (p Patch) Empty() bool {
 	return p.Frequency == nil && p.Mode == nil && p.DataMode == nil &&
 		p.PassbandHz == nil && p.FilterSlot == nil && p.Power == nil &&
-		p.PTT == nil && p.SMeter == nil && p.SWR == nil && p.ALC == nil &&
+		p.PTT == nil && p.SMeter == nil && p.PowerMeter == nil &&
+		p.SWR == nil && p.ALC == nil && p.SWRRatio == nil &&
 		p.CWBusy == nil && p.Connected == nil &&
 		p.VFO == nil && p.VFOA == nil && p.VFOB == nil &&
 		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil &&
@@ -478,6 +502,12 @@ func (s State) Apply(p Patch) State {
 	}
 	if p.SMeter != nil {
 		s.SMeter = *p.SMeter
+	}
+	if p.PowerMeter != nil {
+		s.PowerMeter = p.PowerMeter
+	}
+	if p.SWRRatio != nil {
+		s.SWRRatio = p.SWRRatio
 	}
 	if p.SWR != nil {
 		s.SWR = p.SWR
@@ -513,7 +543,37 @@ func (s State) Apply(p Patch) State {
 	if p.BreakIn != nil {
 		s.BreakIn = *p.BreakIn
 	}
+
+	// Dropping out of transmit clears the transmit meters, so that what a
+	// client sees is either a live reading or nothing at all. Leaving the last
+	// values behind would be worse than useless: a 1:3 SWR frozen on the
+	// display after the operator stopped transmitting reads as a fault that is
+	// still happening, and the last power reading of a transmission is usually
+	// mid-decay rather than representative.
+	//
+	// It is done here rather than in each backend because it is a property of
+	// the state, not of any protocol: every radio that reports these reports
+	// them only while keyed.
+	if !s.PTT {
+		s.PowerMeter, s.SWR, s.ALC, s.SWRRatio = nil, nil, nil, nil
+	}
 	return s
+}
+
+// sameMeter compares two optional meter readings, nil included.
+func sameMeter(a, b *Meter) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// sameRatio is the same for the derived SWR figure.
+func sameRatio(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // Diff returns a patch describing every field in which next differs from s.
@@ -543,6 +603,21 @@ func (s State) Diff(next State) Patch {
 	}
 	if s.SMeter != next.SMeter {
 		p.SMeter = &next.SMeter
+	}
+	// The transmit meters are pointers, so a delta has to compare what they
+	// point at, and "became nil" — the transmission ended — is a change a
+	// client needs as much as a new reading.
+	if !sameMeter(s.PowerMeter, next.PowerMeter) {
+		p.PowerMeter = next.PowerMeter
+	}
+	if !sameMeter(s.SWR, next.SWR) {
+		p.SWR = next.SWR
+	}
+	if !sameMeter(s.ALC, next.ALC) {
+		p.ALC = next.ALC
+	}
+	if !sameRatio(s.SWRRatio, next.SWRRatio) {
+		p.SWRRatio = next.SWRRatio
 	}
 	if s.Connected != next.Connected {
 		p.Connected = &next.Connected
@@ -616,6 +691,19 @@ type Caps struct {
 	// SMeterScale is the full-scale meter reading, or 0 on a radio with no
 	// readable signal meter at all.
 	SMeterScale int `json:"s_meter_scale"`
+
+	// Which transmit meters this radio can report. They are separate flags
+	// because radios really do have some and not others: a Kenwood TS-590 reads
+	// SWR and ALC on one command and its power meter on another, an FT-857
+	// reports high-SWR as a yes/no flag and no ALC at all, and the older Icoms
+	// have none of the three.
+	//
+	// A client should read these before drawing a transmit meter panel: the
+	// fields themselves are absent in receive, so their absence alone does not
+	// distinguish "not transmitting" from "this radio cannot say".
+	PowerMeter bool `json:"power_meter"`
+	SWRMeter   bool `json:"swr_meter"`
+	ALCMeter   bool `json:"alc_meter"`
 
 	// SubReceiver is a second receiver that can be listened to at the same
 	// time as the first — the IC-7610's dual watch. It is not "the radio has

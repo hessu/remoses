@@ -30,6 +30,7 @@ const (
 	keyBI backend.Key = "BI"
 	keyVX backend.Key = "VX"
 	keySD backend.Key = "SD"
+	keyRM backend.Key = "RM"
 	keyTX backend.Key = "TX"
 	keyRX backend.Key = "RX"
 )
@@ -227,16 +228,25 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 
 	case keySM:
 		u.Key = keySM
-		// The meter selector, where the model has one, plus four digits. The
-		// digits count meter dots, and read the RF power meter while
-		// transmitting rather than the S-meter, so this single field means two
-		// different things depending on PTT. State keeps it in SMeter either
-		// way. Both the field width and the full-scale count are per model —
-		// 20, 30 or 70 dots — so neither may be assumed here.
+		// The meter selector, where the model has one, plus four digits. Both
+		// the field width and the full-scale count are per model — 20, 30 or 70
+		// dots — so neither may be assumed here.
+		//
+		// The digits count meter dots, and read the RF POWER METER while
+		// transmitting rather than the S-meter: one command, two meters, chosen
+		// by whether the rig is keyed. It used to land in SMeter either way,
+		// which meant a transmission drove the receive signal bar to full scale
+		// and left it there. Now it goes where it belongs, which is also what
+		// makes power_meter work on this family — there is no separate command
+		// for it to come from.
 		if n := k.profile.smeterArgLen(); len(arg) == n {
 			if v, err := strconv.Atoi(string(arg[n-4:])); err == nil {
 				m := radio.Meter{Raw: v, Scale: k.profile.SMeterScale}
-				u.Patch.SMeter = &m
+				if k.transmitting.Load() {
+					u.Patch.PowerMeter = &m
+				} else {
+					u.Patch.SMeter = &m
+				}
 			}
 		}
 
@@ -319,6 +329,15 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 		u.Key = backend.Key(cmd)
 		on := cmd == string(keyTX)
 		u.Patch.PTT = &on
+		k.transmitting.Store(on)
+
+	case keyRM:
+		// The meter function. One RM; read draws three answers — the reference
+		// says so outright, "there are always three types of responses: SWR,
+		// COMP, and ALC" — so each is decoded on its own and the transaction is
+		// completed by whichever arrives first.
+		u.Key = keyRM
+		k.decodeRM(&u, arg)
 	}
 
 	return u, nil
@@ -426,9 +445,11 @@ func (k *Rig) decodeIF(u *backend.Update, f []byte) {
 	case '0':
 		on := false
 		u.Patch.PTT = &on
+		k.transmitting.Store(false)
 	case '1':
 		on := true
 		u.Patch.PTT = &on
+		k.transmitting.Store(true)
 	}
 
 	if m, ok := decodeMode(f[ifMode]); ok {

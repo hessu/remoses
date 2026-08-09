@@ -343,8 +343,14 @@ func TestDecodeTXStatusTransmitting(t *testing.T) {
 	if !y.transmitting.Load() {
 		t.Error("transmitting hint not set")
 	}
-	if u.Patch.SMeter == nil || u.Patch.SMeter.Raw != 12 {
-		t.Errorf("power meter = %+v, want raw 12", u.Patch.SMeter)
+	// Into the transmit power meter, not the S-meter: this is forward power,
+	// and putting it in the receive signal bar drove that to full scale on
+	// every transmission.
+	if u.Patch.PowerMeter == nil || u.Patch.PowerMeter.Raw != 12 {
+		t.Errorf("power meter = %+v, want raw 12", u.Patch.PowerMeter)
+	}
+	if u.Patch.SMeter != nil {
+		t.Errorf("S-meter = %+v, want it left alone while transmitting", u.Patch.SMeter)
 	}
 	if u.Patch.SWR == nil || u.Patch.SWR.Raw != 0 || u.Patch.SWR.Scale != 1 {
 		t.Errorf("SWR = %+v, want raw 0 of 1", u.Patch.SWR)

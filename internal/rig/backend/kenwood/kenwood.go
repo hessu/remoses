@@ -95,6 +95,7 @@ const (
 	reqSD           = "SD;" // CW break-in delay; 0 ms means full break-in
 	reqFR           = "FR;" // receive VFO; sending it also forces simplex
 	reqFT           = "FT;" // transmit VFO; sending it also forces split
+	reqRM           = "RM;" // meter function; answers SWR, COMP and ALC in turn
 )
 
 // Rig is the Kenwood ASCII CAT backend. Construct it with New.
@@ -134,6 +135,11 @@ type Rig struct {
 	// has only two values it is the only thing that separates semi from full,
 	// so it is kept even though State does not publish it.
 	breakInDelayMS atomic.Int32
+
+	// transmitting is the last PTT reading, from an IF answer or a TX;/RX;
+	// push. It decides two things: whether an SM answer is the S-meter or the
+	// RF power meter, and whether the fast poll asks for RM at all.
+	transmitting atomic.Bool
 
 	// receiveVFO and transmitVFO each hold a radio.VFO, from FR;, FT; or the
 	// P10 and P12 fields of an IF answer. Split is the relationship between
@@ -234,6 +240,12 @@ func (k *Rig) Caps() radio.Caps {
 		FilterWidth: k.profile.FilterWidth,
 		FilterSlots: k.profile.FilterSelect.slots(),
 		SMeterScale: k.profile.SMeterScale,
+		// All three, family-wide. Forward power has no command of its own: SM
+		// reads the RF power meter instead of the S-meter while keyed. SWR and
+		// ALC come from RM, which answers with both (and COMP) at once.
+		PowerMeter: true,
+		SWRMeter:   true,
+		ALCMeter:   true,
 		// False even on the TS-990S, which has a second receiver: this backend
 		// reads and writes one of them, so claiming otherwise would promise
 		// control it does not implement.
@@ -430,8 +442,13 @@ func (k *Rig) pollFast(ctx context.Context, c backend.Conn) error {
 			k.ifBlocked.Store(true)
 			return err
 		}
-		_, err := do(ctx, c, k.profile.SMeterRequest, keySM)
-		return err
+		// SM before RM, and it matters: IF; has just settled whether the rig is
+		// transmitting, which is what decides whether the SM answer is the
+		// S-meter or the RF power meter.
+		if _, err := do(ctx, c, k.profile.SMeterRequest, keySM); err != nil {
+			return err
+		}
+		return k.pollTXMeters(ctx, c)
 	}
 
 	// The frequency of the VFO being received, which is not always A: on a
@@ -445,8 +462,28 @@ func (k *Rig) pollFast(ctx context.Context, c backend.Conn) error {
 	if _, err := do(ctx, c, k.profile.modeReq(), k.profile.modeKey()); err != nil {
 		return err
 	}
-	_, err := do(ctx, c, k.profile.SMeterRequest, keySM)
-	return err
+	if _, err := do(ctx, c, k.profile.SMeterRequest, keySM); err != nil {
+		return err
+	}
+	return k.pollTXMeters(ctx, c)
+}
+
+// pollTXMeters reads SWR and ALC, and only while the transmitter is up.
+//
+// In receive they are meaningless — there is no forward power and no ALC action
+// — and RM would spend a transaction to publish two zeroes a client could not
+// tell from real readings. Forward power is not read here: it arrives on SM,
+// which the fast poll already sends in both directions.
+//
+// One RM; draws three answers, of which the transaction consumes the first and
+// Decode folds the rest in as unsolicited frames.
+func (k *Rig) pollTXMeters(ctx context.Context, c backend.Conn) error {
+	for _, r := range k.txMeterReads() {
+		if _, err := do(ctx, c, r.req, r.key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // receiveFreqRead is the frequency query for whichever VFO is being received.

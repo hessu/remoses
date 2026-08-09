@@ -547,9 +547,9 @@ components:
         power: { $ref: "#/components/schemas/Power" }
         ptt: { type: boolean }
         s_meter: { $ref: "#/components/schemas/Meter" }
-        swr: { $ref: "#/components/schemas/Meter" }
-        alc: { $ref: "#/components/schemas/Meter" }
         cw: { $ref: "#/components/schemas/CWStatus" }
+        # The transmit meters — power_meter, swr, swr_ratio and alc — are
+        # described further down, next to break_in.
 
         # The fields above describe the OPERATING VFO — the one the radio is
         # receiving on, and transmitting on unless split is set. They mean the
@@ -582,6 +582,52 @@ components:
             remoses stops polling it rather than leaving a stale reading that
             would look live.
 
+        power_meter:
+          allOf: [{ $ref: "#/components/schemas/Meter" }]
+          description: |
+            Forward power out of the transmitter.
+
+            **Absent in receive**, rather than zero: a transmitter that is not
+            keyed has no forward power, and a client drawing 0 on a bar cannot
+            tell "not transmitting" from "transmitting into a dead load". The
+            same goes for `swr` and `alc`. All three appear when the radio
+            reports itself keyed and vanish when it stops.
+
+            `raw` and `scale` are in whatever units the radio's own meter uses —
+            Icom counts 0-255, Kenwood counts meter dots — so compare the two
+            rather than assuming either. Check `caps.power_meter` before
+            offering the display at all.
+        swr:
+          allOf: [{ $ref: "#/components/schemas/Meter" }]
+          description: |
+            SWR as a meter deflection. Absent in receive; see `power_meter`.
+
+            On an FT-857 or FT-897 this is one bit rather than a deflection —
+            `scale` is 1 and `raw` is 0 or 1 — because a high-SWR alarm is all
+            those radios report. The scale says so; do not assume a range.
+        swr_ratio:
+          type: number
+          format: double
+          description: |
+            SWR as a number, where the radio's own documentation calibrates its
+            meter well enough to say: 1.5, 2.0, 3.0.
+
+            Absent on most radios, and absent rather than computed, because a
+            deflection means nothing without the manufacturer's own scale and a
+            ratio guessed from a linear fit would be a number remoses invented
+            about somebody's antenna. Icom publishes four calibration points and
+            gets a figure; Kenwood and Yaesu publish none and get only the bar.
+            A rigctld rig reports a true ratio directly.
+
+            Also absent above the top calibration point, where the curve is
+            undocumented — the bar pins and this stops rather than extrapolating.
+        alc:
+          allOf: [{ $ref: "#/components/schemas/Meter" }]
+          description: |
+            ALC action. Absent in receive; see `power_meter`.
+
+            Note that full scale is not always the data field's range: an Icom's
+            ALC runs to 120 of a possible 255, and `scale` carries that.
         break_in:
           type: string
           enum: [off, semi, full]
@@ -703,6 +749,21 @@ components:
             only its own frequency. Where this is false, treat mode and filter
             as properties of the radio and read only `frequency` from
             `state.vfo_a` / `state.vfo_b`.
+        power_meter:
+          type: boolean
+          description: |
+            This radio can report forward power while transmitting. See
+            `State.power_meter` for why the reading is absent in receive, and
+            why this flag is the thing to check before drawing a meter panel.
+        swr_meter:
+          type: boolean
+          description: |
+            This radio can report SWR while transmitting — as a deflection in
+            `State.swr`, as a ratio in `State.swr_ratio`, or both. True on an
+            FT-857 too, where the "meter" is a single high-SWR bit.
+        alc_meter:
+          type: boolean
+          description: This radio can report ALC action while transmitting.
         ptt_control:
           type: boolean
           description: |

@@ -16,6 +16,7 @@ const (
 	keyMD backend.Key = "MD"
 	keyPC backend.Key = "PC"
 	keySM backend.Key = "SM"
+	keyRM backend.Key = "RM"
 	keySH backend.Key = "SH"
 	keyNA backend.Key = "NA"
 	keyIF backend.Key = "IF"
@@ -231,11 +232,17 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 			case '0':
 				on := false
 				u.Patch.PTT = &on
+				y.transmitting.Store(false)
 			case '1', '2', '3':
 				on := true
 				u.Patch.PTT = &on
+				y.transmitting.Store(true)
 			}
 		}
+
+	case keyRM:
+		u.Key = keyRM
+		y.decodeRM(&u, arg)
 
 	case keyID:
 		u.Key = keyID

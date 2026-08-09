@@ -1924,6 +1924,85 @@ and the accepted charset. `DELETE /cw` aborts.
 
 ---
 
+## 11.4 Transmit metering
+
+Forward power, SWR and ALC, published as `state.power_meter`, `state.swr` and `state.alc` with
+`caps.power_meter`, `caps.swr_meter` and `caps.alc_meter` saying which a radio has.
+
+**They are read only while the transmitter is keyed, and absent in receive rather than zero.**
+Both halves matter. Polling them in receive would spend two or three transactions per fast tick
+to publish zeroes, and a client cannot tell a zero from a real reading of a transmitter working
+into a dead load — so a bar drawn from one would be a lie in the direction that hides a fault.
+Leaving the last transmission's values behind is worse still: a 3:1 SWR frozen on a display
+after the operator stopped reads as something still happening, and the final sample of a
+transmission is usually mid-decay rather than representative. `State.Apply` clears all three
+whenever PTT is false, so no backend has to remember to; every radio that reports them reports
+them only while keyed, which makes it a property of the state rather than of any protocol.
+
+Each backend keeps its own `transmitting` flag, set from whatever it already decodes for PTT —
+CI-V `1C`, Kenwood's `IF` and `TX;`/`RX;`, Yaesu's `TX`, rigctld's `get_ptt`. That means a
+transmission started at the radio's own PTT switch is metered exactly like one remoses keyed,
+and it costs no extra traffic. The reads are ordered so the PTT answer of the same tick is
+decoded before the meter reads are chosen; one tick of lag at the very start of a transmission
+costs a single sample and is cheaper than serialising every poll behind a PTT read.
+
+**Where they come from, per family:**
+
+| | Power | SWR | ALC |
+|---|---|---|---|
+| Icom | `15 11` | `15 12` | `15 13` |
+| Kenwood | `SM` **while keyed** | `RM` → `RM1` | `RM` → `RM3` |
+| Yaesu | `RM5` | `RM6` | `RM4` |
+| FT-857/897 | TX status byte | high-SWR **bit** | — |
+| rigctld | `RFPOWER_METER` | `SWR` | `ALC` |
+
+Three of those rows have a trap in them.
+
+**Kenwood has no forward-power command.** `SM` is the S-meter in receive and the *RF power
+meter* in transmit — one command, two meters, chosen by whether the rig is keyed. This backend
+used to file it under `SMeter` either way, which meant every transmission drove the receive
+signal bar to full scale and left it there. It now goes to `PowerMeter` while `transmitting` is
+set, which is both correct and the only reason `power_meter` works on that family at all.
+
+**Kenwood's `RM` answers three times.** Its reference states it outright — "there are always
+three types of responses: SWR, COMP, and ALC" — so one read produces `RM1`, `RM2` and `RM3`.
+Each is decoded on its own and the transaction is completed by whichever arrives first; COMP is
+decoded far enough to complete a transaction and then dropped, because State has nowhere to put
+a compression reading and any of the three may be what a read is waiting on.
+
+**Yaesu's `RM` answer is not the same length on both generations.** The FT-950 generation
+answers `RM<meter><nnn>;` and the FT-710 generation appends three more fixed digits. The meter
+numbers are identical in both — which is why this is family-wide rather than per model, unusually
+for this backend — so reading the meter and the three digits after it and ignoring the rest
+handles either without knowing which radio is on the other end.
+
+### Scales, and one number remoses will not invent
+
+`radio.Meter` is a raw deflection and the full-scale value that goes with it, in the radio's own
+units: 0-255 on an Icom, meter dots on a Kenwood, a percentage from rigctld. Two per-model
+details here are not guessable and were transcribed rather than assumed:
+
+- **An Icom's ALC runs to 120**, not 255 — "0000=Minimum to 0120=Maximum" in both references.
+  Published against 255 an ALC at full deflection would read 47%.
+- **The IC-9700's power meter reaches 100% at 213** where the IC-7610's reaches 255. Against the
+  wrong scale a radio at full power reads 84%.
+
+`state.swr_ratio` is the exception to publishing raw numbers, and it is deliberately narrow. Icom
+prints four calibration points for `15 12` — `0000`=1.0, `0048`=1.5, `0080`=2.0, `0120`=3.0 —
+so a ratio can be interpolated between them, and that is transcription rather than invention.
+Nothing else gets one: the IC-703 names the same command and calibrates nothing, and no Kenwood
+or Yaesu reference calibrates its SWR meter at all, so those publish the bar and no figure. Above
+the last documented point remoses reports no ratio rather than extrapolating — the curve is
+undocumented, an SWR that high is a fault whatever the exact number, and printing "7.4:1" would
+be a precise-looking figure about somebody's antenna that remoses made up.
+
+rigctld is the one backend that gets a ratio without a table of its own: Hamlib's `SWR` level is
+documented as a real ratio, its rig backend having already done the conversion. Its bar is drawn
+against a top of 3.0:1, chosen to match the highest point Icom's own meter names so that the two
+render alike, with the exact figure published alongside so nothing is lost when the bar pins.
+
+---
+
 ## 12. Safety interlocks
 
 This API keys a transmitter over a network, so interlocks are part of the design rather than

@@ -136,6 +136,11 @@ type Rig struct {
 	// maxPollFailures consecutive failures tear the connection down.
 	disabled atomic.Uint32
 
+	// transmitting is the last get_ptt reading. The transmit meters are polled
+	// only while it is set, since forward power, SWR and ALC all mean nothing
+	// in receive.
+	transmitting atomic.Bool
+
 	// sendMorse and stopMorse record what \dump_caps said about CW keying.
 	sendMorse atomic.Bool
 	stopMorse atomic.Bool
@@ -263,6 +268,17 @@ func (g *Rig) publish(st *dumpState, dc *dumpCaps) {
 	if !st.hasGetLevel(levelRFPOWER) {
 		g.disable(itemPower)
 	}
+	// The transmit meters are the levels most often missing: plenty of Hamlib
+	// backends report STRENGTH and none of these three.
+	if !st.hasGetLevel(levelRFPOWERMETER) {
+		g.disable(itemPowerMeter)
+	}
+	if !st.hasGetLevel(levelSWR) {
+		g.disable(itemSWR)
+	}
+	if !st.hasGetLevel(levelALC) {
+		g.disable(itemALC)
+	}
 
 	caps := buildCaps(st, dc, int(g.keyerMin.Load()), int(g.keyerMax.Load()))
 	g.caps.Store(&caps)
@@ -283,6 +299,9 @@ const (
 	itemPTT
 	itemStrength
 	itemPower
+	itemPowerMeter
+	itemSWR
+	itemALC
 )
 
 // pollRequests is the request and correlation key for each item.
@@ -298,6 +317,10 @@ var pollRequests = map[pollItem]struct {
 	itemPTT:      {reqGetPTT, keyGetPTT, "get_ptt"},
 	itemStrength: {reqGetLevel(levelSTRENGTH), levelKey(cmdGetLevel, levelSTRENGTH), "get_level STRENGTH"},
 	itemPower:    {reqGetLevel(levelRFPOWER), levelKey(cmdGetLevel, levelRFPOWER), "get_level RFPOWER"},
+	itemPowerMeter: {reqGetLevel(levelRFPOWERMETER), levelKey(cmdGetLevel, levelRFPOWERMETER),
+		"get_level RFPOWER_METER"},
+	itemSWR: {reqGetLevel(levelSWR), levelKey(cmdGetLevel, levelSWR), "get_level SWR"},
+	itemALC: {reqGetLevel(levelALC), levelKey(cmdGetLevel, levelALC), "get_level ALC"},
 }
 
 func (g *Rig) disable(item pollItem) { g.disabled.Or(uint32(item)) }
@@ -319,6 +342,11 @@ func (g *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 	switch tier {
 	case backend.PollFast:
 		items = []pollItem{itemFreq, itemMode, itemPTT, itemStrength}
+		// The transmit meters, and only while keyed. get_ptt is in the same
+		// list and runs first, so this reflects the reading just taken.
+		if g.transmitting.Load() {
+			items = append(items, itemPowerMeter, itemSWR, itemALC)
+		}
 	case backend.PollSlow:
 		items = []pollItem{itemPower}
 	default:

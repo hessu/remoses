@@ -367,11 +367,33 @@ func TestDecode(t *testing.T) {
 		},
 		{
 			// A level this backend does not model completes its transaction and
-			// says nothing about State.
+			// says nothing about State. SWR used to be the example here and is
+			// modelled now, so this uses one that is not.
 			name:  "a level with no home in State",
-			frame: resp("get_level: SWR", "1.2", "RPRT 0"),
-			key:   levelKey(cmdGetLevel, "SWR"),
+			frame: resp("get_level: COMP", "0.4", "RPRT 0"),
+			key:   levelKey(cmdGetLevel, "COMP"),
 			ok:    true,
+		},
+		{
+			// SWR arrives as a ratio rather than a deflection, so it fills both
+			// the bar and the exact figure.
+			name:  "SWR is a ratio",
+			frame: resp("get_level: SWR", "1.2", "RPRT 0"),
+			key:   levelKey(cmdGetLevel, levelSWR),
+			ok:    true,
+			patch: radio.Patch{
+				SWR:      ptrMeter(radio.Meter{Raw: 12, Scale: swrBarTop}),
+				SWRRatio: ptrFloat(1.2),
+			},
+		},
+		{
+			name:  "forward power arrives as a fraction of maximum",
+			frame: resp("get_level: RFPOWER_METER", "0.75", "RPRT 0"),
+			key:   levelKey(cmdGetLevel, levelRFPOWERMETER),
+			ok:    true,
+			patch: radio.Patch{
+				PowerMeter: ptrMeter(radio.Meter{Raw: 75, Scale: fractionScale}),
+			},
 		},
 		{
 			name:  "a get_level answer with no value at all",
@@ -460,3 +482,5 @@ func TestParseRPRT(t *testing.T) {
 }
 
 func ptrMeter(m radio.Meter) *radio.Meter { return &m }
+
+func ptrFloat(v float64) *float64 { return &v }

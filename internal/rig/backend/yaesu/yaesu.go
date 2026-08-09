@@ -175,6 +175,9 @@ type Rig struct {
 	// narrow is the last NA reading, which selects the narrow or wide column of
 	// the SH bandwidth table on the FT-991A and FT-891.
 	narrow atomic.Bool
+	// transmitting is the last TX reading. The transmit meters are read only
+	// while it is set, because in receive all three answer zero.
+	transmitting atomic.Bool
 	// pcHead is the FTX-1's PC head selector as last reported: 1 the field
 	// head, 2 the SPA-1 amplifier. Zero until PC; has been read.
 	pcHead atomic.Uint32
@@ -255,9 +258,14 @@ func (y *Rig) Caps() radio.Caps {
 		// fields say so — MaxPowerW is left unset rather than filled in with
 		// the nameplate rating, which would invite a client to read the index
 		// as watts.
-		// TX and PC are family-wide here.
+		// TX and PC are family-wide here, and so is RM: it is in every command
+		// list read for this backend, with the same meter numbers in both
+		// generations.
 		PTTControl:        true,
 		PowerControl:      true,
+		PowerMeter:        true,
+		SWRMeter:          true,
+		ALCMeter:          true,
 		PowerWattAccurate: !y.profile.PowerRaw,
 		MaxPowerW:         float64(y.maxPowerW()),
 
@@ -414,7 +422,11 @@ func (y *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 }
 
 func (y *Rig) pollFast(ctx context.Context, c backend.Conn) error {
-	for _, r := range []read{{reqIF, keyIF}, {reqTX, keyTX}, {reqSM, keySM}} {
+	// TX; before the meters, so that a transmission starting this tick is
+	// already known when the meter reads are chosen.
+	reads := []read{{reqIF, keyIF}, {reqTX, keyTX}, {reqSM, keySM}}
+	reads = append(reads, y.txMeterReads()...)
+	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err
 		}

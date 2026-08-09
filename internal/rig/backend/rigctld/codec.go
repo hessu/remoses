@@ -67,6 +67,13 @@ const (
 	levelRFPOWER  = "RFPOWER"
 	levelSTRENGTH = "STRENGTH"
 	levelKEYSPD   = "KEYSPD"
+	// The transmit meters. RFPOWER_METER is a fraction of maximum power and
+	// ALC an uncalibrated float, both treated as 0..1; SWR is the odd one, a
+	// real standing-wave ratio rather than a deflection, which no other backend
+	// here can offer.
+	levelRFPOWERMETER = "RFPOWER_METER"
+	levelSWR          = "SWR"
+	levelALC          = "ALC"
 )
 
 func reqGetLevel(name string) string { return "+l " + name + "\n" }
@@ -276,13 +283,13 @@ func (g *Rig) Decode(frame []byte) (backend.Update, error) {
 	case cmdGetPTT:
 		u.Key = keyGetPTT
 		if v, ok := fieldValue(b.body, labelPTT); ok {
-			applyPTT(&u.Patch, v)
+			g.applyPTT(&u.Patch, v)
 		}
 
 	case cmdSetPTT:
 		u.Key = keySetPTT
 		if u.OK {
-			applyPTT(&u.Patch, b.arg)
+			g.applyPTT(&u.Patch, b.arg)
 		}
 
 	case cmdGetLevel:
@@ -370,13 +377,16 @@ func (g *Rig) applyMode(p *radio.Patch, token, width string) {
 
 // applyPTT decodes the ptt_t enum: 0 is RIG_PTT_OFF and everything else is a
 // flavour of transmitting (1 plain, 2 microphone input, 3 data input).
-func applyPTT(p *radio.Patch, s string) {
+func (g *Rig) applyPTT(p *radio.Patch, s string) {
 	v, err := strconv.Atoi(strings.TrimSpace(s))
 	if err != nil {
 		return
 	}
 	on := v != 0
 	p.PTT = &on
+	// Remembered so the fast poll knows whether to ask for the transmit
+	// meters, which mean nothing in receive.
+	g.transmitting.Store(on)
 }
 
 // applyLevel maps a level value onto State. Only the two levels remoses models
@@ -398,5 +408,41 @@ func applyLevel(p *radio.Patch, name, value string) {
 		}
 		m := meterFromStrength(db)
 		p.SMeter = &m
+	case levelRFPOWERMETER:
+		// "percentage of maximum power" as a 0..1 fraction, so it becomes a
+		// percentage meter rather than a raw deflection: this is the one
+		// backend where forward power arrives already scaled.
+		v, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			return
+		}
+		m := meterFromFraction(v)
+		p.PowerMeter = &m
+	case levelALC:
+		// Documented only as "arg float", with no range. Every backend that
+		// implements it returns a 0..1 fraction, and it is clamped to that, so
+		// a rig that does something else pins the bar rather than producing a
+		// meter reading larger than its own scale.
+		v, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			return
+		}
+		m := meterFromFraction(v)
+		p.ALC = &m
+	case levelSWR:
+		// A ratio — "[0.0 ... infinite]" — not a deflection. So this is the
+		// only backend that fills SWRRatio without a calibration table of its
+		// own: the rig's Hamlib backend has already done that conversion.
+		//
+		// A reading below 1.0 is not physical and means the rig reported
+		// nothing useful, so it is dropped rather than published as a
+		// suspiciously good match.
+		v, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || v < 1 {
+			return
+		}
+		p.SWRRatio = &v
+		m := meterFromSWR(v)
+		p.SWR = &m
 	}
 }

@@ -278,17 +278,16 @@ func (y *Rig) decodeRXStatus(u *backend.Update, f []byte) {
 // same byte costs nothing and is self-consistent: if the radio says it is not
 // transmitting, its transmit meters say nothing.
 //
-// The power reading goes into SMeter rather than a field of its own because
-// State has no forward-power meter, and this is already what that field means
-// on a transmitting radio — a Kenwood's SM reads its RF power meter during
-// transmit, which radio.Meter documents. The alternative is worse than the
-// compromise: leaving the meter alone would freeze it at the last receive
-// reading, which looks live to a remote operator and is not.
+// The power reading goes into PowerMeter. It used to go into SMeter, for want
+// of a forward-power field to put it in — a compromise that made a transmission
+// drive the receive signal bar to full scale. State carries a transmit power
+// meter now and this is what it is for.
 //
 // HI SWR is a threshold flag, not a ratio, and is published as a 0-or-1 reading
 // on a scale of 1 so that its granularity is visible rather than implied. It is
 // the only transmit fault these radios report over CAT, and a remote operator
-// who cannot see the front panel is exactly who needs it.
+// who cannot see the front panel is exactly who needs it. No SWRRatio is
+// derived from it for the obvious reason: one bit cannot carry one.
 func (y *Rig) decodeTXStatus(u *backend.Update, f []byte) {
 	if len(f) != 1 {
 		u.OK = false
@@ -304,7 +303,7 @@ func (y *Rig) decodeTXStatus(u *backend.Update, f []byte) {
 	}
 
 	po := radio.Meter{Raw: int(b & meterMask), Scale: meterScale}
-	u.Patch.SMeter = &po
+	u.Patch.PowerMeter = &po
 
 	swr := radio.Meter{Scale: 1}
 	if b&txHiSWR != 0 {

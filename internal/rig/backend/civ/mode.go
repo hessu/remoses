@@ -17,7 +17,61 @@ const (
 	// enough to interpolate an S value honestly, so radio.Meter.S is left nil
 	// and clients get the raw reading and its scale.
 	sMeterScale = 255
+
+	// alcScale is the top of command 15 13, which is not 255: both current
+	// references read "0000=Minimum to 0120=Maximum". Publishing it against 255
+	// would show an ALC at full deflection as 47%.
+	alcScale = 120
 )
+
+// swrCalibration is command 15 12's meter, as the references print it:
+//
+//	0000 = SWR 1.0, 0048 = SWR 1.5, 0080 = SWR 2.0, 0120 = SWR 3.0
+//
+// Four points, identical in both references read so far, and the reason this
+// backend can publish a ratio at all — the deflection alone says nothing an
+// operator can act on.
+var swrCalibration = []struct {
+	raw   int
+	ratio float64
+}{
+	{0, 1.0},
+	{48, 1.5},
+	{80, 2.0},
+	{120, 3.0},
+}
+
+// swrRatio converts a 15 12 deflection into a standing-wave ratio, by linear
+// interpolation between the documented points.
+//
+// Above the last point it reports nothing rather than extrapolating: the curve
+// beyond SWR 3.0 is not given, an SWR that high is a fault condition either
+// way, and inventing "7.4:1" for it would put a precise-looking number on
+// something remoses does not know. The meter deflection is still published, so
+// a client can show the bar pinned.
+func swrRatio(raw int) (float64, bool) {
+	if raw < 0 {
+		return 0, false
+	}
+	last := len(swrCalibration) - 1
+	if raw > swrCalibration[last].raw {
+		return 0, false
+	}
+	for i := 1; i <= last; i++ {
+		hi := swrCalibration[i]
+		if raw > hi.raw {
+			continue
+		}
+		lo := swrCalibration[i-1]
+		span := hi.raw - lo.raw
+		if span == 0 {
+			return hi.ratio, true
+		}
+		frac := float64(raw-lo.raw) / float64(span)
+		return lo.ratio + frac*(hi.ratio-lo.ratio), true
+	}
+	return swrCalibration[0].ratio, true
+}
 
 // Keyer speed range for command 14 0C. The bottom is 6 wpm on every Icom here;
 // the top is per model (Model.MaxWPM) because the IC-718 runs to 60 where the

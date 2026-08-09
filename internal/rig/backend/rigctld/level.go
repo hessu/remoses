@@ -60,6 +60,37 @@ func levelFromPowerSet(p radio.PowerSet) (float64, error) {
 	return pct / 100, nil
 }
 
+// --- Transmit meters --------------------------------------------------------
+
+// fractionScale is the full-scale Raw value for a meter that arrives as a 0..1
+// fraction. 100 makes Raw a percentage, which is what the underlying number
+// already means for RFPOWER_METER.
+const fractionScale = 100
+
+// meterFromFraction turns a 0..1 level into a percentage meter, clamped.
+func meterFromFraction(v float64) radio.Meter {
+	raw := int(v*fractionScale + 0.5)
+	return radio.Meter{Raw: min(max(raw, 0), fractionScale), Scale: fractionScale}
+}
+
+// swrBarTop is where the SWR bar reads full scale, in tenths of a ratio: 3.0:1.
+//
+// A bar needs a top and an SWR has none — the level is documented as running to
+// infinity — so one has to be chosen. 3.0 is not arbitrary: it is the highest
+// point Icom's own SWR meter calibration names, which makes this backend's bar
+// read like the ones next to it, and it is comfortably past the point where an
+// operator should already have stopped transmitting.
+//
+// The exact ratio is published alongside in State.SWRRatio, so nothing is lost
+// by the bar pinning.
+const swrBarTop = 30
+
+// meterFromSWR draws a ratio as a bar, pinned at swrBarTop.
+func meterFromSWR(ratio float64) radio.Meter {
+	raw := int(ratio*10 + 0.5)
+	return radio.Meter{Raw: min(max(raw, 0), swrBarTop), Scale: swrBarTop}
+}
+
 // --- S-meter (STRENGTH) -----------------------------------------------------
 
 // The STRENGTH level is the one meter reading in remoses that is genuinely
