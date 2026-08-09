@@ -212,11 +212,18 @@ func (r *Rig) Caps() radio.Caps {
 		// tuned to, so the operating VFO is always available; A and B join it
 		// only on a radio with the 25/26 family, which can name a VFO instead
 		// of operating on whichever is selected.
-		VFOs:              r.addressableVFOs(),
+		VFOs: r.addressableVFOs(),
+		// Both false on the IC-706 family, which has no transmitter command and
+		// no power level. A client reads these rather than offering a PTT
+		// button that cannot key and a slider that moves nothing.
+		PTTControl:        r.model.PTT,
+		PowerControl:      r.model.Power,
 		PowerWattAccurate: false,
 		FilterWidth:       r.model.FilterWidth,
 		FilterSlots:       r.model.FilterSlots,
-		SMeterScale:       sMeterScale,
+		// Zero where there is no meter to read, which a client can tell from a
+		// meter that reads zero.
+		SMeterScale: r.sMeterScale(),
 
 		// SubReceiver is whether the radio *has* a second receiver;
 		// SubReceiverReadable is whether remoses can report it. They differ on
@@ -243,6 +250,15 @@ func (r *Rig) Caps() radio.Caps {
 	}
 }
 
+// sMeterScale is the full-scale meter reading, or 0 on a radio with no readable
+// meter at all — the IC-706 and IC-706MKII, whose command sets contain no 15.
+func (r *Rig) sMeterScale() int {
+	if !r.model.SMeter {
+		return 0
+	}
+	return sMeterScale
+}
+
 // Init reads the full state once, which doubles as the liveness check for a
 // freshly opened port: if the rig is off or the bus address is wrong, the first
 // read times out and the session sees the failure immediately instead of
@@ -259,13 +275,24 @@ func (r *Rig) Caps() radio.Caps {
 // state exactly like a solicited reply.
 func (r *Rig) Init(ctx context.Context, c backend.Conn) error {
 	r.checkIdentity(ctx, c)
-	if err := r.readAll(ctx, c,
-		request{KeyFrequency, r.frame(cmdReadFreq)},
-		request{KeyMode, r.frame(cmdReadMode)},
-		request{KeyPower, r.frame(cmdLevel, subRFPower)},
-		request{KeySMeter, r.frame(cmdMeter, subSMeter)},
-		request{KeyPTT, r.frame(cmdTransceiver, r.model.PTTSub)},
-	); err != nil {
+	// Frequency and mode are the two every radio here answers, and between them
+	// they prove the link. The rest are per model: on an IC-706 there is no
+	// transmitter command, no power level and — before the MKIIG — no meter, so
+	// asking would draw three rejections at every connect and publish nothing.
+	reqs := []request{
+		{KeyFrequency, r.frame(cmdReadFreq)},
+		{KeyMode, r.frame(cmdReadMode)},
+	}
+	if r.model.Power {
+		reqs = append(reqs, request{KeyPower, r.frame(cmdLevel, subRFPower)})
+	}
+	if r.model.SMeter {
+		reqs = append(reqs, request{KeySMeter, r.frame(cmdMeter, subSMeter)})
+	}
+	if r.model.PTT {
+		reqs = append(reqs, request{KeyPTT, r.frame(cmdTransceiver, r.model.PTTSub)})
+	}
+	if err := r.readAll(ctx, c, reqs...); err != nil {
 		return err
 	}
 	if !r.model.DualVFO {
@@ -331,8 +358,15 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		reqs := []request{
 			{KeyFrequency, r.frame(cmdReadFreq)},
 			{KeyMode, r.frame(cmdReadMode)},
-			{KeyPTT, r.frame(cmdTransceiver, r.model.PTTSub)},
-			{KeySMeter, r.frame(cmdMeter, subSMeter)},
+		}
+		// Both per model: an IC-706 has no transmitter command to ask and no
+		// meter until the MKIIG, so polling them twice a second would be a
+		// steady stream of rejections for two values that can never arrive.
+		if r.model.PTT {
+			reqs = append(reqs, request{KeyPTT, r.frame(cmdTransceiver, r.model.PTTSub)})
+		}
+		if r.model.SMeter {
+			reqs = append(reqs, request{KeySMeter, r.frame(cmdMeter, subSMeter)})
 		}
 		// The second receiver's meter belongs in the fast tier for the same
 		// reason the first one does — it is a signal level, and a client draws
@@ -345,7 +379,10 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		}
 		return r.readAll(ctx, c, reqs...)
 	case backend.PollSlow:
-		reqs := []request{{KeyPower, r.frame(cmdLevel, subRFPower)}}
+		var reqs []request
+		if r.model.Power {
+			reqs = append(reqs, request{KeyPower, r.frame(cmdLevel, subRFPower)})
+		}
 		// Asking a radio without 1A 03 would draw an NG every slow tick. The
 		// session tolerates that (a rig that refuses is still alive), but there
 		// is no reason to generate the noise.
@@ -586,6 +623,10 @@ func (r *Rig) dataModeRead() []byte {
 // index and the reference gives no watt calibration for it, so any conversion
 // would be a number invented by remoses about a transmitter's output.
 func (r *Rig) SetPower(ctx context.Context, c backend.Conn, p radio.PowerSet) error {
+	if !r.model.Power {
+		return fmt.Errorf("civ: the %s has no RF power command; its output is set on "+
+			"the radio: %w", r.model.Label, backend.ErrUnsupported)
+	}
 	if err := p.Validate(); err != nil {
 		return err
 	}
@@ -602,7 +643,17 @@ func (r *Rig) SetPower(ctx context.Context, c backend.Conn, p radio.PowerSet) er
 }
 
 // SetPTT keys or unkeys the transmitter (command 1C 00).
+//
+// Refused outright on a radio with no such command. The IC-706 family has none
+// at any sub-command, so there is nothing to send and nothing that would report
+// the result — an operator there keys with a footswitch, the microphone, or a
+// control line driven by cw.serial_key.
 func (r *Rig) SetPTT(ctx context.Context, c backend.Conn, on bool) error {
+	if !r.model.PTT {
+		return fmt.Errorf("civ: the %s has no transmitter command; key it with a "+
+			"footswitch, the microphone or a serial control line: %w",
+			r.model.Label, backend.ErrUnsupported)
+	}
 	var v byte
 	if on {
 		v = 0x01
@@ -688,5 +739,5 @@ func (r *Rig) SetFilterSlot(ctx context.Context, c backend.Conn, slot int) error
 			return r.set(ctx, c, "filter slot", r.dataModeFrame(0x01, slot))
 		}
 	}
-	return r.set(ctx, c, "filter slot", r.frame(cmdSetMode, mb, byte(slot)))
+	return r.set(ctx, c, "filter slot", r.frame(cmdSetMode, mb, r.model.filterByte(slot)))
 }

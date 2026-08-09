@@ -703,6 +703,23 @@ components:
             only its own frequency. Where this is false, treat mode and filter
             as properties of the radio and read only `frequency` from
             `state.vfo_a` / `state.vfo_b`.
+        ptt_control:
+          type: boolean
+          description: |
+            remoses can key and unkey the transmitter on this radio.
+
+            False is not exotic: the IC-706 family has no transmitter command in
+            its control set at all, so PTT there is a footswitch, the microphone
+            or a control line. Where this is false, `{"ptt": …}` returns 422 and
+            `state.ptt` stays false because nothing reports it either — so a
+            client should hide the control rather than show one that cannot key
+            and a state that never changes.
+        power_control:
+          type: boolean
+          description: |
+            remoses can read and set RF output power. False where the radio has
+            no power command and output is a front-panel control; `power_w` and
+            `power_pct` are then refused with 422.
         break_in_control:
           type: boolean
           description: |

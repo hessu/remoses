@@ -225,6 +225,9 @@ func (k *Rig) Caps() radio.Caps {
 
 		// PC is in real watts, which is unusual enough to be worth advertising:
 		// clients can show a watt slider instead of a meaningless percentage.
+		// TX;/RX; and PC are on every radio in this family.
+		PTTControl:        true,
+		PowerControl:      true,
 		PowerWattAccurate: true,
 		MaxPowerW:         float64(k.profile.MaxPowerW),
 

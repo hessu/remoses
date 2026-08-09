@@ -255,6 +255,9 @@ func (y *Rig) Caps() radio.Caps {
 		// fields say so — MaxPowerW is left unset rather than filled in with
 		// the nameplate rating, which would invite a client to read the index
 		// as watts.
+		// TX and PC are family-wide here.
+		PTTControl:        true,
+		PowerControl:      true,
 		PowerWattAccurate: !y.profile.PowerRaw,
 		MaxPowerW:         float64(y.maxPowerW()),
 

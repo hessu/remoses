@@ -48,12 +48,40 @@ type Model struct {
 	// (FIL1..FIL3). Zero on radios whose mode command has no filter byte at
 	// all, where a trailing byte must not be read as a slot.
 	FilterSlots int
+	// FilterZeroBased says the mode command's filter byte counts from 0 rather
+	// than 1.
+	//
+	// The modern family numbers its filters FIL1, FIL2, FIL3 and puts 01, 02,
+	// 03 on the wire. The IC-706 family instead encodes wide, normal and narrow
+	// as 00, 01, 02 — the same three slots offset by one. Getting it wrong
+	// selects the neighbouring filter on every mode change, which is a quiet
+	// wrongness rather than an error: the rig accepts it and the operator hears
+	// a bandwidth they did not ask for.
+	FilterZeroBased bool
 
+	// PTT is true when the radio has command 1C at all.
+	//
+	// It is not a formality. The IC-706 family has no transmitter command in
+	// its command set whatsoever — PTT there is the microphone, a footswitch or
+	// a control line, and nothing on the bus can key it or report that it is
+	// keyed. Claiming otherwise would offer a client a button that does nothing
+	// and a state field frozen at false, which is worse than saying so.
+	PTT bool
 	// PTTSub is the sub-command of 1C that carries transmitter status. It is
 	// 0x00 on every radio here except the IC-718, whose manual puts it on 0x01.
 	// Wrong here means keying the transmitter with the wrong command, so it is
 	// explicit per model rather than assumed.
 	PTTSub byte
+	// Power is true when the radio has command 14 0A, the RF output level.
+	// False on the IC-706 family, whose output is a front-panel control with no
+	// bus equivalent.
+	Power bool
+	// SMeter is true when the radio has command 15 02.
+	//
+	// The IC-706 and IC-706MKII have no readable meter of any kind; the MKIIG
+	// gained one. A meter that is never read publishes a permanent zero, which
+	// in a client's signal bar is indistinguishable from a dead band.
+	SMeter bool
 	// CWBuffer is true when the radio implements command 17, the CAT CW message
 	// buffer. Where it is false remoses cannot send Morse over CAT at all and
 	// the station must key a serial control line instead.
@@ -178,13 +206,99 @@ func modern(name, label string, addr byte, modes []radio.Mode) Model {
 		Address:        addr,
 		Modes:          modes,
 		FilterSlots:    3,
+		PTT:            true,
 		PTTSub:         0x00,
+		Power:          true,
+		SMeter:         true,
 		CWBuffer:       true,
 		FilterWidth:    true,
 		DataMode:       true,
 		DataModeSub:    subDataMode,
 		DataModeFilter: true,
 		MaxWPM:         48,
+	}
+}
+
+// filterByte encodes a 1-based API filter slot as the byte this model's mode
+// command expects.
+//
+// The API counts from 1 throughout, because Caps.FilterSlots is a count. Most
+// radios put the same number on the wire — FIL1 is 01 — but the IC-706 family
+// counts wide, normal and narrow from zero, so the two differ by one.
+func (m Model) filterByte(slot int) byte {
+	if m.FilterZeroBased {
+		return byte(slot - 1)
+	}
+	return byte(slot)
+}
+
+// filterSlot is the inverse: a wire byte back to a 1-based slot, and false when
+// the byte is outside what this model offers.
+//
+// Rejecting an out-of-range byte matters more than it looks. A radio with no
+// filter selection reports FilterSlots 0 and never gets here, but a trailing
+// byte in some other reply must not be published as a slot the operator did not
+// select.
+func (m Model) filterSlot(b byte) (int, bool) {
+	slot := int(b)
+	if m.FilterZeroBased {
+		slot++
+	}
+	if m.FilterSlots <= 0 || slot < 1 || slot > m.FilterSlots {
+		return 0, false
+	}
+	return slot, true
+}
+
+// mkiiFamily describes an IC-706 of any generation: what the three share, which
+// is a command set with no transmitter control, no power level and no CW
+// buffer. See the registry entries for what each adds.
+func mkiiFamily(name, label string, addr byte) Model {
+	return Model{
+		Name:    name,
+		Label:   label,
+		Address: addr,
+		// WFM is the addition, and CW-R and RTTY-R the omission: command 06
+		// runs 00 to 06 on these radios and stops, where the rest of the family
+		// carries on to 07 and 08. Both differences need the whole table
+		// overriding, since a byte that means WFM here means nothing elsewhere.
+		Modes: []radio.Mode{
+			radio.ModeLSB, radio.ModeUSB, radio.ModeAM, radio.ModeCW,
+			radio.ModeFSK, radio.ModeFM, radio.ModeWFM,
+		},
+		Codes: map[byte]radio.Mode{
+			0x00: radio.ModeLSB,
+			0x01: radio.ModeUSB,
+			0x02: radio.ModeAM,
+			0x03: radio.ModeCW,
+			0x04: radio.ModeFSK, // the rig calls this RTTY
+			0x05: radio.ModeFM,
+			0x06: radio.ModeWFM,
+		},
+		// Three filter selections, counted from zero: 00 wide, 01 normal,
+		// 02 narrow. Which of the three a given mode actually offers varies —
+		// the manual spells out that some modes have only two — but the rig
+		// rejects what it cannot do, and guessing per mode would be inventing a
+		// table nothing documents.
+		FilterSlots:     3,
+		FilterZeroBased: true,
+		// No 1C at any sub-command, no 14, no 17. See the registry comment.
+		PTT:      false,
+		Power:    false,
+		SMeter:   false,
+		CWBuffer: false,
+		// No 1A at all, so neither a filter width nor a data mode.
+		FilterWidth: false,
+		DataMode:    false,
+		// 07 selects VFO mode, and 07 00 / 07 01 select VFO A and B.
+		VFOModeSelect: true,
+		VFOSelect:     true,
+		// 0F 00 and 0F 01 turn split off and on, with no read form printed —
+		// the same reading as the IC-703's, and the same decision.
+		Split: false,
+		// There is no keyer speed command either (no 14), so this is the range
+		// the family's own keyer covers rather than anything remoses can set.
+		MaxWPM: 0,
 	}
 }
 
@@ -320,11 +434,67 @@ var models = map[string]Model{
 			0x04: radio.ModeFM,
 		},
 		FilterSlots: 0,
+		PTT:         true,
 		PTTSub:      0x00,
+		Power:       true,
+		SMeter:      true,
 		CWBuffer:    false,
 		FilterWidth: false,
 		MaxWPM:      60,
 	},
+
+	// The IC-706 family: three mobiles from the mid-1990s, and the oldest
+	// radios in this table by a decade. They share a command set that predates
+	// most of what this backend assumes, so mkiiFamily below builds the common
+	// part and each entry states what it adds.
+	//
+	// Their manuals are the thinnest documentation here — the original IC-706's
+	// command table is one narrow column — and are incomplete in one direction
+	// and wrong in another, so two facts below are stated on the strength of
+	// how these radios actually behave rather than what their tables print:
+	//
+	//   - The IC-706 and IC-706MKII tables list only control commands, stopping
+	//     at 10, with no 03 or 04. Both nonetheless answer "read frequency" and
+	//     "read mode", which is just as well: remoses fills its state cache by
+	//     polling, so a radio it could command but never read would never come
+	//     up at all. This is the one place a profile here rests on something the
+	//     manual does not say, and it is the difference between a working entry
+	//     and no entry.
+	//   - The IC-706MKII's data-format diagram prints the transceiver address as
+	//     48, the same as the IC-706's, which looks like reused artwork: its
+	//     factory address is 4E. The address is menu-configurable in any case,
+	//     so `civ.rig_address` settles an argument with a particular radio.
+	//
+	// What all three genuinely lack is more interesting than what they have.
+	// There is NO transmitter command — no 1C at any sub-command — so remoses
+	// can neither key these radios nor tell whether they are keyed; PTT is the
+	// microphone, a footswitch or a control line. There is no 14 either, so no
+	// RF power. And no 17, so no CW over CAT.
+	"ic-706": mkiiFamily("ic-706", "Icom IC-706", 0x48),
+
+	// Same command set and the same silences; a different factory address, and
+	// the narrow-filter encoding is spelled out as wide/normal/narrow where the
+	// IC-706's table says only "add 02 to select narrow IF filters".
+	"ic-706mkii": mkiiFamily("ic-706mkii", "Icom IC-706MKII", 0x4E),
+
+	// The MKIIG is the one with a documented command table of the modern shape,
+	// and it is the only one of the three that gained anything remoses can use:
+	//
+	//   15 02  a readable S-meter, where the earlier two have no meter at all
+	//   16 47  CW break-in, which matters because these radios have no CAT CW
+	//          buffer: an operator keying a control line still needs the rig in
+	//          break-in for the transmitter to follow the key
+	//   16 02/12/22/42/43/44/46  preamp, AGC, noise blanker, tone, compressor
+	//          and VOX, none of which remoses models
+	//   19 00  the identity read, so a wrong bus address can be diagnosed
+	//
+	// It still has no 1C and no 14, so PTT and power remain absent.
+	"ic-706mkiig": func() Model {
+		m := mkiiFamily("ic-706mkiig", "Icom IC-706MKIIG", 0x58)
+		m.SMeter = true
+		m.BreakIn = true
+		return m
+	}(),
 
 	// The IC-703 is a 10 W portable of the IC-718's generation, and its command
 	// table is the older shape throughout. Transcribed from section 11 of its
@@ -363,7 +533,10 @@ var models = map[string]Model{
 		// 04 RTTY, 05 FM, 07 CW-R, 08 RTTY-R. No PSK, no D-STAR.
 		Modes:       modesCommon(),
 		FilterSlots: 0,
+		PTT:         true,
 		PTTSub:      0x00, // 1C 00, "set/read the transceiver's condition"
+		Power:       true, // 14 0A
+		SMeter:      true, // 15 02
 		CWBuffer:    false,
 		FilterWidth: false,
 		DataMode:    true,
@@ -401,7 +574,10 @@ var models = map[string]Model{
 		Address:     0x5E,
 		Modes:       []radio.Mode{radio.ModeLSB, radio.ModeUSB, radio.ModeAM, radio.ModeCW, radio.ModeFSK, radio.ModeCWR, radio.ModeFSKR},
 		FilterSlots: 0, // its mode command carries no filter byte
+		PTT:         true,
 		PTTSub:      0x01,
+		Power:       true,
+		SMeter:      true,
 		CWBuffer:    false,
 		FilterWidth: false,
 		MaxWPM:      60,

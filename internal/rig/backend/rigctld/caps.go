@@ -405,6 +405,12 @@ func buildCaps(st *dumpState, dc *dumpCaps, minWPM, maxWPM int) radio.Caps {
 		// started with -o, which changes the wire protocol; see the package doc.
 		VFOs: []radio.VFO{radio.VFOCurrent},
 
+		// Both true: `T`/`t` and the RFPOWER level are part of every rigctld,
+		// and this backend cannot tell which of the rigs behind it lacks the
+		// underlying command. Reporting false would disable the controls for
+		// every rig rather than the few that cannot use them.
+		PTTControl:   true,
+		PowerControl: true,
 		// RFPOWER is a 0..1 fraction. See powerFromLevel for why no watt figure
 		// is derived from it, even though the tx range list carries one.
 		PowerWattAccurate: false,

@@ -207,7 +207,8 @@ func TestNewDefaultsAndRejections(t *testing.T) {
 			r.Model().Name, r.rigAddr, DefaultModel, DefaultRigAddress)
 	}
 
-	if _, err := New(&config.Radio{CIV: &config.CIV{Model: "ic-706"}}); err == nil {
+	// A name with no profile. It used to be ic-706, which is a real entry now.
+	if _, err := New(&config.Radio{CIV: &config.CIV{Model: "ic-736"}}); err == nil {
 		t.Error("New accepted an unknown model")
 	}
 

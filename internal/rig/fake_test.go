@@ -355,12 +355,14 @@ func (r *fakeRig) initError() error {
 
 func newFakeRig() *fakeRig {
 	return &fakeRig{caps: radio.Caps{
-		Modes:       []radio.Mode{radio.ModeLSB, radio.ModeUSB, radio.ModeCW, radio.ModeCWR, radio.ModeFSK},
-		VFOs:        []radio.VFO{radio.VFOA, radio.VFOB},
-		FilterWidth: true,
-		FilterSlots: 3,
-		SMeterScale: 30,
-		MaxPowerW:   100,
+		Modes:        []radio.Mode{radio.ModeLSB, radio.ModeUSB, radio.ModeCW, radio.ModeCWR, radio.ModeFSK},
+		VFOs:         []radio.VFO{radio.VFOA, radio.VFOB},
+		PTTControl:   true,
+		PowerControl: true,
+		FilterWidth:  true,
+		FilterSlots:  3,
+		SMeterScale:  30,
+		MaxPowerW:    100,
 
 		// The rig's own keyer, as a backend would report it. Deliberately
 		// narrower than internal/cw's local clamp of 5-60, so that a test can

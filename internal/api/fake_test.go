@@ -217,16 +217,18 @@ type fakeRig struct {
 func newFakeRig() *fakeRig {
 	return &fakeRig{
 		caps: radio.Caps{
-			Modes:       []radio.Mode{radio.ModeLSB, radio.ModeUSB, radio.ModeCW, radio.ModeCWR, radio.ModeFSK},
-			VFOs:        []radio.VFO{radio.VFOA, radio.VFOB},
-			FilterWidth: true,
-			FilterSlots: 3,
-			SMeterScale: 30,
-			MaxPowerW:   100,
-			CWMethod:    radio.CWViaCAT,
-			CWCharset:   "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?.,",
-			CWMinWPM:    6,
-			CWMaxWPM:    60,
+			Modes:        []radio.Mode{radio.ModeLSB, radio.ModeUSB, radio.ModeCW, radio.ModeCWR, radio.ModeFSK},
+			VFOs:         []radio.VFO{radio.VFOA, radio.VFOB},
+			PTTControl:   true,
+			PowerControl: true,
+			FilterWidth:  true,
+			FilterSlots:  3,
+			SMeterScale:  30,
+			MaxPowerW:    100,
+			CWMethod:     radio.CWViaCAT,
+			CWCharset:    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?.,",
+			CWMinWPM:     6,
+			CWMaxWPM:     60,
 		},
 		errs: map[string]error{},
 	}

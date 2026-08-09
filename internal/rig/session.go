@@ -821,6 +821,19 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	if req.BreakIn != nil && !caps.BreakInControl {
 		return s.State(), fmt.Errorf("radio %s: break-in: %w", s.id, ErrUnsupported)
 	}
+	// A radio may have no transmitter command and no power level at all — the
+	// IC-706 family has neither. Refusing here rather than at the backend keeps
+	// the whole patch from being half-applied, and gives the same 422 whichever
+	// field was the impossible one.
+	if req.PTT != nil && !caps.PTTControl {
+		return s.State(), fmt.Errorf("radio %s: this radio has no transmitter command; "+
+			"key it with a footswitch, the microphone or a serial control line: %w",
+			s.id, ErrUnsupported)
+	}
+	if req.Power != nil && !caps.PowerControl {
+		return s.State(), fmt.Errorf("radio %s: this radio has no RF power command; "+
+			"its output is set on the radio: %w", s.id, ErrUnsupported)
+	}
 	if req.VFOMode != nil {
 		if !*req.VFOMode {
 			return s.State(), fmt.Errorf("radio %s: vfo_mode can only be set true; "+
@@ -1069,6 +1082,14 @@ func (s *Session) ForceRX(reason string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), forceRXTimeoutMult*s.cmdTimeout)
 	defer cancel()
+	// Aborting the CW above is the whole of the safety path on a radio with no
+	// transmitter command. Sending one anyway would fail every time this fires,
+	// and log an error about a control the radio has never had — on such a rig
+	// PTT is a footswitch or a control line, and neither is remoses' to drop.
+	if !s.Caps().PTTControl {
+		s.refreshCW()
+		return
+	}
 	if err := s.rig.SetPTT(ctx, s, false); err != nil {
 		s.log.Error("force receive failed to drop PTT", "reason", reason, "err", err)
 		return

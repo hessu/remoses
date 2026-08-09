@@ -542,8 +542,9 @@ address, so `rig_address` must be given rather than guessed.
 
 ### The outliers, and what they cost
 
-Most models are a table entry. Three are not, and between them they broke four assumptions
-this backend had baked in as constants.
+Most models are a table entry. Six are not, and between them they broke seven assumptions this
+backend had baked in as constants — five of them the same shape, a value that varies per model
+and was written as though it could not.
 
 **The IC-718:**
 
@@ -597,6 +598,45 @@ IC-718's missing `17` and its 60 wpm keyer, and adds one of its own:
   "Select/read" against `11`. A setting remoses can write and never read back is precisely the
   failure this backend keeps hitting, so it stays off until somebody puts one on the air. It
   does have `07 00`/`07 01` to select VFO A and B, and `16 47` break-in.
+
+**The IC-706 family — IC-706, MKII and MKIIG** — are the oldest radios here by a decade, and
+they broke the two largest assumptions left: that a radio can be keyed, and that it has a power
+level.
+
+- **No transmitter command at all.** Not a different sub-command, as on the IC-718 — *none*, at
+  any sub-command. remoses can neither key these radios nor learn whether they are keyed; PTT is
+  the microphone, a footswitch or a control line. `Caps.PTTControl` is the new field that says
+  so, `ApplyPatch` refuses `ptt` with 422 before anything reaches the wire, PTT is dropped from
+  the poll, and `ForceRX` — the dead-man and lock-expiry safety path — stops after aborting CW
+  rather than sending a command that would fail every time it fired.
+- **No RF power either** (no `14`), so `Caps.PowerControl` joins it. Output is a front-panel
+  control on these radios.
+- **No meter on the first two.** `Caps.SMeterScale` is 0 rather than the family's full scale,
+  which a client can tell from a meter that reads zero. The MKIIG gained `15 02`.
+- **The filter byte counts from zero.** The modern family numbers FIL1..FIL3 and puts `01`,
+  `02`, `03` on the wire; these encode wide, normal and narrow as `00`, `01`, `02`. The same
+  three slots, offset by one — so getting it wrong selects the neighbouring filter on every mode
+  change, and the rig accepts it without complaint. `Model.FilterZeroBased` and the
+  `filterByte`/`filterSlot` pair keep the API's 1-based slot numbering intact either way.
+- **Command 06 stops at 06.** WFM is added at `0x06` and CW-R and RTTY-R are absent, so the whole
+  mode table is overridden as on the IC-910H: against the family table, `07` would decode as CW-R
+  on a radio that has no such mode.
+- The MKIIG alone gained `16 47` break-in. It has no CAT CW buffer for that to gate, but an
+  operator keying a control line still needs the rig in break-in for the transmitter to follow.
+
+Their manuals are the thinnest documentation here — the original's command table is one narrow
+column — and are **incomplete in one direction and wrong in another**, so two facts in these
+profiles rest on how the radios behave rather than on what the tables print:
+
+- The IC-706 and MKII tables list only control commands, stopping at `10`, with **no `03` or
+  `04`**. Both nonetheless answer read-frequency and read-mode. That is not a nicety: remoses
+  fills its state cache by polling and proves the link with those two reads at connect, so a
+  radio it could command but never read would never come up at all. It is the difference between
+  a working profile and no profile, and it is recorded in the code as an assumption rather than
+  a transcription.
+- The MKII's data-format diagram prints the transceiver address as `48`, the same as the
+  IC-706's, which looks like reused artwork; its factory address is `4E`. The address is
+  menu-configurable in any case, which is what `civ.rig_address` is for.
 
 **The IC-905's frequency field is not fixed width.** Its reference specifies ten digits
 (5 bytes) on 5.6 GHz and below, and twelve (6 bytes) when the 10 GHz band is selected.

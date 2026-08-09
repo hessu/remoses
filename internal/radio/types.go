@@ -593,6 +593,19 @@ type Caps struct {
 	Modes []Mode `json:"modes"`
 	VFOs  []VFO  `json:"vfos"`
 
+	// PTTControl is true when remoses can key and unkey the transmitter over
+	// the control link.
+	//
+	// Not every radio offers it, and the ones that do not are not exotic: the
+	// IC-706 family has no CI-V command for the transmitter at all, so PTT there
+	// is a control line or a footswitch and nothing else. Where this is false,
+	// `ptt` in a state patch is refused and `state.ptt` never becomes true from
+	// polling, because nothing reports it either.
+	PTTControl bool `json:"ptt_control"`
+	// PowerControl is true when remoses can read and set RF output power.
+	// False on a radio whose command set has no power level — again the IC-706
+	// family, where output is a front-panel control.
+	PowerControl bool `json:"power_control"`
 	// PowerWattAccurate is true when the rig's power scale is real watts
 	// (Kenwood PC) rather than a relative index (Icom 14 0A).
 	PowerWattAccurate bool    `json:"power_watt_accurate"`
@@ -600,7 +613,9 @@ type Caps struct {
 
 	FilterWidth bool `json:"filter_width"`
 	FilterSlots int  `json:"filter_slots"`
-	SMeterScale int  `json:"s_meter_scale"`
+	// SMeterScale is the full-scale meter reading, or 0 on a radio with no
+	// readable signal meter at all.
+	SMeterScale int `json:"s_meter_scale"`
 
 	// SubReceiver is a second receiver that can be listened to at the same
 	// time as the first — the IC-7610's dual watch. It is not "the radio has

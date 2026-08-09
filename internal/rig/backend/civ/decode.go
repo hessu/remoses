@@ -228,9 +228,10 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 				u.Key = KeyDataMode
 				on := body[1] != 0x00
 				u.Patch.DataMode = &on
-				if n := r.model.FilterSlots; n > 0 && len(body) >= 3 && body[2] >= 1 && body[2] <= byte(n) {
-					slot := int(body[2])
-					u.Patch.FilterSlot = &slot
+				if len(body) >= 3 {
+					if slot, ok := r.model.filterSlot(body[2]); ok {
+						u.Patch.FilterSlot = &slot
+					}
 				}
 			}
 		}
@@ -276,9 +277,12 @@ func (r *Rig) decodeMode(p *radio.Patch, body []byte) {
 	r.mode.Store(uint32(m))
 	// A radio with no filter selection (IC-718, IC-910H) reports FilterSlots 0,
 	// and then any trailing byte is not a slot and must not be read as one.
-	if n := r.model.FilterSlots; n > 0 && len(body) >= 2 && body[1] >= 1 && body[1] <= byte(n) {
-		slot := int(body[1])
-		p.FilterSlot = &slot
+	// Where there is one, the wire byte is not always the slot number: the
+	// IC-706 family counts from zero. See Model.filterSlot.
+	if len(body) >= 2 {
+		if slot, ok := r.model.filterSlot(body[1]); ok {
+			p.FilterSlot = &slot
+		}
 	}
 }
 
@@ -384,8 +388,10 @@ func (r *Rig) decodeVFOMode(u *backend.Update, body []byte) {
 	if len(body) >= 3 {
 		st.DataMode = body[2] != bandDataOff
 	}
-	if n := r.model.FilterSlots; n > 0 && len(body) >= 4 && body[3] >= 1 && body[3] <= byte(n) {
-		st.FilterSlot = int(body[3])
+	if len(body) >= 4 {
+		if slot, ok := r.model.filterSlot(body[3]); ok {
+			st.FilterSlot = slot
+		}
 	}
 
 	u.Key = KeyVFOMode

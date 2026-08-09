@@ -16,7 +16,7 @@ Scope for v1 is control only. Audio is a separate concern.
 
 ## Status
 
-**Experimental. Three radios out of the thirty-four below have ever been connected —
+**Experimental. Three radios out of the thirty-seven below have ever been connected —
 but all three have been put through everything they can do.**
 
 Every protocol detail below was transcribed from the manufacturers' own CI-V and
@@ -24,7 +24,7 @@ CAT reference documentation and is exercised against simulated rigs in the test
 suite. That proves the code matches what the manual says. It does not prove the
 manual is right, that the transcription is right, or that a particular radio
 behaves the way its documentation claims — which is why the three radios that have
-been on the wire matter more than the thirty-one that have not.
+been on the wire matter more than the thirty-four that have not.
 
 ### What has been verified on hardware
 
@@ -71,14 +71,14 @@ The worst of them was invisible from this side: **CW accepted, queued, drained
 on schedule — and never transmitted**, because the radio's break-in was off. Only
 an operator listening could have caught it — and it happened again, on the
 TS-590S, after it had already been found and fixed on the IC-9700, because the
-Kenwood backend had no notion of break-in at all. **Expect the other thirty-one
+Kenwood backend had no notion of break-in at all. **Expect the other thirty-four
 models to be hiding something similar.**
 
 ### What that still does not tell you
 
 - **Three radios have been verified**, two Icoms and one Kenwood. Treat every
   other model below as "implemented from documentation, awaiting confirmation".
-  The Yaesu backends, the remaining eleven Icom profiles and the other four Kenwood
+  The Yaesu backends, the remaining fourteen Icom profiles and the other four Kenwood
   profiles have never seen a radio.
 - **`limits.bands` gates tuning, not transmitting.** There is no transmit-only
   band limit, so it cannot express "receive anywhere, transmit only here" — which
@@ -116,6 +116,9 @@ TS-590S confirmed the protocol surface and CW, not those again.
 | Model | `civ.model` | Notes | Tested |
 |---|---|---|---|
 | IC-703 | `ic-703` | 10 W; no CAT CW buffer; no filter width (`1A 03` is the Set-mode menu); data mode on `1A 04` | — |
+| IC-706 | `ic-706` | **No PTT and no power over CI-V**; no meter; no CW buffer; WFM | — |
+| IC-706MKII | `ic-706mkii` | As the IC-706; address `4E` | — |
+| IC-706MKIIG | `ic-706mkiig` | As above, plus an S-meter and CW break-in | — |
 | IC-718 | `ic-718` | No CAT CW buffer; PTT on `1C 01`; no filter width | — |
 | IC-7300 | `ic-7300` | | — |
 | IC-7300MK2 | `ic-7300mk2` | | — |
@@ -166,6 +169,22 @@ cannot reach the front panel; `manual` writes nothing and returns a 422 naming t
 station that sequences its own transmit path. Semi is the default because full is QSK and will
 clock your relays between elements — that is a choice to make deliberately. Radios whose
 reference has not been read for the command are never blocked by the check.
+
+**The IC-706 family cannot be keyed over CI-V at all.** None of the three has a transmitter
+command — no `1C` at any sub-command — so remoses can neither key them nor tell whether they are
+keyed, and none has an RF power level either. Both are front-panel controls, and PTT is a
+footswitch, the microphone, or a control line. `caps.ptt_control` and `caps.power_control` say so,
+`{"ptt": …}` and `{"power_w": …}` return 422, and neither is polled. These are the first radios
+here to report either as false, so a client that assumed every rig can be keyed will want to
+check them.
+
+They are also the oldest radios in the table, and their manuals are correspondingly thin — the
+original IC-706's whole command list is one narrow column. Two facts in those profiles come from
+how the radios behave rather than from what the tables print: the IC-706 and MKII do answer "read
+frequency" and "read mode" even though neither appears in their command tables, and the MKII's
+factory address is `4E` rather than the `48` its data-format diagram shows. The first matters
+because remoses fills its state by polling — a radio it could command but never read would never
+connect — and the second is what `civ.rig_address` is for.
 
 **Memory mode is not modelled — but getting out of it is.** `{"vfo_mode": true}` returns the
 radio to VFO operation, which is what an operator stuck on a memory channel actually needs; a rig

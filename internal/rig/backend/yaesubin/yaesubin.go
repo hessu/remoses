@@ -220,10 +220,14 @@ func (y *Rig) Caps() radio.Caps {
 		// that a set command would then act on.
 		VFOs: []radio.VFO{radio.VFOCurrent},
 
+		// Opcode 08/88 keys the transmitter, so PTT is available even though
+		// almost nothing else in this command set is.
+		PTTControl: true,
 		// There is no power command of any kind, so there is no scale and no
 		// ceiling to publish. Leaving MaxPowerW at zero rather than filling in
 		// the nameplate 100 W is what makes the session refuse a request in
 		// watts instead of sending one nothing can carry.
+		PowerControl:      false,
 		PowerWattAccurate: false,
 		MaxPowerW:         0,
 
