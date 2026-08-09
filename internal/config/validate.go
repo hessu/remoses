@@ -31,8 +31,9 @@ var backends = []string{BackendCIV, BackendKenwood, BackendYaesu, BackendRigctld
 // fails if the two ever drift, which is the direction that can import both.
 var CIVModels = []string{
 	"generic",
-	"ic-718", "ic-7300", "ic-7300mk2", "ic-7600", "ic-7610", "ic-7700",
-	"ic-7760", "ic-7850", "ic-905", "ic-910h", "ic-9100", "ic-9700",
+	"ic-703", "ic-718", "ic-7300", "ic-7300mk2", "ic-7600", "ic-7610",
+	"ic-7700", "ic-7760", "ic-7850", "ic-905", "ic-910h", "ic-9100",
+	"ic-9700",
 }
 
 // KenwoodModels are the accepted values of kenwood.model.

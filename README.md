@@ -16,14 +16,14 @@ Scope for v1 is control only. Audio is a separate concern.
 
 ## Status
 
-**Experimental. Two radios out of the thirty-three below have ever been connected —
-but both have been put through everything they can do.**
+**Experimental. Three radios out of the thirty-four below have ever been connected —
+but all three have been put through everything they can do.**
 
 Every protocol detail below was transcribed from the manufacturers' own CI-V and
 CAT reference documentation and is exercised against simulated rigs in the test
 suite. That proves the code matches what the manual says. It does not prove the
 manual is right, that the transcription is right, or that a particular radio
-behaves the way its documentation claims — which is why the two radios that have
+behaves the way its documentation claims — which is why the three radios that have
 been on the wire matter more than the thirty-one that have not.
 
 ### What has been verified on hardware
@@ -71,14 +71,14 @@ The worst of them was invisible from this side: **CW accepted, queued, drained
 on schedule — and never transmitted**, because the radio's break-in was off. Only
 an operator listening could have caught it — and it happened again, on the
 TS-590S, after it had already been found and fixed on the IC-9700, because the
-Kenwood backend had no notion of break-in at all. **Expect the other thirty
+Kenwood backend had no notion of break-in at all. **Expect the other thirty-one
 models to be hiding something similar.**
 
 ### What that still does not tell you
 
 - **Three radios have been verified**, two Icoms and one Kenwood. Treat every
   other model below as "implemented from documentation, awaiting confirmation".
-  The Yaesu backends, the remaining ten Icom profiles and the other four Kenwood
+  The Yaesu backends, the remaining eleven Icom profiles and the other four Kenwood
   profiles have never seen a radio.
 - **`limits.bands` gates tuning, not transmitting.** There is no transmit-only
   band limit, so it cannot express "receive anywhere, transmit only here" — which
@@ -115,6 +115,7 @@ TS-590S confirmed the protocol surface and CW, not those again.
 
 | Model | `civ.model` | Notes | Tested |
 |---|---|---|---|
+| IC-703 | `ic-703` | 10 W; no CAT CW buffer; no filter width (`1A 03` is the Set-mode menu); data mode on `1A 04` | — |
 | IC-718 | `ic-718` | No CAT CW buffer; PTT on `1C 01`; no filter width | — |
 | IC-7300 | `ic-7300` | | — |
 | IC-7300MK2 | `ic-7300mk2` | | — |

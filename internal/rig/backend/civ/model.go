@@ -60,11 +60,23 @@ type Model struct {
 	CWBuffer bool
 	// FilterWidth is true when the radio implements command 1A 03.
 	FilterWidth bool
-	// DataMode is true when sub-command 06 of 1A is the data-mode setting.
+	// DataMode is true when the radio has a data-mode setting under command 1A.
 	// It is not universal and not merely absent elsewhere: on the IC-910H the
-	// same sub-command is RIT on/off, so sending it to a radio without a data
-	// mode would change something unrelated rather than draw a rejection.
+	// sub-command that carries it elsewhere is RIT on/off, so sending it to a
+	// radio without a data mode would change something unrelated rather than
+	// draw a rejection.
 	DataMode bool
+	// DataModeSub is which sub-command of 1A that is. 06 across the modern
+	// family, but 04 on the IC-703 — where 06 is not in the table at all and 03
+	// is a Set-mode item index rather than the filter width. Same command, a
+	// different menu underneath, which is why this cannot be a constant.
+	DataModeSub byte
+	// DataModeFilter is true where that sub-command carries an IF filter byte
+	// after the on/off flag, so that turning data on has to preserve the
+	// filter. False on a radio with no filter selection to preserve: the
+	// IC-703's 1A 04 is the flag alone, and a second byte would be a parameter
+	// its parser is not expecting.
+	DataModeFilter bool
 	// MaxWPM is the top of the command 14 0C keyer range. The bottom is 6 wpm
 	// everywhere.
 	MaxWPM int
@@ -161,16 +173,18 @@ func withModes(base []radio.Mode, extra ...radio.Mode) []radio.Mode {
 // wpm keyer. Models that differ override the fields after building.
 func modern(name, label string, addr byte, modes []radio.Mode) Model {
 	return Model{
-		Name:        name,
-		Label:       label,
-		Address:     addr,
-		Modes:       modes,
-		FilterSlots: 3,
-		PTTSub:      0x00,
-		CWBuffer:    true,
-		FilterWidth: true,
-		DataMode:    true,
-		MaxWPM:      48,
+		Name:           name,
+		Label:          label,
+		Address:        addr,
+		Modes:          modes,
+		FilterSlots:    3,
+		PTTSub:         0x00,
+		CWBuffer:       true,
+		FilterWidth:    true,
+		DataMode:       true,
+		DataModeSub:    subDataMode,
+		DataModeFilter: true,
+		MaxWPM:         48,
 	}
 }
 
@@ -310,6 +324,63 @@ var models = map[string]Model{
 		CWBuffer:    false,
 		FilterWidth: false,
 		MaxWPM:      60,
+	},
+
+	// The IC-703 is a 10 W portable of the IC-718's generation, and its command
+	// table is the older shape throughout. Transcribed from section 11 of its
+	// instruction manual, which is the only CI-V documentation it has.
+	//
+	// What it does NOT have matters more than what it does, because three of
+	// the absent commands are ones this backend would otherwise send blind:
+	//
+	//   17     no CAT CW buffer at all, so Morse has to be keyed on a control
+	//          line — cw.method: serial_key. Same as the IC-718.
+	//   1A 03  present, but it is NOT the filter width. Here 1A 03 takes a
+	//          two-byte Set-mode item index — 1A 0301 is the confirmation beep,
+	//          1A 0305 the CW carrier point — so reading it as a passband would
+	//          ask the radio about its beeper, and writing one would change it.
+	//   25/26  absent, so no VFO addressing; 07 00 and 07 01 select A and B.
+	//
+	// Its mode command carries no filter byte either, so FilterSlots is 0 and a
+	// trailing byte must never be read as a slot.
+	//
+	// Data mode is on 1A 04, not the 1A 06 the rest of the family uses, and is
+	// the on/off flag alone with no filter byte after it. It is real — the
+	// radio has an SSB-D mode with its own Quick set menu — so it is worth
+	// having rather than switching off for being spelled differently.
+	//
+	// Split is deliberately absent. The table lists 0F 00 and 0F 01 to turn it
+	// off and on and shows NO read form, while the same table writes "Set/read"
+	// against 1C 00 and "Select/read" against 11. Claiming it would give a
+	// setting remoses writes and can never read back, which is the failure this
+	// backend keeps being bitten by; 0F may well answer a bare read, but that
+	// belongs to whoever puts one on the air, not to a guess made here.
+	"ic-703": {
+		Name:    "ic-703",
+		Label:   "Icom IC-703",
+		Address: 0x68,
+		// The family byte table exactly: 00 LSB, 01 USB, 02 AM, 03 CW,
+		// 04 RTTY, 05 FM, 07 CW-R, 08 RTTY-R. No PSK, no D-STAR.
+		Modes:       modesCommon(),
+		FilterSlots: 0,
+		PTTSub:      0x00, // 1C 00, "set/read the transceiver's condition"
+		CWBuffer:    false,
+		FilterWidth: false,
+		DataMode:    true,
+		DataModeSub: 0x04,
+		// 1A 04 is "(0=OFF, 1=ON)" and nothing else.
+		DataModeFilter: false,
+		// 16 47, "Break-in (0=OFF; 1=semi break-in; 2=full break-in)". It has
+		// no CAT CW buffer for this to gate, but an operator keying a control
+		// line still needs the rig in break-in to hear themselves through it.
+		BreakIn: true,
+		// 07 with no sub-command selects VFO mode; 07 00 and 07 01 select VFO A
+		// and VFO B. Both are in the table.
+		VFOModeSelect: true,
+		VFOSelect:     true,
+		// 14 0C is the keyer speed and the Quick set menu gives its range as
+		// 6 to 60 wpm.
+		MaxWPM: 60,
 	},
 
 	// The IC-718 is the outlier, and every difference below is from its own

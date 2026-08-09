@@ -394,7 +394,7 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		// is RIT on the IC-910H, and polling it there would read an RIT setting
 		// and publish it as a data-mode change every slow tick.
 		if r.model.DataMode {
-			reqs = append(reqs, request{KeyDataMode, r.frame(cmdMisc, subDataMode)})
+			reqs = append(reqs, request{KeyDataMode, r.dataModeRead()})
 		}
 		return r.readAll(ctx, c, reqs...)
 	default:
@@ -529,7 +529,12 @@ func (r *Rig) SetMode(ctx context.Context, c backend.Conn, m radio.Mode, dataMod
 	if !dataMode {
 		// The reference is explicit that when the data byte is 00 the filter
 		// byte must be 00 too, so switching data off needs no filter lookup.
-		return r.set(ctx, c, "data mode off", r.frame(cmdMisc, subDataMode, 0x00, 0x00))
+		return r.set(ctx, c, "data mode off", r.dataModeFrame(0x00, 0))
+	}
+	if !r.model.DataModeFilter {
+		// No filter byte on this radio's form of the command, so there is
+		// nothing to preserve and no reason to read the mode back first.
+		return r.set(ctx, c, "data mode on", r.dataModeFrame(0x01, 0))
 	}
 	// Turning data on does need a filter byte, and 1A 06 offers no "leave it
 	// alone" encoding, so the current filter has to be carried into it or
@@ -554,7 +559,25 @@ func (r *Rig) SetMode(ctx context.Context, c backend.Conn, m radio.Mode, dataMod
 	// DATA1 is used for "data mode on": DATA2 and DATA3 differ only in which
 	// modulation input they select, which is a station wiring choice remoses
 	// does not model.
-	return r.set(ctx, c, "data mode on", r.frame(cmdMisc, subDataMode, 0x01, byte(slot)))
+	return r.set(ctx, c, "data mode on", r.dataModeFrame(0x01, slot))
+}
+
+// dataModeFrame builds a data-mode set for this model.
+//
+// The sub-command is per model — 1A 06 across the modern family, 1A 04 on the
+// IC-703 — and so is whether a filter byte follows the flag. Sending the modern
+// two-byte form to a radio whose command takes one would hand its parser a
+// parameter it is not expecting.
+func (r *Rig) dataModeFrame(on byte, slot int) []byte {
+	if !r.model.DataModeFilter {
+		return r.frame(cmdMisc, r.model.DataModeSub, on)
+	}
+	return r.frame(cmdMisc, r.model.DataModeSub, on, byte(slot))
+}
+
+// dataModeRead is the read form of the same command.
+func (r *Rig) dataModeRead() []byte {
+	return r.frame(cmdMisc, r.model.DataModeSub)
 }
 
 // SetPower sets RF output (command 14 0A).
@@ -657,12 +680,12 @@ func (r *Rig) SetFilterSlot(ctx context.Context, c backend.Conn, slot int) error
 	// without one the command is absent or is something else entirely, and in
 	// CW, RTTY and PSK it carries no data setting to preserve.
 	if r.model.DataMode && supportsDataMode(mode) {
-		d, err := r.read(ctx, c, KeyDataMode, r.frame(cmdMisc, subDataMode))
+		d, err := r.read(ctx, c, KeyDataMode, r.dataModeRead())
 		if err != nil {
 			return err
 		}
 		if d.Patch.DataMode != nil && *d.Patch.DataMode {
-			return r.set(ctx, c, "filter slot", r.frame(cmdMisc, subDataMode, 0x01, byte(slot)))
+			return r.set(ctx, c, "filter slot", r.dataModeFrame(0x01, slot))
 		}
 	}
 	return r.set(ctx, c, "filter slot", r.frame(cmdSetMode, mb, byte(slot)))

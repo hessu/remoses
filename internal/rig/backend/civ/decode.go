@@ -217,11 +217,13 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 					}
 				}
 			}
-		// Guarded by the model for the same reason the setter is: 1A 06 is the
-		// data-mode setting on most of the family but RIT on the IC-910H, and
-		// decoding an RIT report as a data-mode change would put a wrong value
-		// into state rather than merely miss one.
-		case body[0] == subDataMode && r.model.DataMode:
+		// Guarded by the model for the same reason the setter is: the
+		// sub-command that carries data mode on most of the family is RIT on
+		// the IC-910H, and decoding an RIT report as a data-mode change would
+		// put a wrong value into state rather than merely miss one. Which
+		// sub-command it is also varies — 1A 04 on the IC-703 — so this cannot
+		// match a constant either.
+		case body[0] == r.model.DataModeSub && r.model.DataMode:
 			if len(body) >= 2 {
 				u.Key = KeyDataMode
 				on := body[1] != 0x00

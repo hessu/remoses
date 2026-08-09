@@ -77,16 +77,18 @@ radios:
     civ:
       # Which Icom this is. Sets the default bus address and the modes remoses
       # will offer, so a client is not shown PSK on a radio that has DV instead.
-      # One of: ic-718, ic-7300, ic-7300mk2, ic-7600, ic-7610, ic-7700,
-      # ic-7760, ic-7850 (also the IC-7851), ic-905, ic-910h, ic-9100,
-      # ic-9700, generic.
+      # One of: ic-703, ic-718, ic-7300, ic-7300mk2, ic-7600, ic-7610,
+      # ic-7700, ic-7760, ic-7850 (also the IC-7851), ic-905, ic-910h,
+      # ic-9100, ic-9700, generic.
       #
       # It also decides what remoses will not attempt. An IC-718 has no CI-V
       # CW buffer and no filter-width command, and keys PTT on a different
       # sub-command from the rest of the family. An IC-910H puts FM on a
-      # different mode code, and uses the data-mode sub-command for RIT --
-      # so naming the wrong model there does not fail loudly, it changes the
-      # wrong setting.
+      # different mode code, and uses the data-mode sub-command for RIT.
+      # An IC-703 puts data mode on 1A 04 and uses 1A 03 -- the filter width
+      # everywhere else -- for its Set-mode menu, so a filter-width read there
+      # would be asking the radio about its beeper. Naming the wrong model in
+      # any of those cases does not fail loudly, it changes the wrong setting.
       #
       # remoses cannot ask the radio reliably: CI-V command 19 00 answers with
       # the rig's bus address, which is menu-configurable and shared between

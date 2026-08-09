@@ -540,9 +540,9 @@ IC-905 additionally uses a **6-byte frequency field on its 10 GHz band**; everyt
 uses 5. `generic` is the escape hatch for an Icom without a profile; it has no factory
 address, so `rig_address` must be given rather than guessed.
 
-### The two outliers, and what they cost
+### The outliers, and what they cost
 
-Most models are a table entry. Two are not, and between them they broke three assumptions
+Most models are a table entry. Three are not, and between them they broke four assumptions
 this backend had baked in as constants.
 
 **The IC-718:**
@@ -576,6 +576,27 @@ difference — the ones where a command *succeeds* and means something else:
   changing an unrelated setting is worse than not offering the feature.
 - Its mode command carries **no filter byte**, so `FilterSlots` is 0 and a trailing byte must
   not be read as a slot.
+
+**The IC-703** is a 10 W portable of the IC-718's generation, and its CI-V documentation is
+section 11 of the instruction manual rather than a reference guide of its own. It shares the
+IC-718's missing `17` and its 60 wpm keyer, and adds one of its own:
+
+- **`1A 03` exists, and is not the filter width.** On this radio `1A 03` takes a *two-byte
+  Set-mode item index*: `1A 0301` is the confirmation beep, `1A 0305` the CW carrier point,
+  `1A 0319` the keyer dot/dash ratio. Reading it as a passband would be asking the radio about
+  its beeper, and writing one would change it. This is the `1C 01` shape again — the command is
+  present, answers, and means something else — and the only defence is that the capability is
+  transcribed per model rather than assumed from the family.
+- **Data mode is `1A 04`,** not the `1A 06` the rest of the family uses, and it is the on/off
+  flag *alone* with no filter byte after it. So the sub-command and the payload shape are both
+  per model now; sending the modern two-byte form would hand its parser a parameter it is not
+  expecting. `1A 06` is not in its table at all.
+- Its mode command carries **no filter byte**, so `FilterSlots` is 0.
+- **Split is not claimed.** Its table lists `0F 00` and `0F 01` to turn split off and on and
+  shows *no read form*, while the same table writes "Set/read" against `1C 00` and
+  "Select/read" against `11`. A setting remoses can write and never read back is precisely the
+  failure this backend keeps hitting, so it stays off until somebody puts one on the air. It
+  does have `07 00`/`07 01` to select VFO A and B, and `16 47` break-in.
 
 **The IC-905's frequency field is not fixed width.** Its reference specifies ten digits
 (5 bytes) on 5.6 GHz and below, and twelve (6 bytes) when the 10 GHz band is selected.
