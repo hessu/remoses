@@ -220,6 +220,43 @@ type BreakInController interface {
 	BreakIn() radio.BreakIn
 }
 
+// PowerSwitch is implemented by a backend that can switch the radio itself off
+// and on.
+//
+// It is the one control here whose success looks exactly like a failure. A
+// radio told to switch off stops answering, so the poll that follows times out
+// and the session tears the link down — which is correct, and indistinguishable
+// from a pulled cable. The session therefore treats a power-off it issued as an
+// expected disconnection rather than a fault; see Session.PowerOff.
+//
+// Waking one up is the mirror image: the command has to go out on a link that
+// is not up, to a radio that is not listening in the ordinary way. Each family
+// has its own ritual for getting a sleeping CI-V or CAT circuit's attention,
+// which is why PowerOn is a method rather than a value passed to a setter.
+type PowerSwitch interface {
+	// PowerOn wakes the radio. One method, whatever the radio needs.
+	//
+	// A backend tries the cheap wake first and escalates to whatever ritual its
+	// family documents — a Kenwood's dummy byte, a wait and a retry inside two
+	// seconds — only if the cheap one draws nothing. Callers should not have to
+	// know which kind of off a radio was put into, least of all when it was the
+	// front-panel switch that did it.
+	//
+	// It is called on a freshly opened port BEFORE Init, because a sleeping
+	// radio cannot answer Init: see the wake path in the session's supervisor.
+	PowerOn(ctx context.Context, c Conn) error
+	// PowerOff switches the radio off. deep asks for the lowest standby current
+	// the radio offers, where it offers a choice.
+	//
+	// The default is deliberately NOT the deepest. A Kenwood's plain off draws
+	// more current but wakes on a bare PS1;, where its low-current off wants a
+	// dummy byte and a two-second window — and a remote station that cannot be
+	// woken is a station somebody has to drive to. A radio with only one off
+	// sends it either way; the distinction is honoured where it exists rather
+	// than refused where it does not.
+	PowerOff(ctx context.Context, c Conn, deep bool) error
+}
+
 // TunerController is implemented by a backend that can work the rig's internal
 // antenna tuner.
 //

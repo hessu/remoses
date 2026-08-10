@@ -198,6 +198,43 @@ calibrated point remoses stops rather than extrapolating — the curve is undocu
 high is a fault either way, and "7.4:1" would be a number invented about your antenna. A rigctld
 radio is the exception: Hamlib reports a true ratio, so that one arrives calibrated.
 
+**The radio itself can be switched off and on.** `{"power_switch": "off"}` and `"on"`, gated by
+`caps.power_switch` — `18 00`/`18 01` on Icom, `PS` on Kenwood and Yaesu. It must be the only
+field in the request: a patch that switched the radio off and set a frequency has no sensible
+ordering, since one of the two is always addressed to a radio that is not listening.
+
+Two things about it are worth knowing before using it remotely.
+
+**`off` is the recoverable off.** Where a radio offers a choice — a Kenwood does — the default
+draws more standby current and wakes on a single command, while `off_deep` matches the
+front-panel switch and needs a longer wake sequence. A remote station that cannot be woken is one
+somebody has to drive to, so the deeper sleep is opt-in.
+
+**Waking works with no link, which is the state it is for.** remoses arms the wake and sends it
+on its next connection attempt, on the freshly opened port before it tries to talk to the radio —
+the one moment a sleeping rig can be reached. `on` is a single method whatever the radio needs:
+the backend tries the cheap wake first and escalates to its family's ritual (a dummy byte, a
+wait, a retry inside a timing window) only if that draws nothing. Expect several seconds of
+booting; watch `connected`.
+
+**Whether a wake works at all is a wiring question, not a command one.** An external CI-V
+interface stays powered and listening. A radio whose CAT arrives over its own USB may take the
+USB device down with it and leave nothing to send the wake-up to — so try it with somebody near
+the radio before relying on it. On an **IC-7610 it works**: switched off over CAT and woken again
+over the same link, with nobody touching the radio.
+
+**A radio that is switched off is reachable, and remoses says so.** `state.standby` is a third
+condition published alongside `connected: true`, and `remoses-cli` shows `STANDBY` in place of
+`CONNECTED`. It is set however the radio came to be off — a `power_switch` request or the front
+panel button — because the detection is simply that the radio answers every command with a
+rejection. The session holds the port open and watches for it to wake rather than dropping a
+link that is perfectly healthy, and commands meanwhile answer 503 with the remedy in the message.
+
+That last part fixed a bug worth knowing about if you run an older build: an IC-7610 in standby
+does not go silent, it refuses everything — so the "has this rig stopped answering" counter
+excused every poll and left remoses reporting a connected radio over a snapshot going stale by
+the minute.
+
 **The antenna tuner can be switched and tuned.** `state.tuner` reads `off`, `on` or `tuning`;
 `{"tuner": "on"}` switches the matching network in or out of line, and `{"tuner_tune": true}`
 runs a tuning cycle. `caps.tuner_control` and `caps.tuner_tune` say which a radio has. It is

@@ -28,6 +28,13 @@ func (s *Session) supervise(ctx context.Context) {
 		}
 
 		switch {
+		case s.poweredOff.Load():
+			// remoses switched this radio off, so it going quiet is the command
+			// working. Logging it as a failure — and at error level, once per
+			// backoff, for as long as the operator leaves it off — would be
+			// reporting a success as an outage.
+			s.log.Info("radio is switched off; not reconnecting until it is woken",
+				"target", s.dialer.Describe())
 		case err == nil, errors.Is(err, transport.ErrDisconnected):
 			// The expected end of a connection: someone pulled the cable or
 			// switched the rig off. Not a crash, so not an error-level log.
@@ -72,12 +79,45 @@ func (s *Session) runConnection(ctx context.Context) (connected bool, err error)
 		s.onDisconnected(c.lastErr())
 	}()
 
+	// A wake-up, if one is waiting. Before Init, because that is the point: a
+	// radio that is off cannot answer Init, so the frames that would wake it
+	// have to go out while the port is open and nothing else has failed yet.
+	//
+	// The wake is not verified here. A radio coming up spends seconds booting,
+	// far longer than any command timeout, so Init failing straight afterwards
+	// is expected rather than evidence the wake missed; the supervisor's next
+	// attempt, a backoff later, is when it should be answering. That is also
+	// why the request is consumed rather than retried — a wake that has been
+	// sent has been sent, and repeating it on every attempt would hold a radio
+	// the operator switched off at the panel permanently on.
+	if s.takeWakeRequest() {
+		if p, ok := s.rig.(backend.PowerSwitch); ok {
+			s.log.Info("sending the radio a wake-up before init")
+			if err := p.PowerOn(ctx, s); err != nil {
+				s.log.Warn("wake-up failed", "err", err)
+			}
+		}
+	}
+
 	// Init enables push updates — Kenwood AI2;, Icom Transceive — and must run
 	// again on every reconnect, because a rig that was power-cycled has
 	// forgotten them (AI2 deliberately self-clears at power-off).
 	if err := s.rig.Init(ctx, s); err != nil {
-		return false, fmt.Errorf("init %s: %w", s.dialer.Describe(), err)
+		// A radio that REFUSES Init is a different animal from one that does
+		// not answer it. An IC-7610 switched off keeps its CI-V circuit alive
+		// and answers NG to everything, frequency read included: the link is
+		// perfect and the radio is asleep. Reporting that as a failed
+		// connection sends somebody to check a cable that is fine.
+		if errors.Is(err, ErrNAK) {
+			if err := s.awaitWake(ctx, c); err != nil {
+				return false, err
+			}
+		} else {
+			return false, fmt.Errorf("init %s: %w", s.dialer.Describe(), err)
+		}
 	}
+	// It is talking, so whatever remoses did to its power switch is history.
+	s.poweredOff.Store(false)
 	// Re-read: a backend may have learnt more from the rig than it knew from the
 	// configuration. Through publishCaps, so that an installed CW sender's view
 	// of keying survives the refresh — see there for what it is correcting.
@@ -124,6 +164,75 @@ func (s *Session) runConnection(ctx context.Context) (connected bool, err error)
 	<-pollDone
 
 	return true, c.lastErr()
+}
+
+// awaitWake holds a connection open to a radio that is switched off, and
+// returns once it wakes.
+//
+// This is the third state, and it needs one: the port is open and the radio is
+// answering, so the link is not broken, but every command comes back NG so
+// nothing can be read or set. Dropping the connection and redialling would be
+// wrong twice over — it reports a healthy link as a fault, and it throws away
+// the open port that a power-on has to be sent through.
+//
+// So the session stays connected, publishes Standby, and retries Init at the
+// slow poll interval. Whoever wakes the radio — a power_switch request through
+// remoses, or a hand on the front panel — is noticed within one interval and
+// the connection carries on into its normal life.
+//
+// Returns nil once Init succeeds, or an error if the port dies or the session
+// is shutting down.
+func (s *Session) awaitWake(ctx context.Context, c *conn) error {
+	s.standby.Store(true)
+	// Connected AND standby: both are true, and a client needs both to say
+	// "the radio is reachable but switched off" rather than guessing.
+	//
+	// The internal flag is set too, not just the published state. They are two
+	// views of one fact and letting them disagree produced exactly the bug it
+	// looks like it would: the API reported the radio connected while every
+	// command was refused with "not currently connected".
+	s.connected.Store(true)
+	s.apply(radio.Patch{Connected: ptrTo(true), Standby: ptrTo(true)}, EventConn, "")
+	s.log.Info("radio is switched off but answering; waiting for it to wake",
+		"target", s.dialer.Describe())
+	defer func() {
+		s.standby.Store(false)
+		s.apply(radio.Patch{Standby: ptrTo(false)}, EventConn, "")
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.done:
+			return c.lastErr()
+		case <-time.After(s.pollSlow):
+		}
+
+		// A wake armed while the session was already parked here. PowerOn sends
+		// its own when there is a port to send on, so this covers the race
+		// where one is armed between the port opening and standby being
+		// entered — without it, that wake would wait for a reconnection that
+		// this loop is deliberately preventing.
+		if s.takeWakeRequest() {
+			if p, ok := s.rig.(backend.PowerSwitch); ok {
+				s.log.Info("sending the radio a wake-up")
+				if err := p.PowerOn(ctx, s); err != nil {
+					s.log.Warn("wake-up failed", "err", err)
+				}
+			}
+		}
+
+		err := s.rig.Init(ctx, s)
+		if err == nil {
+			s.log.Info("radio has woken", "target", s.dialer.Describe())
+			return nil
+		}
+		if errors.Is(err, ErrNAK) {
+			continue // still asleep
+		}
+		return fmt.Errorf("init %s: %w", s.dialer.Describe(), err)
+	}
 }
 
 // onDisconnected publishes the loss and makes the safety state honest: with no

@@ -255,6 +255,11 @@ func (k *Rig) Caps() radio.Caps {
 		// tuner in and out, P3 starts and reports a cycle.
 		TunerControl: true,
 		TunerTune:    true,
+		// PS switches the radio itself, with two kinds of off. Family-wide in
+		// the reference that documents it; the other Kenwood manuals have not
+		// been read for this command, so this is the one capability here taken
+		// from the TS-590's reference alone.
+		PowerSwitch: true,
 		// False even on the TS-990S, which has a second receiver: this backend
 		// reads and writes one of them, so claiming otherwise would promise
 		// control it does not implement.

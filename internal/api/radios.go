@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -163,6 +164,13 @@ type statePatchBody struct {
 	// audible, so a client offering a CW box should offer this beside it.
 	BreakIn *radio.BreakIn `json:"break_in"`
 
+	// PowerSwitch switches the radio itself: "on", "off", or "off_deep" for the
+	// lowest standby current a radio offers where it offers a choice.
+	//
+	// Switching off is the one command whose success ends the conversation, so
+	// it answers with the state as it was rather than a read-back.
+	PowerSwitch *string `json:"power_switch"`
+
 	// Tuner switches the antenna tuner in or out of line: "off" or "on" only.
 	// The state can also read "tuning", but that is not something to ask for.
 	Tuner *radio.Tuner `json:"tuner"`
@@ -210,6 +218,38 @@ func (b statePatchBody) toRequest() (rig.PatchRequest, error) {
 	return req, nil
 }
 
+// applyPowerSwitch runs a power on or off request.
+//
+// It refuses to share a request with anything else. A patch that switched the
+// radio off and set a frequency has no sensible ordering — one of the two is
+// always addressed to a radio that is not listening — and quietly choosing one
+// would be worse than saying so.
+func (s *server) applyPowerSwitch(ctx context.Context, sess *rig.Session, b statePatchBody) (radio.State, error) {
+	if !b.onlyPowerSwitch() {
+		return sess.State(), fmt.Errorf(
+			"%w: power_switch cannot be combined with other fields; the radio is not "+
+				"listening on one side of it", errUnprocessable)
+	}
+	switch *b.PowerSwitch {
+	case "on":
+		return sess.PowerOn(ctx)
+	case "off":
+		return sess.PowerOff(ctx, false)
+	case "off_deep":
+		return sess.PowerOff(ctx, true)
+	}
+	return sess.State(), fmt.Errorf(
+		"%w: power_switch %q, want on, off or off_deep", errUnprocessable, *b.PowerSwitch)
+}
+
+// onlyPowerSwitch reports whether power_switch is the sole field set.
+func (b statePatchBody) onlyPowerSwitch() bool {
+	return b.Frequency == nil && b.Mode == nil && b.DataMode == nil && b.VFO == nil &&
+		b.PassbandHz == nil && b.FilterSlot == nil && b.PowerW == nil && b.PowerPct == nil &&
+		b.PTT == nil && b.Split == nil && b.DualWatch == nil && b.VFOMode == nil &&
+		b.BreakIn == nil && b.Tuner == nil && b.TunerTune == nil
+}
+
 // auditAttrs names what the request asked for, so the audit line records the
 // intent as well as the outcome.
 func (b statePatchBody) auditAttrs() []any {
@@ -241,6 +281,11 @@ func (b statePatchBody) auditAttrs() []any {
 	if b.Tuner != nil {
 		attrs = append(attrs, "tuner", string(*b.Tuner))
 	}
+	// Audited because it takes a station off the air, and because "why did the
+	// radio switch off at 03:00" is a question a log should answer.
+	if b.PowerSwitch != nil {
+		attrs = append(attrs, "power_switch", *b.PowerSwitch)
+	}
 	// Audited because it transmits: an operator reading the log later should
 	// find every one of those, not only the ones that went through the PTT
 	// field.
@@ -261,6 +306,21 @@ func (s *server) patchState(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, id, actionPatchState, err)
 		return
 	}
+	// The power switch takes its own path. Everything else in a patch is a
+	// setting applied to a live radio and read back afterwards; this one either
+	// ends the conversation or has to happen without one, so it cannot share
+	// either the ordering or the connected check.
+	if body.PowerSwitch != nil {
+		st, err := s.applyPowerSwitch(r.Context(), sess, body)
+		if err != nil {
+			s.fail(w, r, id, actionPatchState, err)
+			return
+		}
+		s.audit(r, actionPatchState, id, http.StatusOK, nil, body.auditAttrs()...)
+		s.writeState(w, http.StatusOK, id, st)
+		return
+	}
+
 	req, err := body.toRequest()
 	if err != nil {
 		s.fail(w, r, id, actionPatchState, err)

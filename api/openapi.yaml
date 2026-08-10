@@ -628,6 +628,22 @@ components:
 
             Note that full scale is not always the data field's range: an Icom's
             ALC runs to 120 of a possible 255, and `scale` carries that.
+        standby:
+          type: boolean
+          description: |
+            The radio is reachable but switched off.
+
+            A third state, and neither of the other two describes it. It is
+            published with `connected: true`, because the link is fine — an
+            IC-7610 in standby keeps its CI-V circuit alive and answers every
+            command with a rejection. But nothing else here is live: the values
+            are whatever was last true before it was switched off.
+
+            Show it as its own condition and offer a power-on rather than a
+            reconnect. Commands answer 503 with the remedy in the message.
+
+            It is set however the radio came to be off — a `power_switch`
+            request, or somebody pressing the front-panel button.
         tuner:
           type: string
           enum: [off, on, tuning]
@@ -715,6 +731,44 @@ components:
             both set its single "on" and the state reads back `on` — see
             `State.break_in`. `on` on a radio that does distinguish them selects
             `semi`, the quieter of the two.
+        power_switch:
+          type: string
+          enum: [on, off, off_deep]
+          description: |
+            Switch the radio itself off or on. Needs `caps.power_switch`; 422
+            otherwise. **Must be the only field in the request** — a patch that
+            switched the radio off and set a frequency has no sensible ordering,
+            since one of the two is always addressed to a radio that is not
+            listening.
+
+            `off` is the recoverable off: on a radio with a choice it is the
+            one that draws more standby current and wakes on a single command.
+            `off_deep` asks for the lowest standby current the radio offers —
+            on a Kenwood, the same as its front-panel switch — which needs the
+            longer wake sequence afterwards. A radio with only one off sends it
+            either way. **Prefer `off` unless somebody can reach the radio**: a
+            remote station that cannot be woken is one that needs a visit.
+
+            `on` is a single method whatever the radio needs: the backend tries
+            the cheap wake first and escalates to its family's documented ritual
+            — a dummy byte, a wait, a retry inside a timing window — only if
+            that draws nothing.
+
+            Switching off answers with the state as it was; there is nothing
+            left to read back, and `connected` will go false shortly afterwards.
+            That is the command working, not failing.
+
+            Switching on works while `connected` is false, which is the state it
+            is for. If there is no link, remoses arms the wake and sends it on
+            its next connection attempt, on the freshly opened port before it
+            tries to talk to the radio — the one moment a sleeping rig can be
+            reached. Expect the radio to take several seconds to boot; watch
+            `connected`.
+
+            Whether a radio can be woken at all depends on wiring rather than on
+            the command. An external CI-V interface stays powered and listening;
+            a radio whose CAT arrives over its own USB may take the USB device
+            down with it and leave nothing to send the wake-up to.
         tuner:
           type: string
           enum: [off, on]
@@ -822,6 +876,15 @@ components:
         alc_meter:
           type: boolean
           description: This radio can report ALC action while transmitting.
+        power_switch:
+          type: boolean
+          description: |
+            remoses can switch this radio itself off, and on again afterwards.
+
+            Whether the second half works at a given station depends on wiring
+            rather than on the command — see `power_switch` in a state patch —
+            so treat this as "the radio has the command", not "you will get it
+            back".
         tuner_control:
           type: boolean
           description: |

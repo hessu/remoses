@@ -76,6 +76,10 @@ type Model struct {
 	// False on the IC-706 family, whose output is a front-panel control with no
 	// bus equivalent.
 	Power bool
+	// PowerSwitch is true when command 18 switches the radio itself: 18 00 off,
+	// 18 01 on. Per model like everything else here — the IC-703, IC-910H and
+	// IC-706 family have no 18 row at all.
+	PowerSwitch bool
 	// Tuner is true when 1C 01 is the antenna tuner: 00 off, 01 on, 02 start a
 	// tuning cycle, and 02 read back while one is running.
 	//
@@ -422,6 +426,9 @@ var models = map[string]Model{
 		m.DualWatch = true
 		m.VFOModeSelect = true
 		m.BreakIn = BreakInSemiFull
+		// 18 00 / 18 01, the latter behind the FE preamble its table's footnote
+		// spells out per baud rate.
+		m.PowerSwitch = true
 		// "1C 01 Antenna tuner (00=OFF, 01=ON, 02=Tune)". Exercised on the air:
 		// switched in and out, and four tuning cycles run on 80 m.
 		m.Tuner = true
@@ -467,6 +474,7 @@ var models = map[string]Model{
 		m.VFOModeSelect = true
 		m.VFOSelect = true // 07 00 and 07 01 select VFO A and VFO B
 		m.BreakIn = BreakInSemiFull
+		m.PowerSwitch = true // 18 00 / 18 01, same footnote as the IC-7610's
 		// Its PO meter reaches 100% at 213, not the 255 of the IC-7610.
 		m.POScale = 213
 		// And no antenna tuner: its 1C table is 00, 02, 03, with no 01 row.

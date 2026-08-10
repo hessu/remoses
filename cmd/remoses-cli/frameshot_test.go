@@ -34,10 +34,15 @@ func TestFrameShot(t *testing.T) {
 	tx.Tuner = radio.TunerTuning
 	base.Tuner = radio.TunerOn
 
+	// A radio that is reachable but switched off. The readings are whatever was
+	// last true before it went off, which is why the note matters.
+	standby := base
+	standby.Standby = true
+
 	for _, tc := range []struct {
 		name string
 		st   radio.State
-	}{{"receive", base}, {"transmit", tx}} {
+	}{{"receive", base}, {"transmit", tx}, {"standby", standby}} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := meterView(t, tc.st)
 			t.Logf("\n%s", strings.Join(frame(v, 72), "\n"))

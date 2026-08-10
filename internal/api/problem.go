@@ -153,6 +153,13 @@ func (s *server) classify(radioID string, err error) (status int, title, detail 
 		errors.Is(err, rig.ErrNAK):
 		return http.StatusUnprocessableEntity, "Unprocessable Entity", err.Error(), nil
 
+	// Before the plain disconnection, which it wraps. The two are both 503 and
+	// mean different things to whoever reads them: one says check the link, the
+	// other says the link is fine and the radio is asleep.
+	case errors.Is(err, rig.ErrStandby):
+		return http.StatusServiceUnavailable, "Service Unavailable",
+			`the radio is switched off; wake it with {"power_switch":"on"}`, nil
+
 	case errors.Is(err, rig.ErrDisconnected):
 		return http.StatusServiceUnavailable, "Service Unavailable",
 			"the radio is not currently connected", nil

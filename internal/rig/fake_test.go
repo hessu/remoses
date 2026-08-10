@@ -338,6 +338,7 @@ type fakeRig struct {
 	mu         sync.Mutex
 	initErr    error
 	breakInErr error
+	powerErr   error
 	sets       []string // ordered log of the set commands the session issued
 }
 
@@ -359,6 +360,7 @@ func newFakeRig() *fakeRig {
 		VFOs:         []radio.VFO{radio.VFOA, radio.VFOB},
 		PTTControl:   true,
 		PowerControl: true,
+		PowerSwitch:  true,
 		FilterWidth:  true,
 		FilterSlots:  3,
 		SMeterScale:  30,
@@ -540,6 +542,32 @@ func (r *fakeRig) SetBreakIn(ctx context.Context, c backend.Conn, v radio.BreakI
 func (r *fakeRig) BreakIn() radio.BreakIn {
 	v, _ := r.breakIn.Load().(radio.BreakIn)
 	return v
+}
+
+// The power switch, recorded rather than acted on. The session's own handling
+// of a radio that stops answering is what these tests are about.
+func (r *fakeRig) PowerOn(ctx context.Context, c backend.Conn) error {
+	r.record("power=on")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.powerErr
+}
+
+func (r *fakeRig) PowerOff(ctx context.Context, c backend.Conn, deep bool) error {
+	what := "power=off"
+	if deep {
+		what = "power=off_deep"
+	}
+	r.record(what)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.powerErr
+}
+
+func (r *fakeRig) setPowerErr(err error) {
+	r.mu.Lock()
+	r.powerErr = err
+	r.mu.Unlock()
 }
 
 func (r *fakeRig) setBreakInState(v radio.BreakIn) { r.breakIn.Store(v) }

@@ -207,6 +207,13 @@ func radioBadge(v *view) string {
 	if !v.haveState && v.desc == nil {
 		return "UNKNOWN"
 	}
+	// Standby before connected, because it is the more specific of the two and
+	// they are both true. A radio that is switched off is reachable — the link
+	// is fine — so showing CONNECTED would leave an operator wondering why
+	// nothing works, and DISCONNECTED would send them to check a cable.
+	if v.st.Standby {
+		return "STANDBY"
+	}
 	if v.st.Connected {
 		return "CONNECTED"
 	}
@@ -217,6 +224,14 @@ func radioBadge(v *view) string {
 // whose numbers are real but no longer current.
 func stateNote(v *view) string {
 	switch {
+	// The values on screen are whatever was last true before the radio was
+	// switched off, so saying so matters more here than for a stale snapshot:
+	// nothing about them looks wrong.
+	case v.st.Standby:
+		// Short enough to survive the narrowest frame: the badge already says
+		// STANDBY rather than DISCONNECTED, so this only has to explain why the
+		// numbers below it look plausible and are not current.
+		return "radio is switched off - readings are from before"
 	case !v.st.Connected && v.connErr != "":
 		return fmt.Sprintf("radio disconnected: %s - last known state, %s old",
 			v.connErr, formatAge(v.age()))

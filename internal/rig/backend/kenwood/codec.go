@@ -32,6 +32,7 @@ const (
 	keySD backend.Key = "SD"
 	keyRM backend.Key = "RM"
 	keyAC backend.Key = "AC"
+	keyPS backend.Key = "PS"
 	keyTX backend.Key = "TX"
 	keyRX backend.Key = "RX"
 )
@@ -331,6 +332,12 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 		on := cmd == string(keyTX)
 		u.Patch.PTT = &on
 		k.transmitting.Store(on)
+
+	case keyPS:
+		// The power switch. Nothing is published — a radio that answers at all
+		// is on, which State already says through Connected — but the frame
+		// still has to complete the transaction that the wake probe opens.
+		u.Key = keyPS
 
 	case keyAC:
 		// The antenna tuner. Its three parameters collapse into one published

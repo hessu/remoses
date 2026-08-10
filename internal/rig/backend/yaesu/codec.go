@@ -18,6 +18,7 @@ const (
 	keySM backend.Key = "SM"
 	keyRM backend.Key = "RM"
 	keyAC backend.Key = "AC"
+	keyPS backend.Key = "PS"
 	keySH backend.Key = "SH"
 	keyNA backend.Key = "NA"
 	keyIF backend.Key = "IF"
@@ -244,6 +245,12 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 	case keyRM:
 		u.Key = keyRM
 		y.decodeRM(&u, arg)
+
+	case keyPS:
+		// The power switch. Nothing to publish: a radio that answers is on,
+		// which State says through Connected. The key exists so the wake probe
+		// has something to complete against.
+		u.Key = keyPS
 
 	case keyAC:
 		u.Key = keyAC

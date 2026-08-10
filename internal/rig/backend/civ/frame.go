@@ -43,6 +43,11 @@ const (
 	// they name the VFO instead of operating on whichever one is selected.
 	cmdVFO      = 0x07 // VFO selection, band exchange, dual watch
 	cmdSplit    = 0x0F // 0F read, 0F 00 off, 0F 01 on
+	// cmdPower switches the radio itself. 18 01 needs a wake-up preamble; see
+	// power.go.
+	cmdPower    = 0x18
+	subPowerOff = 0x00
+	subPowerOn  = 0x01
 	cmdBandFreq = 0x25 // 25 <band> [freq]: per-VFO frequency
 	cmdBandMode = 0x26 // 26 <band> [mode data filter]: per-VFO mode, atomically
 	// cmdBand is the prefix that addresses the inactive VFO. "Regardless of

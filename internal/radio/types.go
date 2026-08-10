@@ -404,6 +404,19 @@ type State struct {
 	PowerMeter *Meter `json:"power_meter,omitempty"`
 	SWR        *Meter `json:"swr,omitempty"`
 	ALC        *Meter `json:"alc,omitempty"`
+	// Standby is a radio that is reachable but switched off.
+	//
+	// It is a third thing, and neither of the other two describes it. The link
+	// is fine — the port is open and the radio is answering — so `connected`
+	// false would send somebody to check a cable that is perfectly seated. But
+	// nothing else in this struct is live: an IC-7610 in standby answers NG to
+	// every command, frequency and mode included, so the values here are
+	// whatever was last true before it was switched off.
+	//
+	// A client should show it as its own condition and offer a power-on, not a
+	// reconnect.
+	Standby bool `json:"standby,omitempty"`
+
 	// Tuner is the internal antenna tuner: off, on, or a tuning cycle in
 	// progress. Absent on a radio that has none or that remoses cannot ask.
 	Tuner Tuner `json:"tuner,omitempty"`
@@ -493,6 +506,7 @@ type Patch struct {
 	ALC        *Meter
 	SWRRatio   *float64
 	Tuner      *Tuner
+	Standby    *bool
 	CWBusy     *bool
 	Connected  *bool
 
@@ -516,7 +530,8 @@ func (p Patch) Empty() bool {
 		p.PassbandHz == nil && p.FilterSlot == nil && p.Power == nil &&
 		p.PTT == nil && p.SMeter == nil && p.PowerMeter == nil &&
 		p.SWR == nil && p.ALC == nil && p.SWRRatio == nil &&
-		p.Tuner == nil && p.CWBusy == nil && p.Connected == nil &&
+		p.Tuner == nil && p.Standby == nil &&
+		p.CWBusy == nil && p.Connected == nil &&
 		p.VFO == nil && p.VFOA == nil && p.VFOB == nil &&
 		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil &&
 		p.BreakIn == nil
@@ -563,6 +578,9 @@ func (s State) Apply(p Patch) State {
 	}
 	if p.Tuner != nil {
 		s.Tuner = *p.Tuner
+	}
+	if p.Standby != nil {
+		s.Standby = *p.Standby
 	}
 	if p.CWBusy != nil {
 		s.CW.Busy = *p.CWBusy
@@ -684,6 +702,9 @@ func (s State) Diff(next State) Patch {
 	if s.Tuner != next.Tuner {
 		p.Tuner = &next.Tuner
 	}
+	if s.Standby != next.Standby {
+		p.Standby = &next.Standby
+	}
 	if s.Connected != next.Connected {
 		p.Connected = &next.Connected
 	}
@@ -770,6 +791,16 @@ type Caps struct {
 	SWRMeter   bool `json:"swr_meter"`
 	ALCMeter   bool `json:"alc_meter"`
 
+	// PowerSwitch is true when remoses can switch the radio itself off, and on
+	// again afterwards.
+	//
+	// The second half is the part that needs checking at the station rather
+	// than in a manual. A radio switched off over CAT stops answering, and
+	// whether it can be woken depends on how it is wired: an external CI-V
+	// interface stays powered and listening, while a radio whose CAT arrives
+	// over its own USB may take the USB device down with it and leave nothing
+	// to send the wake-up to. remoses reports the command, not the wiring.
+	PowerSwitch bool `json:"power_switch"`
 	// TunerControl is true when remoses can switch the internal antenna tuner
 	// in and out of line and read which it is.
 	TunerControl bool `json:"tuner_control"`

@@ -275,6 +275,8 @@ func (y *Rig) Caps() radio.Caps {
 		// has been transcribed.
 		TunerControl: true,
 		TunerTune:    y.profile.TunerTuneParam != 0,
+		// PS is in every command list read for this backend, both generations.
+		PowerSwitch: true,
 		PowerWattAccurate: !y.profile.PowerRaw,
 		MaxPowerW:         float64(y.maxPowerW()),
 

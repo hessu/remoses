@@ -46,6 +46,14 @@ var (
 	// ErrDisconnected means there is no live connection to the radio. Maps to
 	// 503. It aliases the transport sentinel so a caller needs only one check.
 	ErrDisconnected = transport.ErrDisconnected
+	// ErrStandby means the radio is reachable but switched off. Maps to 503.
+	//
+	// Distinct from ErrDisconnected because the remedy is different and a
+	// client should offer it: nothing is wrong with the link, and the radio can
+	// be woken over the same connection that just refused the command. It
+	// wraps ErrDisconnected so that anything reasoning about "no usable radio
+	// right now" still matches with one check.
+	ErrStandby = fmt.Errorf("rig: the radio is switched off: %w", transport.ErrDisconnected)
 	// ErrOutOfBand means the requested frequency is outside limits.bands. Maps
 	// to 422.
 	ErrOutOfBand = errors.New("rig: frequency outside configured band limits")
@@ -181,6 +189,20 @@ type Session struct {
 	// is set only after Init has completed, so a half-initialised rig is never
 	// exposed to callers.
 	connected atomic.Bool
+
+	// standby is a radio that is reachable but switched off: answering, and
+	// refusing everything. The link is up, so commands are refused with a
+	// message that says so rather than with "not connected".
+	standby atomic.Bool
+	// poweredOff records that remoses switched the radio off, so the
+	// disconnection that follows is logged as expected rather than as a fault.
+	// Cleared by any successful connection, since a radio that is talking is
+	// evidently not off any more.
+	poweredOff atomic.Bool
+	// wakeWanted is a power-on waiting for a port. The supervisor consumes it
+	// on the next freshly opened port, before Init, which is the only moment a
+	// sleeping radio can be reached.
+	wakeWanted atomic.Bool
 
 	subs *subscribers
 
@@ -424,6 +446,16 @@ func (s *Session) requireConnected() error {
 	if !s.connected.Load() || s.conn.Load() == nil {
 		return fmt.Errorf("radio %s: %w", s.id, ErrDisconnected)
 	}
+	// Reachable but switched off. Saying so beats letting the command through
+	// to be refused by the radio, which answers NG to everything in standby and
+	// so produces a rejection that says nothing about why.
+	//
+	// Wrapped as ErrDisconnected so it answers 503: this is a temporary
+	// condition with an obvious remedy, not a request the station will never
+	// accept. The message carries the remedy.
+	if s.standby.Load() {
+		return fmt.Errorf("radio %s: %w", s.id, ErrStandby)
+	}
 	return nil
 }
 
@@ -535,6 +567,89 @@ func (s *Session) SetBreakIn(ctx context.Context, v radio.BreakIn) (radio.State,
 	}
 	return s.readback(ctx, backend.PollSlow, backend.PollFast)
 }
+
+// powerSwitch reports the backend's power control, or nil.
+func (s *Session) powerSwitch() backend.PowerSwitch {
+	p, _ := s.rig.(backend.PowerSwitch)
+	return p
+}
+
+// PowerOff switches the radio off. deep asks for the lowest standby current the
+// radio offers, where it has a choice.
+//
+// The success of this command looks exactly like its failure: the radio stops
+// answering, the next poll times out, and the session tears the link down. So
+// the intent is recorded before the command goes out, and the supervisor treats
+// the disconnection that follows as expected rather than as a fault — otherwise
+// switching a radio off would fill the log with errors about a radio doing
+// precisely what it was told.
+func (s *Session) PowerOff(ctx context.Context, deep bool) (radio.State, error) {
+	p := s.powerSwitch()
+	if p == nil || !s.Caps().PowerSwitch {
+		return s.State(), fmt.Errorf("radio %s: switching the radio off: %w", s.id, ErrUnsupported)
+	}
+	if err := s.requireConnected(); err != nil {
+		return s.State(), err
+	}
+	// Before the command, not after: the link may not survive long enough for
+	// anything after it to run.
+	s.poweredOff.Store(true)
+	if err := p.PowerOff(ctx, s, deep); err != nil {
+		s.poweredOff.Store(false)
+		return s.State(), err
+	}
+	s.log.Info("radio switched off over CAT", "deep", deep)
+	// No read-back. There is nothing left to read from, and asking would spend
+	// a command timeout confirming what the operator just asked for.
+	return s.State(), nil
+}
+
+// PowerOn wakes the radio.
+//
+// It works in the state where it is needed, which is the whole difficulty: a
+// radio that is off is disconnected, so there is no live link to send on. What
+// there usually IS is an openable port — an external CI-V interface stays
+// powered, and a radio whose USB survives its own power switch presents one too
+// — and the supervisor is already looping on it, dialling and failing to Init.
+//
+// So this arms a request rather than sending anything itself. The supervisor
+// picks it up on its next attempt and sends the wake on the freshly opened port
+// BEFORE Init, which is the one moment a sleeping radio can be reached. On a
+// link that is already up it is sent immediately instead, since the port is in
+// hand and the radio may be awake but for a front panel somebody switched.
+//
+// Racing the supervisor for the port would be the obvious alternative and is
+// the wrong one: these are exclusive devices, and two dialers would produce a
+// wake that fails because the port was busy.
+func (s *Session) PowerOn(ctx context.Context) (radio.State, error) {
+	p := s.powerSwitch()
+	if p == nil || !s.Caps().PowerSwitch {
+		return s.State(), fmt.Errorf("radio %s: switching the radio on: %w", s.id, ErrUnsupported)
+	}
+	s.poweredOff.Store(false)
+
+	// An open port is the whole requirement, and "connected" is not the same
+	// question: a radio in standby is answering NG to everything, so the
+	// session is parked in awaitWake holding a perfectly good port open. Waiting
+	// for a reconnection there would wait forever, because that loop exists to
+	// prevent one.
+	if s.conn.Load() != nil {
+		if err := p.PowerOn(ctx, s); err != nil {
+			return s.State(), err
+		}
+		s.log.Info("radio sent a wake-up on the open port")
+		return s.State(), nil
+	}
+
+	// Not connected: hand it to the supervisor, which owns the port.
+	s.wakeWanted.Store(true)
+	s.log.Info("radio wake-up armed; it will be sent on the next connection attempt")
+	return s.State(), nil
+}
+
+// takeWakeRequest consumes a pending wake, if there is one. The supervisor
+// calls it on a freshly opened port.
+func (s *Session) takeWakeRequest() bool { return s.wakeWanted.Swap(false) }
 
 // tunerController reports the backend's antenna tuner, or nil.
 func (s *Session) tunerController() backend.TunerController {

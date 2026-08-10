@@ -145,6 +145,7 @@ func (v *view) radioName() string {
 // meters are excluded — they move continuously and are handled separately.
 type significant struct {
 	connected  bool
+	standby    bool
 	stale      bool
 	connErr    string
 	frequency  uint64
@@ -163,6 +164,7 @@ type significant struct {
 func (v *view) significant() significant {
 	s := significant{
 		connected:  v.st.Connected,
+		standby:    v.st.Standby,
 		stale:      v.stale,
 		connErr:    v.connErr,
 		frequency:  v.st.Frequency,

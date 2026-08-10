@@ -47,6 +47,11 @@ type Rig struct {
 	rigAddr  byte
 	ctrlAddr byte
 	model    Model
+	// baud is the configured port speed, used only to size the wake-up preamble
+	// for command 18 01, which the reference tabulates per baud rate. Zero on a
+	// radio built without a port — a test — where the shortest preamble is
+	// harmless because nothing is asleep.
+	baud int
 
 	// mode is the last mode the rig reported, and exists for one reason: the
 	// 1A 03 filter width is an index whose meaning depends on which of the
@@ -194,7 +199,13 @@ func New(r *config.Radio) (*Rig, error) {
 		return nil, fmt.Errorf("civ: rig_address and controller_address are both 0x%02X; "+
 			"echo suppression cannot tell our frames from the rig's", rigAddr)
 	}
-	return &Rig{rigAddr: rigAddr, ctrlAddr: ctrlAddr, model: model}, nil
+	// The port's baud rate, kept for one purpose: sizing the wake-up preamble
+	// that command 18 01 needs. See power.go.
+	baud := 0
+	if r != nil {
+		baud = r.Port.Baud
+	}
+	return &Rig{rigAddr: rigAddr, ctrlAddr: ctrlAddr, model: model, baud: baud}, nil
 }
 
 // validAddress reports whether a is usable as a CI-V bus address. 0x00 is the
@@ -247,6 +258,7 @@ func (r *Rig) Caps() radio.Caps {
 		// tuner in and out, 02 starts a cycle.
 		TunerControl: r.model.Tuner,
 		TunerTune:    r.model.Tuner,
+		PowerSwitch:  r.model.PowerSwitch,
 
 		// SubReceiver is whether the radio *has* a second receiver;
 		// SubReceiverReadable is whether remoses can report it. They differ on

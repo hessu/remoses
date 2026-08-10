@@ -2026,6 +2026,109 @@ render alike, with the exact figure published alongside so nothing is lost when 
 
 ---
 
+## 11.6 Switching the radio itself
+
+`{"power_switch": "off"}`, `"off_deep"` and `"on"`, gated by `caps.power_switch`. It is `18 00`
+and `18 01` on Icom and `PS` on Kenwood and Yaesu.
+
+**This is the one command whose success is indistinguishable from its failure.** A radio told to
+switch off stops answering, the next poll times out, and the session tears the link down —
+exactly what a pulled cable looks like. So the intent is recorded *before* the command goes out,
+and the supervisor logs the disconnection that follows as expected rather than as a fault. Without
+that, switching a radio off would produce an error every backoff, at error level, for as long as
+the operator left it off: a success reported as an outage.
+
+**Waking is harder, because it has to work in the state where there is no link.** What there
+usually is instead is an openable port — an external CI-V interface stays powered, and a radio
+whose USB survives its own power switch presents one too — and the supervisor is already looping
+on it, dialling and failing to `Init`. So `PowerOn` **arms a request** rather than sending
+anything: the supervisor consumes it on its next freshly opened port and sends the wake *before*
+`Init`, which is the one moment a sleeping radio can be reached.
+
+Racing the supervisor for the port would be the obvious alternative and is the wrong one. These
+are exclusive devices; two dialers produce a wake that fails because the port was busy.
+
+The wake is consumed once rather than retried. A wake that has been sent has been sent, and
+repeating it on every attempt would hold a radio somebody switched off at the front panel
+permanently on — remoses fighting the operator standing next to it.
+
+### Standby: reachable, and switched off
+
+There is a third connection state, and it was found by switching an IC-7610 off and watching what
+remoses made of it. **It does not go silent.** Its CI-V circuit stays alive and answers **NG to
+every command**, frequency read included. The link is perfect; the radio is asleep.
+
+Neither of the other two states describes that. `connected: false` sends somebody to check a
+cable that is perfectly seated, and `connected: true` leaves an operator staring at a frequency
+that has not changed in ten minutes wondering why nothing works. So `state.standby` is its own
+flag, published alongside `connected: true`, and `remoses-cli` shows `STANDBY` where it would
+otherwise show `CONNECTED`.
+
+The session **stays on the open port** rather than dropping it. Redialling would be wrong twice
+over: it reports a healthy link as a fault, and it throws away the very port a wake has to go
+through. So `awaitWake` parks there, republishes the state, and retries `Init` every slow poll
+interval — noticing within one interval whoever wakes the radio, whether that is a `power_switch`
+request or a hand on the front panel.
+
+Commands in that state are refused with `ErrStandby`, a 503 whose message names the remedy:
+`the radio is switched off; wake it with {"power_switch":"on"}`. It wraps `ErrDisconnected`, so
+anything reasoning about "no usable radio right now" still matches with one check.
+
+**This found a pre-existing bug, and an ironic one.** The failure counter that is supposed to
+notice a rig which has stopped answering never fired, because §6 had taught it that *a rejection
+means the radio is talking to us* — the fix for an IC-9700 that NGs one optional command in FM.
+A radio in standby refuses **everything**, so every poll was excused and the session reported
+`connected` over a snapshot going stale by the minute: the exact failure the counter exists to
+catch, hidden by the fix for its opposite.
+
+The line is now drawn by tier rather than by error kind. The slow tier carries the optional
+values — filter width, data mode, break-in, the tuner — and rigs differ in which they implement,
+so a refusal there still does not count. The fast tier is frequency, mode and whichever of PTT
+and the S-meter the model has: what a radio must answer to be usable at all. A refusal there is
+not a rig declining an extra, it is a rig that cannot do the basics.
+
+### Two kinds of off, and one way in
+
+Kenwood documents both, and the difference is the whole design:
+
+> When turning the power Off by setting the P1 parameter to 0, more current is consumed than if
+> you turn the power Off by operating the transceiver panel power switch. However, you can switch
+> the power back On without any special procedures, using the PS command.
+
+> When turning the power Off by setting the P1 parameter to 9, the same amount of standby current
+> is consumed as if you turned the power Off by operating the transceiver panel power switch. In
+> this case … 1) turn the flow control Off. 2) Send dummy data (;). 3) Wait for more than 200 ms.
+> 4) Send "PS1;" within 2 seconds of sending the dummy data.
+
+So `off` defaults to the shallow one — standby current in exchange for a wake that is one
+command — and `off_deep` is opt-in. A remote station that cannot be woken is a station somebody
+has to drive to, and that trade is the operator's to make deliberately.
+
+Waking, by contrast, is **one method**. A caller should not have to know which kind of off a
+radio was put into, least of all when it was the front-panel switch that did it — so each backend
+tries the cheap wake first and escalates to its family's ritual only if that draws nothing:
+
+| | Cheap wake | Escalation |
+|---|---|---|
+| Icom | `18 01` behind an `FE` preamble | none documented; the preamble *is* the ritual |
+| Kenwood | `PS1;` | dummy `;`, wait >200 ms, `PS1;` inside 2 s |
+| Yaesu | `PS1;` | dummy `;`, then `PS1;` inside the documented 1–2 s window |
+
+Icom's preamble is a duration expressed in bytes, so its length is per baud rate — 150 at
+115200 down to 7 at 4800 — and a rate between two tabulated ones rounds **up**. Too many `FE`s
+cost milliseconds; too few cost a radio that does not wake.
+
+None of the three is verified beyond the probe between the attempts. A radio coming up spends
+seconds booting, far longer than any command timeout, so a stricter check would report failure on
+a radio that is on its way up. The connection attempt that follows is the verdict.
+
+**What remoses does not claim** is that a wake will work. That depends on wiring, not on the
+command: a radio whose CAT arrives over its own USB may take the USB device down with it, leaving
+nothing to send the wake-up to. `caps.power_switch` reports the command; the station decides
+whether the radio can be reached afterwards.
+
+---
+
 ## 11.5 The antenna tuner
 
 `state.tuner` reads `off`, `on` or `tuning`; `{"tuner": "on"}` switches the matching network in

@@ -92,8 +92,13 @@ func statusFields(v *view) string {
 	st := v.st
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "connected=%t freq=%d mode=%s data=%t",
-		st.Connected, st.Frequency, st.Mode, st.DataMode)
+	fmt.Fprintf(&b, "connected=%t", st.Connected)
+	// Only while it is true, and next to connected, because the pair is what
+	// says "reachable but switched off" rather than either one alone.
+	if st.Standby {
+		b.WriteString(" standby=true")
+	}
+	fmt.Fprintf(&b, " freq=%d mode=%s data=%t", st.Frequency, st.Mode, st.DataMode)
 	fmt.Fprintf(&b, " passband=%d filter=%d", st.PassbandHz, st.FilterSlot)
 	fmt.Fprintf(&b, " power_pct=%g", st.Power.Pct)
 	if st.Power.Watts != nil {

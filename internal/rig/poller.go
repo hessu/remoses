@@ -63,19 +63,30 @@ func (s *Session) pollTier(ctx context.Context, c *conn, tier backend.PollTier, 
 		return false
 	}
 
-	// A radio that refuses a command is a radio that is talking to us, so a
-	// refusal must not count towards "it has stopped answering". The counter
-	// exists to catch silence — a rig switched off behind a live USB adapter —
-	// and an NG is the opposite of silence.
+	// A refusal on the SLOW tier is a radio talking to us, so it must not count
+	// towards "it has stopped answering". That tier carries the optional
+	// values — filter width, data mode, break-in, the tuner — and rigs differ
+	// in which of them they implement.
 	//
 	// Found on an IC-9700 sitting in FM, which NGs the 1A 03 filter-width read
 	// because FM has no adjustable passband. Every slow tick drew a rejection,
 	// five in a row tore down a working connection, and the reconnect put the
 	// radio straight back into the same state: a permanent loop on a rig that
-	// was answering everything else perfectly. isFatalPollErr already draws
-	// this line for the initial poll and for read-back; the failure counter was
-	// the one place that did not.
-	if !isFatalPollErr(err) {
+	// was answering everything else perfectly.
+	//
+	// The FAST tier is different, and the difference is the whole rule. It
+	// carries what the radio must answer to be usable at all — the frequency
+	// and mode reads, and whichever of PTT and the S-meter the model has — so a
+	// refusal there is not a rig declining an optional extra. It is a rig that
+	// cannot do the basics.
+	//
+	// That case is not hypothetical either. An IC-7610 switched off over CAT
+	// does NOT go silent: its CI-V circuit stays alive and answers NG to
+	// everything, frequency read included. Treating that as "still talking"
+	// left the session reporting connected, with a snapshot going stale by the
+	// minute, for as long as the radio stayed off — the exact failure the
+	// counter exists to catch, hidden by the fix for the exact opposite one.
+	if !isFatalPollErr(err) && tier != backend.PollFast {
 		s.log.Debug("radio declined a poll command; not counted as a failure",
 			"tier", tierName(tier), "err", err)
 		return true
