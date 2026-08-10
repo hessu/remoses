@@ -25,12 +25,15 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Both pinned to majors that run on Node 24. The runners force anything
+      # older onto it anyway and warn, so an action still declaring Node 20 is
+      # a deprecation notice on every run rather than a working choice.
+      - uses: actions/checkout@v7
 
       # The toolchain version comes from go.mod, so bumping it there bumps CI
       # with it and the two can never disagree about what "builds" means.
       # setup-go caches the module download keyed on go.sum by default.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
