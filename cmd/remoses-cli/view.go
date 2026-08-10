@@ -180,13 +180,48 @@ func (v *view) significant() significant {
 }
 
 // meters is the continuously-moving part: what a bar is drawn from.
+//
+// The transmit meters are here too, flattened rather than kept as the pointers
+// State holds them in, so that this stays comparable — the point of the type is
+// that == answers "did a meter move".
 type meters struct {
 	sRaw   int
 	sScale int
+
+	// Each transmit meter's presence is carried separately from its value: the
+	// end of a transmission is a change worth a line, and a meter that has gone
+	// away is not the same as one reading zero.
+	havePower bool
+	powerRaw  int
+	haveSWR   bool
+	swrRaw    int
+	swrRatio  float64
+	haveALC   bool
+	alcRaw    int
 }
 
 func (v *view) meters() meters {
-	return meters{sRaw: v.st.SMeter.Raw, sScale: v.st.SMeter.Scale}
+	m := meters{sRaw: v.st.SMeter.Raw, sScale: v.st.SMeter.Scale}
+	if p := v.st.PowerMeter; p != nil {
+		m.havePower, m.powerRaw = true, p.Raw
+	}
+	if s := v.st.SWR; s != nil {
+		m.haveSWR, m.swrRaw = true, s.Raw
+	}
+	if r := v.st.SWRRatio; r != nil {
+		m.swrRatio = *r
+	}
+	if a := v.st.ALC; a != nil {
+		m.haveALC, m.alcRaw = true, a.Raw
+	}
+	return m
+}
+
+// transmitting reports whether there is a transmit meter to show. It is the
+// meters rather than PTT that decide, because a radio can be keyed and report
+// none of them — the IC-706 family cannot even report the PTT.
+func (v *view) haveTXMeters() bool {
+	return v.st.PowerMeter != nil || v.st.SWR != nil || v.st.ALC != nil
 }
 
 // formatFreq renders hertz the way a radio's display does: megahertz, then
@@ -272,6 +307,37 @@ func formatPower(p radio.Power) string {
 		s += fmt.Sprintf("  %g W", *p.Watts)
 	}
 	return s
+}
+
+// formatMeterValue renders the number beside a transmit meter bar: the raw
+// reading against its own scale, plus the percentage that the bar is drawn
+// from.
+//
+// Both, because neither is enough on its own. The percentage is what an
+// operator reads at a glance, and the raw pair is what makes a bug reportable —
+// the scales differ per meter and per model, and "143/255" beside "56%" is what
+// tells somebody the scale is the one they expected.
+func formatMeterValue(m radio.Meter) string {
+	return fmt.Sprintf("%d/%d  %.0f %%", m.Raw, m.Scale, m.Fraction()*100)
+}
+
+// formatSWR renders the SWR reading, preferring the ratio where the radio's
+// documentation gave one.
+//
+// The single-bit case is spelled out rather than drawn as a number: an FT-857
+// reports a high-SWR alarm and nothing else, and "1/1" would look like a
+// reading rather than the warning light it is.
+func formatSWR(m radio.Meter, ratio *float64) string {
+	if m.Scale == 1 {
+		if m.Raw > 0 {
+			return "HIGH"
+		}
+		return "ok"
+	}
+	if ratio != nil {
+		return fmt.Sprintf("%.1f:1", *ratio)
+	}
+	return formatMeterValue(m)
 }
 
 // formatCW renders the Morse queue.

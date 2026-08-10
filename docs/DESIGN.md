@@ -1986,6 +1986,12 @@ details here are not guessable and were transcribed rather than assumed:
   Published against 255 an ALC at full deflection would read 47%.
 - **The IC-9700's power meter reaches 100% at 213** where the IC-7610's reaches 255. Against the
   wrong scale a radio at full power reads 84%.
+- **The SWR meter is published against 120, the top of its calibration**, not the 255 its data
+  field could hold. That one is a judgement rather than a transcription: the reference calibrates
+  `0000` to `0120` and says nothing above, and scaling to 255 would draw a 3:1 SWR — which nobody
+  should be transmitting into — at under half a bar. A meter that under-warns is worse than one
+  with a short scale, so readings past the documented top pin instead, which is the right shape
+  for "worse than the worst marked value".
 
 `state.swr_ratio` is the exception to publishing raw numbers, and it is deliberately narrow. Icom
 prints four calibration points for `15 12` — `0000`=1.0, `0048`=1.5, `0080`=2.0, `0120`=3.0 —

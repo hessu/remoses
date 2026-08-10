@@ -202,8 +202,10 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 			m := radio.Meter{Raw: n, Scale: r.model.POScale}
 			u.Patch.PowerMeter = &m
 		case subSWRMeter:
+			// Against the top of the calibrated range, not the width of the
+			// data field: see swrScale.
 			u.Key = KeySWRMeter
-			m := radio.Meter{Raw: n, Scale: sMeterScale}
+			m := radio.Meter{Raw: min(n, swrScale), Scale: swrScale}
 			u.Patch.SWR = &m
 			// And a ratio too, but only where this radio's own reference
 			// prints the four points that define one.

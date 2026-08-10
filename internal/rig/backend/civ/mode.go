@@ -22,6 +22,17 @@ const (
 	// references read "0000=Minimum to 0120=Maximum". Publishing it against 255
 	// would show an ALC at full deflection as 47%.
 	alcScale = 120
+
+	// swrScale is the top of the DOCUMENTED part of command 15 12, which is
+	// also 120: the calibration runs 0000=SWR1.0 to 0120=SWR3.0 and says
+	// nothing about what lies above.
+	//
+	// The data field holds 255, but publishing that as full scale would draw
+	// 3:1 — an SWR nobody should transmit into — at under half a bar, and a
+	// meter that under-warns is worse than one with a shorter scale. Readings
+	// past the documented top pin the bar instead, which is the right shape for
+	// "worse than the worst marked value".
+	swrScale = 120
 )
 
 // swrCalibration is command 15 12's meter, as the references print it:

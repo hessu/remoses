@@ -137,14 +137,8 @@ func layout(v *view, width int) []string {
 		row(fmt.Sprintf("  %s MHz    %s", formatFreq(st.Frequency), formatMode(st)), ptt, width),
 		"")
 
-	sUnit := formatSUnit(st.SMeter)
-	if sUnit != "" {
-		sUnit += "  "
-	}
-	out = append(out,
-		fmt.Sprintf("  S %s  %s%d/%d",
-			meterBar(st.SMeter.Fraction(), meterCells), sUnit, st.SMeter.Raw, st.SMeter.Scale),
-		"")
+	out = append(out, meterLines(v)...)
+	out = append(out, "")
 
 	filter := fmt.Sprintf("  passband  %d Hz", st.PassbandHz)
 	if st.FilterSlot > 0 {
@@ -160,6 +154,45 @@ func layout(v *view, width int) []string {
 	}
 	out = append(out, "")
 	return append(out, footer(v, width)...)
+}
+
+// meterLines draws the meter block: the S meter in receive, and forward power,
+// SWR and ALC while transmitting.
+//
+// They swap rather than stack, which is what the radio's own meter does and
+// what the numbers justify. During a transmission the S reading is not merely
+// uninteresting, it is wrong: on a Kenwood the command that reports it is
+// reporting the power meter instead, so what is left in State is whatever the
+// last receive poll saw, sitting there looking current.
+//
+// Only the meters the radio actually reports get a line — an FT-857 has power
+// and a high-SWR bit and no ALC — so the block is as tall as the radio has
+// something to say, and the renderer redraws a changed line count in place.
+func meterLines(v *view) []string {
+	st := v.st
+	if !v.haveTXMeters() {
+		sUnit := formatSUnit(st.SMeter)
+		if sUnit != "" {
+			sUnit += "  "
+		}
+		return []string{fmt.Sprintf("  S   %s  %s%d/%d",
+			meterBar(st.SMeter.Fraction(), meterCells), sUnit, st.SMeter.Raw, st.SMeter.Scale)}
+	}
+
+	var out []string
+	if m := st.PowerMeter; m != nil {
+		out = append(out, fmt.Sprintf("  PWR %s  %s",
+			meterBar(m.Fraction(), meterCells), formatMeterValue(*m)))
+	}
+	if m := st.SWR; m != nil {
+		out = append(out, fmt.Sprintf("  SWR %s  %s",
+			meterBar(m.Fraction(), meterCells), formatSWR(*m, st.SWRRatio)))
+	}
+	if m := st.ALC; m != nil {
+		out = append(out, fmt.Sprintf("  ALC %s  %s",
+			meterBar(m.Fraction(), meterCells), formatMeterValue(*m)))
+	}
+	return out
 }
 
 // radioBadge is the radio's own link to its rig, not this program's link to the

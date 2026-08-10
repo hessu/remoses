@@ -78,12 +78,32 @@ func TestDecodeTXMeters(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if u.Patch.SWR == nil || u.Patch.SWR.Raw != 80 {
-			t.Fatalf("SWR = %+v, want raw 80", u.Patch.SWR)
+		// Scaled to the top of the calibrated range rather than the width of
+		// the data field: against 255, a 3:1 SWR would draw at under half a bar.
+		if u.Patch.SWR == nil || u.Patch.SWR.Raw != 80 || u.Patch.SWR.Scale != swrScale {
+			t.Fatalf("SWR = %+v, want raw 80 of %d", u.Patch.SWR, swrScale)
 		}
 		// 0080 is SWR 2.0 in both references.
 		if u.Patch.SWRRatio == nil || math.Abs(*u.Patch.SWRRatio-2.0) > 0.001 {
 			t.Errorf("SWR ratio = %v, want 2.0", u.Patch.SWRRatio)
+		}
+	})
+
+	// Past the last calibrated point the bar pins rather than running on, which
+	// is the right shape for "worse than the worst marked value".
+	t.Run("SWR beyond the calibration pins the bar", func(t *testing.T) {
+		u, err := r.Decode(meterFrame(r, subSWRMeter, 200))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Patch.SWR == nil || u.Patch.SWR.Raw != swrScale {
+			t.Errorf("SWR = %+v, want it pinned at %d", u.Patch.SWR, swrScale)
+		}
+		if u.Patch.SWR.Fraction() != 1 {
+			t.Errorf("bar reads %v of full scale, want 1", u.Patch.SWR.Fraction())
+		}
+		if u.Patch.SWRRatio != nil {
+			t.Errorf("SWR ratio = %v, want none above the documented curve", *u.Patch.SWRRatio)
 		}
 	})
 }

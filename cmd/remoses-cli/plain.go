@@ -104,6 +104,22 @@ func statusFields(v *view) string {
 	if st.SMeter.S != nil {
 		fmt.Fprintf(&b, " s_units=%g", *st.SMeter.S)
 	}
+	// The transmit meters appear only while they exist, which is only while
+	// transmitting. A log line carrying pwr_raw=0 in receive would be
+	// indistinguishable from a real reading into a dead load, and the whole
+	// point of a log is that somebody reads it afterwards and cannot ask.
+	if m := st.PowerMeter; m != nil {
+		fmt.Fprintf(&b, " pwr_raw=%d pwr_scale=%d", m.Raw, m.Scale)
+	}
+	if m := st.SWR; m != nil {
+		fmt.Fprintf(&b, " swr_raw=%d swr_scale=%d", m.Raw, m.Scale)
+	}
+	if r := st.SWRRatio; r != nil {
+		fmt.Fprintf(&b, " swr=%.2f", *r)
+	}
+	if m := st.ALC; m != nil {
+		fmt.Fprintf(&b, " alc_raw=%d alc_scale=%d", m.Raw, m.Scale)
+	}
 	fmt.Fprintf(&b, " cw_busy=%t cw_queued=%d wpm=%d", st.CW.Busy, st.CW.Queued, st.CW.WPM)
 	fmt.Fprintf(&b, " seq=%d age_ms=%d stale=%t", st.Seq, v.age().Milliseconds(), v.stale)
 	b.WriteString(optQuoted(" conn_error=", v.connErr))

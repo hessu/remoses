@@ -392,15 +392,35 @@ remoses-cli ic7610 | tee ic7610.log      # timestamped lines instead of a redraw
 remoses  ic7610 - IC-7610 - civ                                      CONNECTED
 ------------------------------------------------------------------------------
 
-  14.025.000 MHz    CW                                          PTT   >> TX <<
+  14.025.000 MHz    CW                                                PTT   RX
 
-  S ██████████████████░░  S9+21 dB  230/255
+  S   ██████████████████░░  S9+21 dB  230/255
 
   passband  500 Hz   filter 2                                power  40 %  40 W
-  cw        sending  queued 14  28 wpm  ~4.3 s                   lock   oh2abc
+  cw        idle  queued 0  28 wpm                               lock   oh2abc
 
   seq 4471   updated 0.0 s ago                                    stream  live
 ```
+
+**The meter block swaps while the radio is transmitting**, the way the radio's own meter does:
+
+```
+  14.025.000 MHz    CW                                          PTT   >> TX <<
+
+  PWR ███████████▎░░░░░░░░  143/255  56 %
+  SWR ██████▍░░░░░░░░░░░░░  1.4:1
+  ALC ████████████░░░░░░░░  72/120  60 %
+
+  passband  500 Hz   filter 2                                power  40 %  40 W
+  cw        sending  queued 14  28 wpm  ~4.3 s                   lock   oh2abc
+```
+
+They swap rather than stack because during a transmission the S reading is not merely
+uninteresting, it is wrong: on a Kenwood the command that reports it is reporting the power meter
+instead, so what is left is whatever the last receive poll saw. Only the meters the radio actually
+reports get a line — an FT-857 has power and a high-SWR bit and no ALC — and the piped form
+carries the same readings as `pwr_raw=`, `swr_raw=`, `swr=` and `alc_raw=` fields, present only
+while they exist.
 
 **Where it connects.** With no `-url`, the server address is read from the
 daemon's own configuration file (`remoses.yaml` by default, `-config` to point
