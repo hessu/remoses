@@ -2033,10 +2033,32 @@ one a whole cycle can begin and end between two reads.
 | Kenwood | `AC` | P2 `0` / `1` | P3 `1` — `AC111` |
 | Yaesu | `AC` | P3 `0` / `1` | P3 **`2` or `3`**, per generation |
 
-**The Icom row is a safety interlock, not a table entry.** On the IC-718 `1C 01` is *PTT* — its
-table has no `1C 00` row at all — so a "start tuning" sent there would key the transmitter and
-hold it keyed, and nothing in the frame would say so. `Model.Tuner` is false on that radio and
-must stay false.
+**The Icom row is per model, and one of the reasons is a safety interlock.** On the IC-718
+`1C 01` is *PTT* — its table has no `1C 00` row at all — so a "start tuning" sent there would key
+the transmitter and hold it keyed, and nothing in the frame would say so.
+
+The other reason is that plenty of these radios have no tuner, which is why `withTuner` is
+applied per entry rather than defaulted in `modern()`. Every reference has now been read:
+
+| Has `1C 01` | Does not |
+|---|---|
+| IC-703, IC-7300, IC-7300MK2, IC-7600, IC-7610, IC-7700, IC-7760, IC-7850, IC-9100 | IC-905, IC-910H, IC-9700, IC-718, IC-706 family, `generic` |
+
+The split is the obvious one — HF sets have a matching network, the VHF/UHF-and-up sets do not —
+except that the IC-9100 has one despite covering VHF and UHF, and words the tune trigger
+"Manual tuning selection" where everything else says "Tuning". Same `1C 01 02` either way.
+
+**Having a tuner is not the same as having one on this band.** The IC-9100's covers HF and
+50 MHz; on 144 MHz and up the radio rejects the command. remoses does not pre-empt that with a
+frequency test — the boundary is the rig's to enforce, and hard-coding one here would be a number
+invented rather than transcribed — so the refusal surfaces as an ordinary 422 carrying the
+radio's own NG. Worth knowing when reading a support question: a tune failing on 2 m is the radio
+saying no.
+
+This shipped for a day as a default of true for every modern Icom, and the IC-9700 caught it:
+that radio advertised `tuner_control` and `tuner_tune`, answered NG to the poll every slow tick,
+and would have shown an operator a Tune button that could only ever fail. A capability that is
+defaulted rather than transcribed is one nobody has checked.
 
 **The Yaesu row differs by generation.** The FT-950's `AC` reads "0: Tuner OFF, 1: Tuner ON,
 2: Tuning Start"; the FT-710's reads "0: Tuner OFF (Tuning Stop), 1: Tuner ON, 2: -, 3: Tuning

@@ -224,9 +224,15 @@ The TS-590S also refuses two things its reference does not mention: an on/off se
 as `0`, and **a set that changes nothing is refused as well** — so remoses reads before writing,
 or the same request sent twice would fail the second time.
 
-**The IC-718 is the reason this is per model.** There `1C 01` is *PTT*, not the tuner — so a
-"start tuning" sent to one would key the transmitter and hold it keyed. It reports
-`tuner_control: false`, and must.
+**Which Icoms have one is transcribed per model, not assumed.** Every reference has been read:
+the IC-703, IC-7300, IC-7300MK2, IC-7600, IC-7610, IC-7700, IC-7760, IC-7850 and IC-9100 have
+`1C 01`; the IC-905, IC-910H and IC-9700 have no such row, and neither does the IC-706 family.
+Note that having a tuner is not the same as having one on the current band — the IC-9100's
+covers HF and 50 MHz and the radio itself rejects a tune on 144 MHz and up.
+
+**The IC-718 is the sharp edge.** There `1C 01` is *PTT*, not the tuner — so a "start tuning"
+sent to one would key the transmitter and hold it keyed. It reports `tuner_control: false`, and
+must.
 
 **The IC-706 family cannot be keyed over CI-V at all.** None of the three has a transmitter
 command — no `1C` at any sub-command — so remoses can neither key them nor tell whether they are

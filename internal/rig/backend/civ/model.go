@@ -79,11 +79,19 @@ type Model struct {
 	// Tuner is true when 1C 01 is the antenna tuner: 00 off, 01 on, 02 start a
 	// tuning cycle, and 02 read back while one is running.
 	//
-	// It is per model for a reason that would otherwise be a transmit accident.
-	// On the IC-718 1C 01 is not the tuner at all — it is PTT, that radio's
-	// table having no 1C 00 row — so a "start tuning" sent there would key the
-	// transmitter and hold it keyed. Nothing about the frame distinguishes the
-	// two; only the model does.
+	// It is per model for two reasons, and the first would be a transmit
+	// accident. On the IC-718, 1C 01 is not the tuner at all — it is PTT, that
+	// radio's table having no 1C 00 row — so a "start tuning" sent there would
+	// key the transmitter and hold it keyed. Nothing about the frame
+	// distinguishes the two; only the model does.
+	//
+	// The second is that plenty of these radios have no tuner. The IC-9700's
+	// table goes 1C 00, 1C 02, 1C 03 and simply omits 01, because there is
+	// nothing to address — it is a VHF/UHF set. This started as a default of
+	// true for every modern radio and was caught on the air: the IC-9700
+	// advertised tuner_control and tuner_tune, answered NG to the poll every
+	// slow tick, and would have shown an operator a Tune button that could only
+	// ever fail. So it is claimed per model, like everything else here.
 	Tuner bool
 	// TXMeters is true when the radio has the transmit meters, 15 11 (PO),
 	// 15 12 (SWR) and 15 13 (ALC).
@@ -246,7 +254,6 @@ func modern(name, label string, addr byte, modes []radio.Mode) Model {
 		TXMeters:       true,
 		SWRCal:         true,
 		POScale:        255,
-		Tuner:          true,
 		CWBuffer:       true,
 		FilterWidth:    true,
 		DataMode:       true,
@@ -285,6 +292,23 @@ func (m Model) filterSlot(b byte) (int, bool) {
 		return 0, false
 	}
 	return slot, true
+}
+
+// withTuner marks a model whose 1C 01 is the internal antenna tuner: 00 off,
+// 01 on, 02 start a cycle.
+//
+// It is applied per model rather than defaulted in modern(), and that is worth
+// the repetition. A default of true is what this backend shipped for a day, and
+// it made the IC-9700 advertise a tuner it has no hardware for — its 1C table
+// runs 00, 02, 03 and omits 01 — so every slow poll drew a rejection and a
+// client would have been shown a Tune button that could only fail. Written out
+// here, each call is a record that somebody read that radio's table.
+//
+// Which radios: every HF set whose reference has been read, and none of the
+// VHF/UHF ones. The IC-905, IC-910H and IC-9700 have no 1C 01 row at all.
+func withTuner(m Model) Model {
+	m.Tuner = true
+	return m
 }
 
 // mkiiFamily describes an IC-706 of any generation: what the three share, which
@@ -377,16 +401,19 @@ var models = map[string]Model{
 		m.DualWatch = true
 		m.VFOModeSelect = true
 		m.BreakIn = true
+		// "1C 01 Antenna tuner (00=OFF, 01=ON, 02=Tune)". Exercised on the air:
+		// switched in and out, and four tuning cycles run on 80 m.
+		m.Tuner = true
 		// No VFOSelect: its table has no 07 00 / 07 01. The two VFOs are fixed
 		// receivers and there is no A/B switch to throw.
 		return m
 	}(),
 
 	// The MK2 reference lists no PSK in its operating mode table.
-	"ic-7300mk2": modern("ic-7300mk2", "Icom IC-7300MK2", 0xB6, modesCommon()),
+	"ic-7300mk2": withTuner(modern("ic-7300mk2", "Icom IC-7300MK2", 0xB6, modesCommon())),
 
-	"ic-7760": modern("ic-7760", "Icom IC-7760", 0xB2,
-		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)),
+	"ic-7760": withTuner(modern("ic-7760", "Icom IC-7760", 0xB2,
+		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))),
 
 	// VHF/UHF/1.2 GHz: D-STAR instead of PSK. DD is 1200 MHz only, which the
 	// radio enforces; remoses does not second-guess the band.
@@ -421,10 +448,17 @@ var models = map[string]Model{
 		m.BreakIn = true
 		// Its PO meter reaches 100% at 213, not the 255 of the IC-7610.
 		m.POScale = 213
+		// And no antenna tuner: its 1C table is 00, 02, 03, with no 01 row.
+		// A VHF/UHF set has nothing for one to match. Confirmed on the radio,
+		// which answers NG to 1C 01 in every form.
+		m.Tuner = false
 		return m
 	}(),
 
 	// DD and ATV need 1200 MHz or higher, again enforced by the radio.
+	//
+	// No withTuner: its 1C table is 00, 02, 03 with no 01 row. A 144 MHz to
+	// 10 GHz set has nothing for a matching network to do.
 	"ic-905": func() Model {
 		m := modern("ic-905", "Icom IC-905", 0xAC,
 			withModes(modesCommon(), radio.ModeDV, radio.ModeDD, radio.ModeATV))
@@ -433,21 +467,33 @@ var models = map[string]Model{
 	}(),
 
 	// Like the MK2: no PSK in its mode table.
-	"ic-7300": modern("ic-7300", "Icom IC-7300", 0x94, modesCommon()),
+	"ic-7300": withTuner(modern("ic-7300", "Icom IC-7300", 0x94, modesCommon())),
 
-	"ic-7600": modern("ic-7600", "Icom IC-7600", 0x7A,
-		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)),
+	"ic-7600": withTuner(modern("ic-7600", "Icom IC-7600", 0x7A,
+		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))),
 
-	"ic-7700": modern("ic-7700", "Icom IC-7700", 0x74,
-		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)),
+	"ic-7700": withTuner(modern("ic-7700", "Icom IC-7700", 0x74,
+		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))),
 
 	// The IC-7850 and IC-7851 are the same radio to CI-V and share an address.
-	"ic-7850": modern("ic-7850", "Icom IC-7850/7851", 0x8E,
-		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)),
+	"ic-7850": withTuner(modern("ic-7850", "Icom IC-7850/7851", 0x8E,
+		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))),
 
 	// HF/VHF/UHF with D-STAR: DV instead of PSK, and no DD.
-	"ic-9100": modern("ic-9100", "Icom IC-9100", 0x7C,
-		withModes(modesCommon(), radio.ModeDV)),
+	//
+	// It has a tuner despite the VHF and UHF bands, and its table words the
+	// tune trigger differently — "Manual tuning selection" rather than
+	// "Tuning" — for the same 1C 01 02.
+	//
+	// The tuner covers HF and 50 MHz only: on 144 MHz and up the radio rejects
+	// the command. remoses does not pre-empt that with a frequency test, both
+	// because the boundary is the rig's to enforce and because a hard-coded one
+	// would be a number invented here. The refusal arrives as an ordinary 422
+	// carrying the radio's own NG, which is the truthful answer — but it is
+	// worth knowing that a tune failing on 2 m is the radio saying no, not
+	// remoses malfunctioning.
+	"ic-9100": withTuner(modern("ic-9100", "Icom IC-9100", 0x7C,
+		withModes(modesCommon(), radio.ModeDV))),
 
 	// The IC-910H is the second outlier, and the only radio here that does not
 	// use the family mode-byte table. From its command table (section 13):
@@ -459,8 +505,14 @@ var models = map[string]Model{
 	//   - No command 17 (the table jumps 16 to 19), so no CW over CAT.
 	//   - No 1A 03: its 1A sub-commands stop at 09.
 	//   - Command 14 0C runs 6-60 wpm, like the IC-718.
+	//   - No 1C 01, so no antenna tuner: its table ends at 1C 00.
 	//
 	// PTT is the ordinary 1C 00 here, unlike the IC-718.
+	//
+	// Its table does carry 16 47 break-in, but as 0=OFF / 1=ON rather than the
+	// three values the rest of the family uses — so BreakIn stays false until
+	// this backend can express a two-value one, rather than claiming a control
+	// that would send an invalid 02 for "full".
 	"ic-910h": {
 		Name:    "ic-910h",
 		Label:   "Icom IC-910H",
