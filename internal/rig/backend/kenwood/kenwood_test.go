@@ -318,31 +318,41 @@ func TestPollSlow(t *testing.T) {
 		// references say the AGC command cannot be used in. FW carries a
 		// bandwidth only in CW and FSK. Break-in (SD; then VX; on this model) is
 		// read only in CW, where the command means break-in rather than VOX.
+		// noise is the tail every mode shares: the blanker and reducer
+		// switches, the notch selector, the notch position and the antenna.
+		//
+		// NL; and RL; are NOT here, and their absence is the point. Both are
+		// refused while their circuit is off — "an error occurs" — so they are
+		// asked only once the radio has reported the circuit on. On the first
+		// slow poll nothing has been reported yet, so neither is asked; the
+		// next one picks them up.
 		{"CW includes the filter width and break-in", radio.ModeCW,
 			[]string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
-				"PA;", "RA;", "RG;", "GC;", "SD;", "VX;", "FW;"}},
+				"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;", "AN;",
+				"SD;", "VX;", "FW;"}},
 		{"CW-R includes the filter width and break-in", radio.ModeCWR,
 			[]string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
-				"PA;", "RA;", "RG;", "GC;", "SD;", "VX;", "FW;"}},
+				"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;", "AN;",
+				"SD;", "VX;", "FW;"}},
 		{"FSK includes the filter width but not break-in", radio.ModeFSK,
 			[]string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
-				"PA;", "RA;", "RG;", "GC;", "FW;"}},
+				"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;", "AN;", "FW;"}},
 		// In SSB and AM the rig refuses FW outright; in FM it answers with a
 		// modulation-degree switch that would land in State as a 0 Hz passband.
 		{"USB skips it", radio.ModeUSB, []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
-			"PA;", "RA;", "RG;", "GC;"}},
+			"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;", "AN;"}},
 		{"LSB skips it", radio.ModeLSB, []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
-			"PA;", "RA;", "RG;", "GC;"}},
+			"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;", "AN;"}},
 		{"AM skips it", radio.ModeAM, []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
-			"PA;", "RA;", "RG;", "GC;"}},
+			"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;", "AN;"}},
 		// And FM skips the AGC too: "this command cannot be performed in FM
 		// mode (an error sounds)", and the error really does sound, at the
 		// radio, on every slow tick.
 		{"FM skips it", radio.ModeFM, []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
-			"PA;", "RA;", "RG;"}},
+			"PA;", "RA;", "RG;", "NB;", "NR;", "NT;", "BP;", "AN;"}},
 		{"an unknown mode skips it", radio.ModeUnknown,
 			[]string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
-				"PA;", "RA;", "RG;", "GC;"}},
+				"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;", "AN;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

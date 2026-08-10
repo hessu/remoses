@@ -121,6 +121,32 @@ type Model struct {
 	// and GC for the speed.
 	AGC    map[radio.AGC]string
 	AGCCmd string
+	// The noise processing, the notches and the antenna.
+	//
+	// NoiseBlanker and NoiseReduction are counts of CIRCUITS: two on this
+	// family, NB1/NB2 and NR1/NR2, which are different algorithms rather than
+	// two strengths of one. NBLevel is NL and NRLevel is RL, both refused while
+	// their circuit is off.
+	//
+	// Notch is NT, one selector carrying off, auto and manual — which is why
+	// Caps.NotchExclusive is true here and false on the other two families —
+	// and NotchFreq is BP, the manual notch's position.
+	//
+	// Antennas is AN's socket count and RXAntenna its receive-only input.
+	// Claimed only where the parameter layout has been transcribed: the
+	// TS-590's AN takes three parameters, the TS-890S's takes four, and the
+	// TS-990S has no AN row at all. Sending the wrong width would be a syntax
+	// error rather than a wrong antenna, but it would still be sending
+	// something nobody read.
+	NoiseBlanker   int
+	NBLevel        bool
+	NoiseReduction int
+	NRLevel        bool
+	Notch          bool
+	NotchFreq      bool
+	Antennas       int
+	RXAntenna      bool
+
 	// AGCOnCode is the parameter that turns the AGC back ON, and without it
 	// switching the AGC off is a ONE-WAY TRIP.
 	//
@@ -367,6 +393,17 @@ func md(name, label string, id int) Model {
 			radio.AGCOff: "0", radio.AGCSlow: "1", radio.AGCFast: "2",
 		},
 		AGCOnCode: "3",
+		// Two blankers and two reducers, each with a level, plus the one notch
+		// selector and its position. The antenna is claimed for this shape
+		// only: AN there is "1: ANT1, 2: ANT2" with a receive input on P2.
+		NoiseBlanker:   2,
+		NBLevel:        true,
+		NoiseReduction: 2,
+		NRLevel:        true,
+		Notch:          true,
+		NotchFreq:      true,
+		Antennas:       2,
+		RXAntenna:      true,
 	}
 }
 
@@ -403,6 +440,11 @@ func om(name, label string, id int) Model {
 	// TS-590. Both references describe it the same way, and the TS-890S's adds
 	// "will turn the AGC On and will set the previous AGC state".
 	m.AGCOnCode = "4"
+	// Their AN is a different shape — four parameters on the TS-890S, and the
+	// TS-990S's command list has no AN row at all — so neither inherits the
+	// TS-590's antenna support. The noise and notch commands are shared.
+	m.Antennas = 0
+	m.RXAntenna = false
 	return m
 }
 

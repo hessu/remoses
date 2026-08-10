@@ -147,6 +147,27 @@ type Model struct {
 	DigiSel      bool
 	DigiSelShift bool
 
+	// The noise processing and the notches, one flag per command, because the
+	// older radios have some of these rows and not others and no two of them
+	// draw the line in the same place.
+	//
+	//	NoiseBlanker  16 22   NBLevel  14 12
+	//	NoiseReduction 16 40  NRLevel  14 06
+	//	Notch         16 48   NotchFreq 14 0D   NotchWidth 16 57
+	//	AutoNotch     16 41
+	//
+	// The IC-703 is the shape that makes this granular: it has 16 22, 16 40 and
+	// 16 41 and none of the levels, and no 16 48 at all — an automatic notch
+	// with no manual one to go beside it.
+	NoiseBlanker   bool
+	NBLevel        bool
+	NoiseReduction bool
+	NRLevel        bool
+	Notch          bool
+	NotchFreq      bool
+	NotchWidth     bool
+	AutoNotch      bool
+
 	// TXMeters is true when the radio has the transmit meters, 15 11 (PO),
 	// 15 12 (SWR) and 15 13 (ALC).
 	//
@@ -342,6 +363,17 @@ func modern(name, label string, addr byte, modes []radio.Mode) Model {
 		Preamp: 2,
 		RFGain: true,
 		AGC:    agcFMS(),
+		// And the whole noise-and-notch group, which this generation has
+		// entire: both blanker rows, both reducer rows, both notches, the notch
+		// position and its width.
+		NoiseBlanker:   true,
+		NBLevel:        true,
+		NoiseReduction: true,
+		NRLevel:        true,
+		Notch:          true,
+		NotchFreq:      true,
+		NotchWidth:     true,
+		AutoNotch:      true,
 	}
 }
 
@@ -453,6 +485,10 @@ func mkiiFamily(name, label string, addr byte) Model {
 		// 14 group, the RF gain is not — it is the panel's own knob.
 		Preamp:     1,
 		Attenuator: []int{20},
+		// The MKIIG's 16 group is 02, 12, 22, 42, 43, 44 and 46: a noise
+		// blanker, and no noise reduction or notch of either kind. The two
+		// earlier radios' tables cannot be read at all and share this profile.
+		NoiseBlanker: true,
 		// No 1A at all, so neither a filter width nor a data mode.
 		FilterWidth: false,
 		DataMode:    false,
@@ -725,12 +761,23 @@ var models = map[string]Model{
 		// "Set AGC (0=Slow; 1=Fast)" against the IC-703's "1=Fast; 2=Slow".
 		// Two radios, one opcode, opposite bytes.
 		AGC: map[radio.AGC]byte{radio.AGCSlow: 0x00, radio.AGCFast: 0x01},
-		// No preamp on the bus: the 910H's preamplifiers are external units,
-		// mast-mounted, with their own controllers, and its 16 group has no 02
-		// row. The attenuator is on the bus, and its table lists 10, 20 and 30
-		// as three ways of spelling ON for a single pad — remoses sends the 20
-		// its specification names and offers one switch, rather than three steps
-		// the radio does not have.
+		// A blanker on 16 22, and no notch of either kind. Its 16 40 is NOT the
+		// family's noise-reduction switch: this radio's table reads "Set noise
+		// reduction level +level data (0=OFF; 1-15=ON)" — one command carrying
+		// the switch and the strength together, where every other radio here
+		// splits them across 16 40 and 14 06. Sending the family's form would
+		// set a level of 1 and call it "on". So the reducer is not claimed here
+		// rather than claimed in a shape this radio does not use.
+		NoiseBlanker: true,
+		// "02 Set pre-amp (0=OFF; 1=ON)" — one preamplifier, two values, where
+		// the rest of the family has two stages. (An earlier reading of this
+		// table missed the row and claimed the radio had none on the bus; it
+		// has one, and the external mast-mounted units its manual also
+		// describes are a separate thing with their own controllers.)
+		Preamp: 1,
+		// The attenuator's table lists 10, 20 and 30 as three ways of spelling
+		// ON for a single pad — remoses sends the 20 its specification names and
+		// offers one switch, rather than three steps the radio does not have.
 		Attenuator: []int{20},
 		// No 14 group in its table at all, so no RF gain.
 	},
@@ -872,6 +919,13 @@ var models = map[string]Model{
 		Preamp:     1,
 		RFGain:     true, // 14 02, "[RF] level setting"
 		AGC:        map[radio.AGC]byte{radio.AGCFast: 0x01, radio.AGCSlow: 0x02},
+		// Its 16 group is 02, 12, 22, 40, 41 to 47: a blanker, a reducer and an
+		// AUTOMATIC notch with no manual one — no 16 48 — and no level for any
+		// of them. So the automatic notch is offered on a radio where the
+		// manual one is a front-panel control and nothing else.
+		NoiseBlanker:   true,
+		NoiseReduction: true,
+		AutoNotch:      true,
 	},
 
 	// The IC-718 is the outlier, and every difference below is from its own
@@ -913,6 +967,13 @@ var models = map[string]Model{
 		Preamp:            1,    // 16 02, "Read/send Preamplifier (00=OFF, 01=ON)"
 		RFGain:            true, // 14 02
 		// No 16 12: its 16 group is 02, 22, 40, 41, 44, 46 and 47, and stops.
+		// Which gives a blanker, a reducer and an automatic notch, no manual
+		// notch, and — unlike the IC-703 — a reducer LEVEL, because its 14
+		// group does carry 06.
+		NoiseBlanker:   true,
+		NoiseReduction: true,
+		NRLevel:        true,
+		AutoNotch:      true,
 	},
 }
 

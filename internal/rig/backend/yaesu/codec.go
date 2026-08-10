@@ -23,6 +23,14 @@ const (
 	keyRA backend.Key = "RA"
 	keyRG backend.Key = "RG"
 	keyGT backend.Key = "GT"
+	// The noise processing, the notches and the antenna.
+	keyNB backend.Key = "NB"
+	keyNL backend.Key = "NL"
+	keyNR backend.Key = "NR"
+	keyRL backend.Key = "RL"
+	keyBP backend.Key = "BP"
+	keyBC backend.Key = "BC"
+	keyAN backend.Key = "AN"
 	keyPS backend.Key = "PS"
 	keySH backend.Key = "SH"
 	keyNA backend.Key = "NA"
@@ -287,6 +295,44 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 		u.Key = keyGT
 		if len(y.profile.AGC) > 0 {
 			y.decodeGT(&u, arg)
+		}
+
+	// The noise processing, the notches and the antenna.
+	case keyNB:
+		u.Key = keyNB
+		if y.profile.NoiseBlanker {
+			y.decodeNB(&u, arg)
+		}
+	case keyNL:
+		u.Key = keyNL
+		if y.profile.NoiseBlanker {
+			y.decodeNL(&u, arg)
+		}
+	case keyNR:
+		u.Key = keyNR
+		if y.profile.NoiseReduction {
+			y.decodeNR(&u, arg)
+		}
+	case keyRL:
+		u.Key = keyRL
+		if y.profile.NoiseReduction {
+			y.decodeRL(&u, arg)
+		}
+	case keyBP:
+		// One key for both halves of BP; the answer's own P2 says which.
+		u.Key = keyBP
+		if y.profile.Notch {
+			y.decodeBP(&u, arg)
+		}
+	case keyBC:
+		u.Key = keyBC
+		if y.profile.AutoNotch {
+			y.decodeBC(&u, arg)
+		}
+	case keyAN:
+		u.Key = keyAN
+		if y.profile.Antennas > 0 {
+			y.decodeAN(&u, arg)
 		}
 
 	case keyID:

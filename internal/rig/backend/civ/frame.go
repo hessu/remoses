@@ -76,6 +76,18 @@ const (
 	subRFGain       = 0x02 // 14 02, 0000-0255
 	subDigiSelShift = 0x13 // 14 13, 0000-0255
 
+	// The noise processing and the notches, all in the same two groups: the
+	// switches on 16 and the levels on 14.
+	subNB        = 0x22 // 16 22: 00 off, 01 on
+	subNR        = 0x40 // 16 40: 00 off, 01 on
+	subAutoNotch = 0x41 // 16 41: 00 off, 01 on
+	subNotch     = 0x48 // 16 48: 00 off, 01 on
+	subNotchWide = 0x57 // 16 57: 00 wide, 01 mid, 02 narrow
+
+	subNRLevel   = 0x06 // 14 06, 0000-0255
+	subNotchFreq = 0x0D // 14 0D, 0000-0255
+	subNBLevel   = 0x12 // 14 12, 0000-0255
+
 	subDualWatchOff = 0xC0 // 07 C0
 	subDualWatchOn  = 0xC1 // 07 C1
 	subDualWatch    = 0xC2 // 07 C2, read/set, 00 off 01 on

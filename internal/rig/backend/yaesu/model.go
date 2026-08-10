@@ -90,6 +90,19 @@ type Model struct {
 	// RFGain is true when RG reads and sets the receiver RF gain, 000-255.
 	RFGain bool
 
+	// The noise processing, the notches and the antenna. NoiseBlanker covers
+	// NB and its NL level together, NoiseReduction covers NR and RL, Notch is
+	// BP (which carries both the switch and the position) and AutoNotch is BC.
+	//
+	// Antennas is AN's socket count, and it is NOT family-wide: the FTdx101
+	// generation has "AN ANTENNA NUMBER" with three sockets, and the FT-891's
+	// command list has no AN row at all.
+	NoiseBlanker   bool
+	NoiseReduction bool
+	Notch          bool
+	AutoNotch      bool
+	Antennas       int
+
 	// Modes are the operating modes this radio accepts, in display order.
 	Modes []radio.Mode
 	// Codes is this model's whole MD table, keyed by the mode character. The
@@ -272,7 +285,14 @@ func modern(name, label string, id int) Model {
 		Attenuator: []int{6, 12, 18},
 		RFGain:     true,
 		AGC:        agcYaesu(),
-		MinHz:      30_000,
+		// The noise and notch group, which every profiled model has: NB with
+		// NL, NR with RL, BP for the manual notch and BC for the automatic one.
+		// The antenna is per model and set in the registry below.
+		NoiseBlanker:   true,
+		NoiseReduction: true,
+		Notch:          true,
+		AutoNotch:      true,
+		MinHz:          30_000,
 		MaxHz:      75_000_000,
 	}
 }
@@ -342,7 +362,14 @@ func older(name, label string, ids ...int) Model {
 		Attenuator: []int{6, 12, 18},
 		RFGain:     true,
 		AGC:        agcYaesu(),
-		MinHz:      30_000,
+		// The noise and notch group, which every profiled model has: NB with
+		// NL, NR with RL, BP for the manual notch and BC for the automatic one.
+		// The antenna is per model and set in the registry below.
+		NoiseBlanker:   true,
+		NoiseReduction: true,
+		Notch:          true,
+		AutoNotch:      true,
+		MinHz:          30_000,
 		MaxHz:      56_000_000,
 	}
 }
@@ -440,11 +467,19 @@ var models = map[string]Model{
 	// sharing a bus address they are distinguishable at runtime: 0681 and 0682.
 	// Both have a real sub receiver, reached with the 1 selector on MD, SM, SH
 	// and NA; remoses addresses MAIN only and reports SubReceiver false.
-	"ftdx101d": modern("ftdx101d", "Yaesu FTdx101D", 681),
+	// They are also the only Yaesus here with an antenna selector on the bus:
+	// "AN ANTENNA NUMBER", three sockets. No other command list read for this
+	// backend has an AN row, the FTdx9000's included.
+	"ftdx101d": func() Model {
+		m := modern("ftdx101d", "Yaesu FTdx101D", 681)
+		m.Antennas = 3
+		return m
+	}(),
 
 	"ftdx101mp": func() Model {
 		m := modern("ftdx101mp", "Yaesu FTdx101MP", 682)
 		m.MaxPowerW = 200
+		m.Antennas = 3
 		return m
 	}(),
 

@@ -251,6 +251,53 @@ type PreselectController interface {
 	SetDigiSelShift(ctx context.Context, c Conn, pct float64) error
 }
 
+// NoiseController is implemented by a backend that can work the receiver's
+// noise processing and its notch filters.
+//
+// The two blankers and the two notches travel together because they are the
+// same panel and the same job — getting an unwanted signal out of the passband
+// — but each method may refuse individually with ErrUnsupported. Caps says what
+// a radio has: NoiseBlankerLevels, NoiseReductionLevels, NotchControl,
+// NotchFreqControl, NotchWidths and AutoNotchControl.
+//
+// SetNotch and SetAutoNotch are separate entry points even though one family
+// spells them as a single selector, because on the other two they are
+// genuinely independent and can both be on. A backend whose radio cannot hold
+// both says so with Caps.NotchExclusive, and the session refuses the
+// combination rather than each backend inventing a resolution.
+type NoiseController interface {
+	// SetNoiseBlanker selects blanker 0 (off) to Caps.NoiseBlankerLevels.
+	SetNoiseBlanker(ctx context.Context, c Conn, level int) error
+	// SetNBLevel sets the blanker's threshold, 0-100%.
+	SetNBLevel(ctx context.Context, c Conn, pct float64) error
+	// SetNoiseReduction selects reducer 0 (off) to Caps.NoiseReductionLevels.
+	SetNoiseReduction(ctx context.Context, c Conn, level int) error
+	// SetNRLevel sets the reducer's strength, 0-100%.
+	SetNRLevel(ctx context.Context, c Conn, pct float64) error
+
+	// SetNotch switches the manual notch, SetNotchFreq parks it (0-100% of the
+	// radio's own range) and SetNotchWidth chooses how wide it bites.
+	SetNotch(ctx context.Context, c Conn, on bool) error
+	SetNotchFreq(ctx context.Context, c Conn, pct float64) error
+	SetNotchWidth(ctx context.Context, c Conn, w radio.NotchWidth) error
+	// SetAutoNotch switches the automatic notch.
+	SetAutoNotch(ctx context.Context, c Conn, on bool) error
+}
+
+// AntennaSelector is implemented by a backend that can choose which antenna
+// socket the radio is using.
+//
+// No Icom implements it, and that is a statement about those radios rather
+// than a gap here: they keep the antenna as a per-band MEMORY in the Set menu
+// instead of offering a live selector, so switching would mean writing a stored
+// setting. See radio.State.Antenna.
+type AntennaSelector interface {
+	// SetAntenna selects a socket, counting from 1 to Caps.Antennas.
+	SetAntenna(ctx context.Context, c Conn, n int) error
+	// SetRXAntenna switches the separate receive-only input in or out.
+	SetRXAntenna(ctx context.Context, c Conn, on bool) error
+}
+
 // BreakInController is implemented by a backend that can read and set the CW
 // break-in setting.
 //

@@ -284,6 +284,20 @@ func (y *Rig) Caps() radio.Caps {
 		AttenuatorDB:  append([]int(nil), y.profile.Attenuator...),
 		RFGainControl: y.profile.RFGain,
 		AGCSettings:   agcSettings(y.profile.AGC),
+
+		// The noise processing and the notches. One blanker and one reducer,
+		// and the two notches are separate commands — BP and BC — so they can
+		// both be on and NotchExclusive stays false.
+		NoiseBlankerLevels:   boolCount(y.profile.NoiseBlanker),
+		NBLevelControl:       y.profile.NoiseBlanker,
+		NoiseReductionLevels: boolCount(y.profile.NoiseReduction),
+		NRLevelControl:       y.profile.NoiseReduction,
+		NotchControl:         y.profile.Notch,
+		NotchFreqControl:     y.profile.Notch,
+		AutoNotchControl:     y.profile.AutoNotch,
+		// No notch width and no receive antenna: neither has a row in any
+		// command list read for this backend.
+		Antennas: y.profile.Antennas,
 		PowerWattAccurate: !y.profile.PowerRaw,
 		MaxPowerW:         float64(y.maxPowerW()),
 
@@ -468,8 +482,10 @@ func (y *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 		reads = append(reads, read{reqNA, keyNA})
 	}
 	// The receive front end: preamp, attenuator, RF gain and AGC, none of which
-	// moves except when somebody moves it.
+	// moves except when somebody moves it. Then the noise processing, the
+	// notches and the antenna, on the same tier.
 	reads = append(reads, y.frontEndReads()...)
+	reads = append(reads, y.noiseReads()...)
 	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err

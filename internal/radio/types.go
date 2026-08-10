@@ -398,6 +398,16 @@ func (a AGC) Auto() bool {
 	return a == AGCAuto || a == AGCAutoFast || a == AGCAutoMid || a == AGCAutoSlow
 }
 
+// NotchWidth is how wide the manual notch bites.
+type NotchWidth string
+
+const (
+	NotchWidthUnknown NotchWidth = ""
+	NotchWidthWide    NotchWidth = "wide"
+	NotchWidthMid     NotchWidth = "mid"
+	NotchWidthNarrow  NotchWidth = "narrow"
+)
+
 // CWStatus describes the CW sending queue.
 type CWStatus struct {
 	Busy           bool `json:"busy"`
@@ -512,6 +522,48 @@ type State struct {
 	DigiSel      *bool    `json:"digi_sel,omitempty"`
 	DigiSelShift *float64 `json:"digi_sel_shift,omitempty"`
 
+	// The noise processing, and both of these are COUNTS rather than switches
+	// because the radios really do have more than one circuit. A TS-590's NB
+	// takes NB1 and NB2, its NR takes NR1 and NR2, and they are different
+	// algorithms rather than two strengths of one: NR1 is a noise reducer and
+	// NR2 is SPAC, whose level parameter is a following speed in milliseconds.
+	// 0 is off, 1..Caps.NoiseBlankerLevels / NoiseReductionLevels select one.
+	//
+	// The levels are percentages for the same reason RFGain is: the counts
+	// underneath are 0-255 on Icom, 1-10 on a Kenwood blanker, 1-15 on a Yaesu
+	// noise reducer, and no client can draw a number that means three things.
+	NoiseBlanker   *int     `json:"noise_blanker,omitempty"`
+	NBLevel        *float64 `json:"nb_level,omitempty"`
+	NoiseReduction *int     `json:"noise_reduction,omitempty"`
+	NRLevel        *float64 `json:"nr_level,omitempty"`
+
+	// The notch filters. Two of them, and they are separate fields because on
+	// two of the three families they are separate controls that can both be on.
+	//
+	// Notch is the manual one, which the operator parks on a carrier;
+	// NotchFreq is where it sits, 0-100% of the radio's own range, because the
+	// underlying counts are 0-255 on Icom, 0-127 on Kenwood and an actual
+	// frequency on Yaesu. NotchWidth is how wide it bites, where the radio can
+	// say. AutoNotch is the automatic one, which hunts for tones by itself.
+	//
+	// A Kenwood cannot have both: its NT is one selector with off, auto and
+	// manual, so asking for both is refused there and accepted elsewhere.
+	Notch      *bool      `json:"notch,omitempty"`
+	NotchFreq  *float64   `json:"notch_freq,omitempty"`
+	NotchWidth NotchWidth `json:"notch_width,omitempty"`
+	AutoNotch  *bool      `json:"auto_notch,omitempty"`
+
+	// Antenna is which socket is selected, counting from 1, and RXAntenna is
+	// the separate receive-only input where a radio has one.
+	//
+	// Absent on every Icom here, and that is not an omission: those radios have
+	// no live antenna selector on the bus. The antenna is a per-band MEMORY —
+	// an IC-7610 keeps one entry per band range in its Set menu — so switching
+	// it would mean writing a stored setting rather than throwing a switch, and
+	// remoses does not write band memories.
+	Antenna   *int  `json:"antenna,omitempty"`
+	RXAntenna *bool `json:"rx_antenna,omitempty"`
+
 	// Tuner is the internal antenna tuner: off, on, or a tuning cycle in
 	// progress. Absent on a radio that has none or that remoses cannot ask.
 	Tuner Tuner `json:"tuner,omitempty"`
@@ -615,6 +667,18 @@ type Patch struct {
 	DigiSel      *bool
 	DigiSelShift *float64
 
+	// The noise processing and the notches.
+	NoiseBlanker   *int
+	NBLevel        *float64
+	NoiseReduction *int
+	NRLevel        *float64
+	Notch          *bool
+	NotchFreq      *float64
+	NotchWidth     *NotchWidth
+	AutoNotch      *bool
+	Antenna        *int
+	RXAntenna      *bool
+
 	// The dual-VFO fields. VFOA and VFOB are whole-VFO replacements rather than
 	// per-field pointers: the IC-7610's command 26 answers mode, data mode and
 	// filter together and command 25 answers a frequency, so a decoder always
@@ -640,6 +704,10 @@ func (p Patch) Empty() bool {
 		p.Preamp == nil && p.AttenuatorDB == nil && p.RFGain == nil &&
 		p.AGC == nil && p.IPPlus == nil && p.DigiSel == nil &&
 		p.DigiSelShift == nil &&
+		p.NoiseBlanker == nil && p.NBLevel == nil &&
+		p.NoiseReduction == nil && p.NRLevel == nil &&
+		p.Notch == nil && p.NotchFreq == nil && p.NotchWidth == nil &&
+		p.AutoNotch == nil && p.Antenna == nil && p.RXAntenna == nil &&
 		p.VFO == nil && p.VFOA == nil && p.VFOB == nil &&
 		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil &&
 		p.BreakIn == nil
@@ -719,6 +787,47 @@ func (s State) Apply(p Patch) State {
 	if p.DigiSelShift != nil {
 		v := *p.DigiSelShift
 		s.DigiSelShift = &v
+	}
+	// The noise processing and the notches, copied by value for the same
+	// reason the front end is.
+	if p.NoiseBlanker != nil {
+		v := *p.NoiseBlanker
+		s.NoiseBlanker = &v
+	}
+	if p.NBLevel != nil {
+		v := *p.NBLevel
+		s.NBLevel = &v
+	}
+	if p.NoiseReduction != nil {
+		v := *p.NoiseReduction
+		s.NoiseReduction = &v
+	}
+	if p.NRLevel != nil {
+		v := *p.NRLevel
+		s.NRLevel = &v
+	}
+	if p.Notch != nil {
+		v := *p.Notch
+		s.Notch = &v
+	}
+	if p.NotchFreq != nil {
+		v := *p.NotchFreq
+		s.NotchFreq = &v
+	}
+	if p.NotchWidth != nil {
+		s.NotchWidth = *p.NotchWidth
+	}
+	if p.AutoNotch != nil {
+		v := *p.AutoNotch
+		s.AutoNotch = &v
+	}
+	if p.Antenna != nil {
+		v := *p.Antenna
+		s.Antenna = &v
+	}
+	if p.RXAntenna != nil {
+		v := *p.RXAntenna
+		s.RXAntenna = &v
 	}
 	if p.CWBusy != nil {
 		s.CW.Busy = *p.CWBusy
@@ -874,6 +983,36 @@ func (s State) Diff(next State) Patch {
 	if !samePtr(s.DigiSelShift, next.DigiSelShift) {
 		p.DigiSelShift = next.DigiSelShift
 	}
+	if !samePtr(s.NoiseBlanker, next.NoiseBlanker) {
+		p.NoiseBlanker = next.NoiseBlanker
+	}
+	if !samePtr(s.NBLevel, next.NBLevel) {
+		p.NBLevel = next.NBLevel
+	}
+	if !samePtr(s.NoiseReduction, next.NoiseReduction) {
+		p.NoiseReduction = next.NoiseReduction
+	}
+	if !samePtr(s.NRLevel, next.NRLevel) {
+		p.NRLevel = next.NRLevel
+	}
+	if !samePtr(s.Notch, next.Notch) {
+		p.Notch = next.Notch
+	}
+	if !samePtr(s.NotchFreq, next.NotchFreq) {
+		p.NotchFreq = next.NotchFreq
+	}
+	if s.NotchWidth != next.NotchWidth {
+		p.NotchWidth = &next.NotchWidth
+	}
+	if !samePtr(s.AutoNotch, next.AutoNotch) {
+		p.AutoNotch = next.AutoNotch
+	}
+	if !samePtr(s.Antenna, next.Antenna) {
+		p.Antenna = next.Antenna
+	}
+	if !samePtr(s.RXAntenna, next.RXAntenna) {
+		p.RXAntenna = next.RXAntenna
+	}
 	if s.Connected != next.Connected {
 		p.Connected = &next.Connected
 	}
@@ -1008,6 +1147,37 @@ type Caps struct {
 	DigiSelControl      bool `json:"digi_sel_control"`
 	DigiSelShiftControl bool `json:"digi_sel_shift_control"`
 
+	// The noise processing. Both are counts of CIRCUITS, not switches: 0 where
+	// remoses cannot work it, 1 for a plain on/off, 2 on a Kenwood, whose NB1
+	// and NB2 (and NR1 and NR2) are different algorithms rather than two
+	// strengths of one. A client offers 0..n.
+	NoiseBlankerLevels   int  `json:"noise_blanker_levels"`
+	NBLevelControl       bool `json:"nb_level_control"`
+	NoiseReductionLevels int  `json:"noise_reduction_levels"`
+	NRLevelControl       bool `json:"nr_level_control"`
+
+	// The notches. NotchControl is the manual one and AutoNotchControl the
+	// automatic; NotchFreqControl says the manual one can be moved, and
+	// NotchWidths lists the widths where the radio has any.
+	//
+	// NotchExclusive is the one that changes what a client may ask for: on a
+	// Kenwood the two notches are a single selector — off, auto or manual — so
+	// they cannot both be on, and a request for both is refused. False on Icom
+	// and Yaesu, where they are independent commands.
+	NotchControl     bool         `json:"notch_control"`
+	NotchFreqControl bool         `json:"notch_freq_control"`
+	NotchWidths      []NotchWidth `json:"notch_widths,omitempty"`
+	AutoNotchControl bool         `json:"auto_notch_control"`
+	NotchExclusive   bool         `json:"notch_exclusive"`
+
+	// Antennas is how many antenna sockets remoses can select between, 0 where
+	// it cannot. RXAntennaControl is the separate receive-only input.
+	//
+	// Zero on every Icom here, and deliberately: those radios keep the antenna
+	// as a per-band memory rather than a live selector. See State.Antenna.
+	Antennas         int  `json:"antennas"`
+	RXAntennaControl bool `json:"rx_antenna_control"`
+
 	// SubReceiver is a second receiver that can be listened to at the same
 	// time as the first — the IC-7610's dual watch. It is not "the radio has
 	// two VFOs", which nearly every radio here does: it is "both can be
@@ -1102,6 +1272,16 @@ func (c Caps) SupportsAttenuation(db int) bool {
 
 // AGCControl reports whether remoses can work this radio's AGC.
 func (c Caps) AGCControl() bool { return len(c.AGCSettings) > 0 }
+
+// SupportsNotchWidth reports whether w is a width this radio accepts.
+func (c Caps) SupportsNotchWidth(w NotchWidth) bool {
+	for _, x := range c.NotchWidths {
+		if x == w {
+			return true
+		}
+	}
+	return false
+}
 
 // SupportsAGC reports whether v is a speed this radio accepts being set to.
 func (c Caps) SupportsAGC(v AGC) bool {

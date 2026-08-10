@@ -41,6 +41,14 @@ const (
 	keyRG backend.Key = "RG"
 	keyGC backend.Key = "GC"
 	keyGT backend.Key = "GT"
+	// The noise processing, the notches and the antenna.
+	keyNB backend.Key = "NB"
+	keyNL backend.Key = "NL"
+	keyNR backend.Key = "NR"
+	keyRL backend.Key = "RL"
+	keyNT backend.Key = "NT"
+	keyBP backend.Key = "BP"
+	keyAN backend.Key = "AN"
 	keyTX backend.Key = "TX"
 	keyRX backend.Key = "RX"
 )
@@ -383,6 +391,45 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 	case keyRG:
 		u.Key = keyRG
 		k.decodeRG(&u, arg)
+	// The noise processing, the notches and the antenna. Each sets its key
+	// before parsing, for the reason the front end does: an answer this
+	// backend cannot read must still complete the request it belongs to.
+	case keyNB:
+		u.Key = keyNB
+		if k.profile.NoiseBlanker > 0 {
+			k.decodeNB(&u, arg)
+		}
+	case keyNL:
+		u.Key = keyNL
+		if k.profile.NBLevel {
+			k.decodeNL(&u, arg)
+		}
+	case keyNR:
+		u.Key = keyNR
+		if k.profile.NoiseReduction > 0 {
+			k.decodeNR(&u, arg)
+		}
+	case keyRL:
+		u.Key = keyRL
+		if k.profile.NRLevel {
+			k.decodeRL(&u, arg)
+		}
+	case keyNT:
+		u.Key = keyNT
+		if k.profile.Notch {
+			k.decodeNT(&u, arg)
+		}
+	case keyBP:
+		u.Key = keyBP
+		if k.profile.NotchFreq {
+			k.decodeBP(&u, arg)
+		}
+	case keyAN:
+		u.Key = keyAN
+		if k.profile.Antennas > 0 {
+			k.decodeAN(&u, arg)
+		}
+
 	case keyGC, keyGT:
 		// Only the command this model actually keeps its AGC on. A TS-480's
 		// GT answer is the AGC; a TS-590's is a time constant, and reading that

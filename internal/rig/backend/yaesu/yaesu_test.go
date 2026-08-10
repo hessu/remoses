@@ -271,17 +271,26 @@ func TestPollSlow(t *testing.T) {
 		// PA0;, RA0;, RG0; and GT0; are the receive front end, read on every
 		// slow poll whatever the mode. Unlike Kenwood's, Yaesu's AGC command
 		// carries no note about FM, so it is read there too.
+		// After the front end: the blanker and its level, the reducer and its
+		// level, BOTH halves of BP — the switch as BP00; and the position as
+		// BP01;, which is one command carrying two different things — the
+		// automatic notch, and the antenna.
 		{name: "CW", mode: "MD03", want: []string{"PC;", "AC;", "NA0;",
-			"PA0;", "RA0;", "RG0;", "GT0;", "SH0;"}},
+			"PA0;", "RA0;", "RG0;", "GT0;",
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;", "SH0;"}},
 		{name: "USB", mode: "MD02", want: []string{"PC;", "AC;", "NA0;",
-			"PA0;", "RA0;", "RG0;", "GT0;", "SH0;"}},
+			"PA0;", "RA0;", "RG0;", "GT0;",
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;", "SH0;"}},
 		{name: "USB-DATA", mode: "MD0C", want: []string{"PC;", "AC;", "NA0;",
-			"PA0;", "RA0;", "RG0;", "GT0;", "SH0;"}},
+			"PA0;", "RA0;", "RG0;", "GT0;",
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;", "SH0;"}},
 		// SH has no bandwidth table in AM or FM on any model here.
 		{name: "FM", mode: "MD04", want: []string{"PC;", "AC;", "NA0;",
-			"PA0;", "RA0;", "RG0;", "GT0;"}},
+			"PA0;", "RA0;", "RG0;", "GT0;",
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;"}},
 		{name: "AM", mode: "MD05", want: []string{"PC;", "AC;", "NA0;",
-			"PA0;", "RA0;", "RG0;", "GT0;"}},
+			"PA0;", "RA0;", "RG0;", "GT0;",
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -697,10 +706,11 @@ func TestPollSlowFTdx9000(t *testing.T) {
 		if err := y.Poll(context.Background(), c, backend.PollSlow); err != nil {
 			t.Fatalf("Poll: %v", err)
 		}
-		// No RA0;: the FTdx9000's command list has no attenuator row, where
-		// every other radio here has one. Its preamp, RF gain and AGC are all
-		// present.
-		c.wantSent(t, "PC;", "AC;", "PA0;", "RG0;", "GT0;")
+		// No RA0; and no AN0;: the FTdx9000's command list has neither an
+		// attenuator row nor an antenna one, where the FTdx101 has both. Its
+		// preamp, RF gain, AGC and the whole noise group are present.
+		c.wantSent(t, "PC;", "AC;", "PA0;", "RG0;", "GT0;",
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;")
 	}
 }
 
@@ -930,7 +940,8 @@ func TestBusyIsNotRemembered(t *testing.T) {
 		t.Fatalf("PollSlow after a busy one: %v", err)
 	}
 	c.wantSent(t, "IF;", "TX;", "SM0;", "PC;", "AC;", "NA0;",
-		"PA0;", "RA0;", "RG0;", "GT0;", "SH0;")
+		"PA0;", "RA0;", "RG0;", "GT0;",
+		"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;", "SH0;")
 
 	// Capabilities are untouched too: a busy answer says nothing about what the
 	// radio can do.

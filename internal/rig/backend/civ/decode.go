@@ -56,6 +56,16 @@ const (
 	KeyIPPlus       backend.Key = "16/65"
 	KeyRFGain       backend.Key = "14/02"
 	KeyDigiSelShift backend.Key = "14/13"
+
+	// The noise processing and the notches.
+	KeyNB         backend.Key = "16/22"
+	KeyNR         backend.Key = "16/40"
+	KeyAutoNotch  backend.Key = "16/41"
+	KeyNotch      backend.Key = "16/48"
+	KeyNotchWidth backend.Key = "16/57"
+	KeyNRLevel    backend.Key = "14/06"
+	KeyNotchFreq  backend.Key = "14/0D"
+	KeyNBLevel    backend.Key = "14/12"
 )
 
 // Decode turns one framed message into an Update.
@@ -212,6 +222,41 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 				on := body[1] != 0x00
 				u.Patch.IPPlus = &on
 			}
+		case subNB:
+			if r.model.NoiseBlanker {
+				u.Key = KeyNB
+				n := int(body[1])
+				if n <= 1 {
+					u.Patch.NoiseBlanker = &n
+				}
+			}
+		case subNR:
+			if r.model.NoiseReduction {
+				u.Key = KeyNR
+				n := int(body[1])
+				if n <= 1 {
+					u.Patch.NoiseReduction = &n
+				}
+			}
+		case subAutoNotch:
+			if r.model.AutoNotch {
+				u.Key = KeyAutoNotch
+				on := body[1] != 0x00
+				u.Patch.AutoNotch = &on
+			}
+		case subNotch:
+			if r.model.Notch {
+				u.Key = KeyNotch
+				on := body[1] != 0x00
+				u.Patch.Notch = &on
+			}
+		case subNotchWide:
+			if r.model.NotchWidth {
+				u.Key = KeyNotchWidth
+				if w, ok := notchWidthValue(body[1]); ok {
+					u.Patch.NotchWidth = &w
+				}
+			}
 		}
 		return u, nil
 
@@ -261,6 +306,30 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 				if n, ok := decodeBCD2(body[1:]); ok {
 					pct := float64(n) / levelMax * 100
 					u.Patch.DigiSelShift = &pct
+				}
+			}
+		case subNBLevel:
+			if r.model.NBLevel {
+				u.Key = KeyNBLevel
+				if n, ok := decodeBCD2(body[1:]); ok {
+					pct := float64(n) / levelMax * 100
+					u.Patch.NBLevel = &pct
+				}
+			}
+		case subNRLevel:
+			if r.model.NRLevel {
+				u.Key = KeyNRLevel
+				if n, ok := decodeBCD2(body[1:]); ok {
+					pct := float64(n) / levelMax * 100
+					u.Patch.NRLevel = &pct
+				}
+			}
+		case subNotchFreq:
+			if r.model.NotchFreq {
+				u.Key = KeyNotchFreq
+				if n, ok := decodeBCD2(body[1:]); ok {
+					pct := float64(n) / levelMax * 100
+					u.Patch.NotchFreq = &pct
 				}
 			}
 		}

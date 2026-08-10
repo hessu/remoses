@@ -147,6 +147,19 @@ type Rig struct {
 	// See SetAGC.
 	agc atomic.Value
 
+	// nb, nr and notch hold the last NB, NR and NT selections as ints, and
+	// every one of them changes what the next command may be:
+	//
+	//   - NL is refused while the blanker is off, and RL while the reducer is,
+	//     so the poll has to know before it asks.
+	//   - RL's SCALE depends on which reducer is running: NR1's level is 01-10
+	//     and NR2's is a following speed of 00-09.
+	//   - NT is one selector for two published switches, so turning the manual
+	//     notch off must not cancel an automatic notch that is running.
+	nb    atomic.Value
+	nr    atomic.Value
+	notch atomic.Value
+
 	// transmitting is the last PTT reading, from an IF answer or a TX;/RX;
 	// push. It decides two things: whether an SM answer is the S-meter or the
 	// RF power meter, and whether the fast poll asks for RM at all.
@@ -272,6 +285,22 @@ func (k *Rig) Caps() radio.Caps {
 		AttenuatorDB:  append([]int(nil), k.profile.Attenuator...),
 		RFGainControl: k.profile.RFGainMax > 0,
 		AGCSettings:   agcSettings(k.profile.AGC),
+
+		// The noise processing and the notches. NotchExclusive is the one that
+		// changes what a client may ask for: NT is a single selector, so the
+		// manual and automatic notches cannot both be on here.
+		NoiseBlankerLevels:   k.profile.NoiseBlanker,
+		NBLevelControl:       k.profile.NBLevel,
+		NoiseReductionLevels: k.profile.NoiseReduction,
+		NRLevelControl:       k.profile.NRLevel,
+		NotchControl:         k.profile.Notch,
+		NotchFreqControl:     k.profile.NotchFreq,
+		AutoNotchControl:     k.profile.Notch,
+		NotchExclusive:       k.profile.Notch,
+		// No NotchWidths: NT's answer always carries 0 there, so a width could
+		// be written and never read back. See SetNotchWidth.
+		Antennas:         k.profile.Antennas,
+		RXAntennaControl: k.profile.RXAntenna,
 		// False even on the TS-990S, which has a second receiver: this backend
 		// reads and writes one of them, so claiming otherwise would promise
 		// control it does not implement.
@@ -559,8 +588,10 @@ func (k *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 		reads = append(reads, read{reqDA, keyDA})
 	}
 	// The receive front end: preamp, attenuator, RF gain and AGC, all settings
-	// an operator moves by hand and none of them worth a fast tick.
+	// an operator moves by hand and none of them worth a fast tick. Then the
+	// noise processing, the notches and the antenna, on the same tier.
 	reads = append(reads, k.frontEndReads()...)
+	reads = append(reads, k.noiseReads()...)
 	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err

@@ -44,6 +44,10 @@ func newTestConn(t *testing.T, k *Rig, answers map[string]string) *testConn {
 	for req, answer := range map[string]string{
 		reqPA: "PA10", reqRA: "RA0100", reqRG: "RG200",
 		"GC;": "GC1", "GT;": "GT002",
+		// The noise processing and the notches. NB1 is on, so NL answers; NR is
+		// off, so a test that does not set it will not see RL asked for at all.
+		reqNB: "NB1", reqNL: "NL005", reqNR: "NR0", reqRL: "RL05",
+		reqNT: "NT00", reqBP: "BP064", reqAN: "AN100",
 	} {
 		if _, ok := answers[req]; !ok {
 			answers[req] = answer

@@ -62,6 +62,11 @@ func newTestConn(t *testing.T, y *Rig, answers map[string]string) *testConn {
 	// reading that means plain "auto" — see agcReading.
 	for req, answer := range map[string]string{
 		reqPA: "PA01", reqRA: "RA01", reqRG: "RG0200", reqGT: "GT04",
+		// The noise processing and the notches. Both halves of BP answer with
+		// the same two letters and are told apart by their own P2.
+		reqNB: "NB01", reqNL: "NL0005", reqNR: "NR00", reqRL: "RL008",
+		reqBPSwitch: "BP00001", reqBPFreq: "BP01150",
+		reqBC: "BC00", reqAN: "AN010",
 	} {
 		if _, ok := answers[req]; !ok {
 			answers[req] = answer
