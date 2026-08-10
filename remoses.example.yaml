@@ -4,6 +4,10 @@
 # Unknown keys are a startup error, not a silent default, so a typo here will
 # be reported with its line and column rather than quietly ignored.
 #
+# The same ground in prose, with the radio-specific parts split per
+# manufacturer: docs/configuration.md, and docs/icom.md, docs/kenwood.md,
+# docs/yaesu.md or docs/rigctld.md for the rig in front of you.
+#
 # The two password hashes below are real bcrypt hashes of the password
 # "changeme". Replace them before this goes anywhere near a network:
 #
