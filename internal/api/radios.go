@@ -171,6 +171,22 @@ type statePatchBody struct {
 	// it answers with the state as it was rather than a read-back.
 	PowerSwitch *string `json:"power_switch"`
 
+	// The receive front end. Each needs the matching capability — preamp_levels,
+	// attenuator_db, rf_gain_control, agc_settings, ip_plus_control,
+	// digi_sel_control, digi_sel_shift_control — and a radio without it answers
+	// 422 with what it does have.
+	//
+	// Preamp is 0 for off and 1..preamp_levels; AttenuatorDB is the attenuation
+	// in dB rather than a step index, 0 for switched out; RFGain and
+	// DigiSelShift are percentages.
+	Preamp       *int       `json:"preamp"`
+	AttenuatorDB *int       `json:"attenuator_db"`
+	RFGain       *float64   `json:"rf_gain"`
+	AGC          *radio.AGC `json:"agc"`
+	IPPlus       *bool      `json:"ip_plus"`
+	DigiSel      *bool      `json:"digi_sel"`
+	DigiSelShift *float64   `json:"digi_sel_shift"`
+
 	// Tuner switches the antenna tuner in or out of line: "off" or "on" only.
 	// The state can also read "tuning", but that is not something to ask for.
 	Tuner *radio.Tuner `json:"tuner"`
@@ -205,6 +221,13 @@ func (b statePatchBody) toRequest() (rig.PatchRequest, error) {
 		BreakIn:       b.BreakIn,
 		Tuner:         b.Tuner,
 		TunerTune:     b.TunerTune,
+		Preamp:        b.Preamp,
+		AttenuatorDB:  b.AttenuatorDB,
+		RFGain:        b.RFGain,
+		AGC:           b.AGC,
+		IPPlus:        b.IPPlus,
+		DigiSel:       b.DigiSel,
+		DigiSelShift:  b.DigiSelShift,
 	}
 	if b.VFO != nil {
 		req.VFO = *b.VFO
@@ -247,7 +270,9 @@ func (b statePatchBody) onlyPowerSwitch() bool {
 	return b.Frequency == nil && b.Mode == nil && b.DataMode == nil && b.VFO == nil &&
 		b.PassbandHz == nil && b.FilterSlot == nil && b.PowerW == nil && b.PowerPct == nil &&
 		b.PTT == nil && b.Split == nil && b.DualWatch == nil && b.VFOMode == nil &&
-		b.BreakIn == nil && b.Tuner == nil && b.TunerTune == nil
+		b.BreakIn == nil && b.Tuner == nil && b.TunerTune == nil &&
+		b.Preamp == nil && b.AttenuatorDB == nil && b.RFGain == nil && b.AGC == nil &&
+		b.IPPlus == nil && b.DigiSel == nil && b.DigiSelShift == nil
 }
 
 // auditAttrs names what the request asked for, so the audit line records the
@@ -280,6 +305,30 @@ func (b statePatchBody) auditAttrs() []any {
 	}
 	if b.Tuner != nil {
 		attrs = append(attrs, "tuner", string(*b.Tuner))
+	}
+	// The receive front end. Audited like any other setting, so that "why is
+	// this receiver deaf" has an answer that does not depend on somebody
+	// remembering what they changed.
+	if b.Preamp != nil {
+		attrs = append(attrs, "preamp", *b.Preamp)
+	}
+	if b.AttenuatorDB != nil {
+		attrs = append(attrs, "attenuator_db", *b.AttenuatorDB)
+	}
+	if b.RFGain != nil {
+		attrs = append(attrs, "rf_gain", *b.RFGain)
+	}
+	if b.AGC != nil {
+		attrs = append(attrs, "agc", string(*b.AGC))
+	}
+	if b.IPPlus != nil {
+		attrs = append(attrs, "ip_plus", *b.IPPlus)
+	}
+	if b.DigiSel != nil {
+		attrs = append(attrs, "digi_sel", *b.DigiSel)
+	}
+	if b.DigiSelShift != nil {
+		attrs = append(attrs, "digi_sel_shift", *b.DigiSelShift)
 	}
 	// Audited because it takes a station off the air, and because "why did the
 	// radio switch off at 03:00" is a question a log should answer.

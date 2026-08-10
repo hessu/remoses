@@ -189,5 +189,30 @@ func changedFields(p radio.Patch, st radio.State) map[string]any {
 	if p.Standby != nil {
 		m["standby"] = *p.Standby
 	}
+
+	// The receive front end. Sent as the pointers themselves rather than
+	// dereferenced, so that a control which stops being reported goes out as an
+	// explicit null — the same reason the transmit meters do.
+	if p.Preamp != nil {
+		m["preamp"] = p.Preamp
+	}
+	if p.AttenuatorDB != nil {
+		m["attenuator_db"] = p.AttenuatorDB
+	}
+	if p.RFGain != nil {
+		m["rf_gain"] = p.RFGain
+	}
+	if p.AGC != nil {
+		m["agc"] = *p.AGC
+	}
+	if p.IPPlus != nil {
+		m["ip_plus"] = p.IPPlus
+	}
+	if p.DigiSel != nil {
+		m["digi_sel"] = p.DigiSel
+	}
+	if p.DigiSelShift != nil {
+		m["digi_sel_shift"] = p.DigiSelShift
+	}
 	return m
 }

@@ -711,6 +711,161 @@ func (s *Session) StartTune(ctx context.Context) (radio.State, error) {
 	return s.readback(ctx, backend.PollSlow, backend.PollFast)
 }
 
+// frontEnd reports the backend's receive front-end controls, or nil.
+func (s *Session) frontEnd() backend.FrontEndController {
+	f, _ := s.rig.(backend.FrontEndController)
+	return f
+}
+
+// preselect reports the backend's IP+ and DIGI-SEL controls, or nil.
+func (s *Session) preselect() backend.PreselectController {
+	p, _ := s.rig.(backend.PreselectController)
+	return p
+}
+
+// validateFrontEnd rejects every front-end field the radio cannot honour,
+// before any of them reaches the wire.
+//
+// All of it up front, like the rest of ApplyPatch's validation, so that a patch
+// asking for a preamp the radio has and an attenuator step it does not leaves
+// the receiver as it was rather than half-changed.
+func (s *Session) validateFrontEnd(req PatchRequest, caps radio.Caps) error {
+	if !req.frontEndRequested() {
+		return nil
+	}
+	if req.Preamp != nil || req.AttenuatorDB != nil || req.RFGain != nil || req.AGC != nil {
+		if s.frontEnd() == nil {
+			return fmt.Errorf("radio %s: receive front end: %w", s.id, ErrUnsupported)
+		}
+	}
+	if req.IPPlus != nil || req.DigiSel != nil || req.DigiSelShift != nil {
+		if s.preselect() == nil {
+			return fmt.Errorf("radio %s: preselector: %w", s.id, ErrUnsupported)
+		}
+	}
+	if req.Preamp != nil {
+		if caps.PreampLevels == 0 {
+			return fmt.Errorf("radio %s: preamplifier: %w", s.id, ErrUnsupported)
+		}
+		if *req.Preamp < 0 || *req.Preamp > caps.PreampLevels {
+			return fmt.Errorf("radio %s: preamplifier %d, want 0 to %d: %w",
+				s.id, *req.Preamp, caps.PreampLevels, ErrUnsupported)
+		}
+	}
+	if req.AttenuatorDB != nil {
+		if !caps.AttenuatorControl() {
+			return fmt.Errorf("radio %s: attenuator: %w", s.id, ErrUnsupported)
+		}
+		if !caps.SupportsAttenuation(*req.AttenuatorDB) {
+			return fmt.Errorf("radio %s: no %d dB attenuator setting, only 0 and %v: %w",
+				s.id, *req.AttenuatorDB, caps.AttenuatorDB, ErrUnsupported)
+		}
+	}
+	if req.RFGain != nil {
+		if !caps.RFGainControl {
+			return fmt.Errorf("radio %s: RF gain: %w", s.id, ErrUnsupported)
+		}
+		if err := percentInRange("RF gain", *req.RFGain); err != nil {
+			return fmt.Errorf("radio %s: %w", s.id, err)
+		}
+	}
+	if req.AGC != nil {
+		if !caps.AGCControl() {
+			return fmt.Errorf("radio %s: AGC: %w", s.id, ErrUnsupported)
+		}
+		// Two different mistakes, worth two different messages. Asking for a
+		// speed this radio has not got is one; echoing back an auto-resolved
+		// reading — "auto-mid", which a Yaesu reports and will not accept — is
+		// the other, and a client that reads a state and writes it back will
+		// make exactly that one.
+		if !req.AGC.Settable() {
+			return fmt.Errorf("radio %s: AGC %q is a reading rather than a setting; "+
+				"ask for %q and the radio will choose: %w",
+				s.id, *req.AGC, radio.AGCAuto, ErrUnsupported)
+		}
+		if !caps.SupportsAGC(*req.AGC) {
+			return fmt.Errorf("radio %s: no AGC setting %q, only %v: %w",
+				s.id, *req.AGC, caps.AGCSettings, ErrUnsupported)
+		}
+	}
+	if req.IPPlus != nil && !caps.IPPlusControl {
+		return fmt.Errorf("radio %s: IP+: %w", s.id, ErrUnsupported)
+	}
+	if req.DigiSel != nil && !caps.DigiSelControl {
+		return fmt.Errorf("radio %s: DIGI-SEL preselector: %w", s.id, ErrUnsupported)
+	}
+	if req.DigiSelShift != nil {
+		if !caps.DigiSelShiftControl {
+			return fmt.Errorf("radio %s: DIGI-SEL shift: %w", s.id, ErrUnsupported)
+		}
+		if err := percentInRange("DIGI-SEL shift", *req.DigiSelShift); err != nil {
+			return fmt.Errorf("radio %s: %w", s.id, err)
+		}
+	}
+	return nil
+}
+
+// applyFrontEnd writes the front-end fields a request carries.
+//
+// The order is the signal path: the preamplifier and the attenuator, which sit
+// ahead of the first mixer, then the gain controls behind them. It matters only
+// in one direction — winding an attenuator in before switching a preamplifier
+// off is the quiet way round, and the reverse can put a loud band through a
+// preamplifier for the length of one CAT transaction.
+func (s *Session) applyFrontEnd(ctx context.Context, req PatchRequest) error {
+	if !req.frontEndRequested() {
+		return nil
+	}
+	if req.AttenuatorDB != nil {
+		if err := s.frontEnd().SetAttenuator(ctx, s, *req.AttenuatorDB); err != nil {
+			return err
+		}
+	}
+	if req.Preamp != nil {
+		if err := s.frontEnd().SetPreamp(ctx, s, *req.Preamp); err != nil {
+			return err
+		}
+	}
+	// The preselector goes with the stages it sits among, and its shift after
+	// it: switching DIGI-SEL in and then placing it is the order a client would
+	// write, and the radio keeps the shift either way.
+	if req.IPPlus != nil {
+		if err := s.preselect().SetIPPlus(ctx, s, *req.IPPlus); err != nil {
+			return err
+		}
+	}
+	if req.DigiSel != nil {
+		if err := s.preselect().SetDigiSel(ctx, s, *req.DigiSel); err != nil {
+			return err
+		}
+	}
+	if req.DigiSelShift != nil {
+		if err := s.preselect().SetDigiSelShift(ctx, s, *req.DigiSelShift); err != nil {
+			return err
+		}
+	}
+	if req.AGC != nil {
+		if err := s.frontEnd().SetAGC(ctx, s, *req.AGC); err != nil {
+			return err
+		}
+	}
+	if req.RFGain != nil {
+		if err := s.frontEnd().SetRFGain(ctx, s, *req.RFGain); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// percentInRange is the shared 0-100 check for the front end's two level
+// controls.
+func percentInRange(what string, pct float64) error {
+	if pct < 0 || pct > 100 {
+		return fmt.Errorf("%s %.1f%%, want 0 to 100: %w", what, pct, ErrUnsupported)
+	}
+	return nil
+}
+
 // EnsureCWWillTransmit makes sure Morse queued now would actually reach the
 // air, switching break-in on if configuration allows it.
 //
@@ -946,6 +1101,18 @@ type PatchRequest struct {
 	// thing to do — can never key a transmitter by echoing "tuning" at the
 	// radio it just read it from.
 	TunerTune *bool
+
+	// The receive front end. They belong in a patch rather than in setters of
+	// their own because an operator works them together — preamp off, pad in,
+	// RF gain back — and one request that either applies all of it or none of
+	// it is better than three that can half-succeed.
+	Preamp       *int
+	AttenuatorDB *int
+	RFGain       *float64
+	AGC          *radio.AGC
+	IPPlus       *bool
+	DigiSel      *bool
+	DigiSelShift *float64
 }
 
 // Empty reports whether the request would change nothing.
@@ -953,7 +1120,15 @@ func (r PatchRequest) Empty() bool {
 	return r.Mode == nil && r.DataMode == nil && r.Frequency == nil &&
 		r.FilterSlot == nil && r.FilterWidthHz == nil && r.Power == nil && r.PTT == nil &&
 		r.Split == nil && r.DualWatch == nil && r.VFOMode == nil && r.BreakIn == nil &&
-		r.Tuner == nil && r.TunerTune == nil
+		r.Tuner == nil && r.TunerTune == nil &&
+		r.Preamp == nil && r.AttenuatorDB == nil && r.RFGain == nil &&
+		r.AGC == nil && r.IPPlus == nil && r.DigiSel == nil && r.DigiSelShift == nil
+}
+
+// frontEndRequested reports whether this request touches the receive front end.
+func (r PatchRequest) frontEndRequested() bool {
+	return r.Preamp != nil || r.AttenuatorDB != nil || r.RFGain != nil ||
+		r.AGC != nil || r.IPPlus != nil || r.DigiSel != nil || r.DigiSelShift != nil
 }
 
 // vfoState is the cached state of one named VFO, for filling in the half of a
@@ -1070,6 +1245,9 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	if req.DualWatch != nil && !caps.DualWatch {
 		return s.State(), fmt.Errorf("radio %s: dual watch: %w", s.id, ErrUnsupported)
 	}
+	if err := s.validateFrontEnd(req, caps); err != nil {
+		return s.State(), err
+	}
 	var power radio.PowerSet
 	if req.Power != nil {
 		p, err := s.clampPower(*req.Power)
@@ -1095,7 +1273,8 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	slow := req.Power != nil || req.FilterSlot != nil || req.FilterWidthHz != nil ||
 		req.Split != nil || req.DualWatch != nil || req.namesAVFO() ||
 		req.VFOMode != nil || req.BreakIn != nil ||
-		req.Tuner != nil || req.TunerTune != nil
+		req.Tuner != nil || req.TunerTune != nil ||
+		req.frontEndRequested()
 
 	// First of everything: a radio on a memory channel refuses several of the
 	// commands below, so a request that says "get back on a VFO and tune there"
@@ -1180,6 +1359,12 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		if err := s.rig.SetPower(ctx, s, power); err != nil {
 			return s.State(), err
 		}
+	}
+	// The receive front end, in the order an operator would work it: gain
+	// stages first, then the gain controls behind them. Nothing here keys the
+	// transmitter, so all of it goes before PTT.
+	if err := s.applyFrontEnd(ctx, req); err != nil {
+		return s.State(), err
 	}
 	// Break-in before PTT and before anything that might key: a request that
 	// turns break-in on and then sends is the ordinary way to make CW audible,

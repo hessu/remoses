@@ -2235,6 +2235,144 @@ than no number, and the rig's own PTT is the only signal that distinguishes them
 
 ---
 
+## 11.7 The receive front end
+
+Six controls on the way in: the preamplifier, the attenuator, the RF gain, the AGC, and — on
+Icom — IP+ and the DIGI-SEL preselector with its shift. They are grouped because an operator
+works them together, and they are split across two backend interfaces because four of them are
+universal and two belong to one manufacturer:
+
+- `backend.FrontEndController` — `SetPreamp`, `SetAttenuator`, `SetRFGain`, `SetAGC`.
+- `backend.PreselectController` — `SetIPPlus`, `SetDigiSel`, `SetDigiSelShift`.
+
+Neither has a read half. All six are ordinary polled values that arrive as patches from the slow
+tier, so the session never asks a backend for one.
+
+### Why the attenuator is in dB and the preamp is a count
+
+Two different answers to the same shape of question, and each follows what the radios document.
+
+**The attenuator carries a dB figure**, because the references print one and because the ladders
+are not the same set twice: an IC-7610 steps 3 dB at a time to 45, an IC-7850 to 21, an IC-7600
+and IC-7700 have 6/12/18, a TS-890S and TS-990S have 6/12/18, and everything smaller has a single
+fixed pad. A step index would be a number whose meaning changed with the model — exactly the
+mistake `Caps.AttenuatorDB` exists to avoid.
+
+Where a radio's CAT reference documents only ON and OFF — the TS-480, TS-590, FT-891, FT-991A and
+FTX-1 — the dB in the table is that radio's published receiver specification rather than something
+the command table states. It is a **label on one switch**: the byte on the wire is the same either
+way, so a wrong figure mislabels a control rather than mis-setting one. That is recorded in the
+model comments so nobody later mistakes it for transcription.
+
+**The preamplifier carries a count of amplifiers**, not of command values, and the IC-9700 is why.
+Its `16 02` runs `00` to `03`, but those are the internal preamp and an external one in
+combination — `02` is "internal off, external on". Reading that as a ladder would tell a client
+that `03` is more gain than `02`. So the IC-9700 reports one preamplifier, and `02` and `03` are
+left to the front panel.
+
+### One opcode, five spellings
+
+Command `16 12` is the worst case this backend has met. Every model in the table means something
+different by the same byte:
+
+| Radio | `16 12` |
+|---|---|
+| IC-7610, IC-7760, IC-7300, IC-9700, IC-905, IC-9100 | `01` FAST, `02` MID, `03` SLOW |
+| IC-7600 | `00` FAST, `01` MID, `02` SLOW |
+| IC-7700 | `00` **OFF**, `01` FAST, `02` MID, `03` SLOW |
+| IC-703 | `1` fast, `2` slow |
+| IC-910H | `0` slow, `1` fast |
+
+There is no style enum that covers those, so `Model.AGC` is a `map[radio.AGC]byte` and each model
+writes its own. One byte out sets a different speed and looks exactly like a success — the failure
+mode this document keeps returning to.
+
+Kenwood is nearly as bad in a different way: the AGC **moved commands**. A TS-480 keeps the speed
+on `GT`; every radio since keeps a *time constant* there and puts the speed on `GC`. And the
+family refuses the command in FM outright — "an error sounds", at the radio — so remoses does not
+poll it there. A TS-480 goes further and answers three spaces rather than refusing, which decodes
+as "no reading" rather than as a frame to complain about.
+
+Yaesu's `GT` is uniform across models but **does not round-trip**: it accepts `0`–`4` where `4` is
+AUTO, and answers `0`–`6` where `4`, `5` and `6` are auto having settled on fast, mid or slow. So
+`radio.AGC` carries three read-only values (`auto-fast`, `auto-mid`, `auto-slow`), `AGC.Settable`
+excludes them, and a client that echoes one back gets a 422 that names `auto` instead. Flattening
+them into `auto` would discard the only report of what the AGC is actually doing.
+
+### An answer that cannot be decoded must still complete the read
+
+Every front-end decoder sets its `Key` **before** it looks at the value. A reading outside what a
+model documents then resolves the pending request and publishes nothing.
+
+This is not tidiness. An unmatched reply leaves the read to time out; the failures accumulate; and
+the session eventually tears down a link to a radio that is answering perfectly well. The IC-910H
+is the concrete case — its own table lists `10`, `20` and `30` for what its specification calls a
+single pad, so a reading of `10` is entirely possible against a profile offering `20`. Under the
+old rule that would have been a dropped connection; under this one it is a missing value.
+
+### Switching the AGC off is a one-way trip
+
+Found on a TS-590S, and the sharpest thing in this section. **With the AGC off, `GC1` and `GC2`
+are both refused and the radio stays off.** A client that switched the AGC off could never switch
+it back, and would be told only "command rejected" — the state would sit on `off` for ever with
+every attempt to leave it failing.
+
+The reference documents the parameter that gets back out — "3: AGC Off → On (AGC returns to its
+Slow/Fast status before turning Off)", "used only for turning AGC On" — and it reads as one option
+among four. What it does not say anywhere is that the other two are REFUSED while the AGC is off,
+which is the part that makes 3 not an option but the only door. That half came from the radio.
+
+`Model.AGCOnCode` carries it — 3 on the TS-590, 4 on the TS-890S and TS-990S, where the extra
+speed pushes it up — and `SetAGC` sends it first when a speed is asked for while the last reading
+was `off`. Its own answer is not read: the speed that follows is what the caller asked for, and
+reading the intermediate state would report a value nobody requested.
+
+The TS-890S and TS-990S values are transcribed, not tested. Their references describe the
+parameter the same way and neither radio has been on the bench, so whether they share the TS-590's
+refusal is unknown — if they do not, sending the extra command from `off` is harmless.
+
+It is sent only from `off`. The reference says a 3 while the AGC is on does nothing, but a command
+that does nothing is still a command, and this one would otherwise go out on every set.
+
+The TS-480 gets none of this: its AGC is `GT` with three values and no fourth documented. That may
+mean it takes a speed directly from off, or it may have the same trap with no way out — nothing
+here can tell, and inventing a parameter to send blind is not how it gets settled.
+
+### Two interlocks in no manual
+
+Verified on an IC-9700: **the AGC cannot be set in FM.** All three speeds go in under USB and
+every one of them draws an NG in FM — while a read still answers `fast`, so the state looks
+perfectly healthy and only the refusal says anything is different.
+
+Kenwood documents this restriction for its own AGC commands; none of the Icom references here
+mentions it. So on Icom it is reported from what the radio did rather than guarded before the
+write: the command still goes out, and a model that turns out to allow it is not fenced off on
+the strength of one radio. The reason is appended to the rig's own rejection, which otherwise
+says only "command rejected".
+
+The read is left in the poll for the same reason it is safe to: FM answers it. That is the
+difference from Kenwood, where the equivalent read draws an audible error tone at the radio and
+is skipped in FM entirely.
+
+### An interlock in no manual
+
+Verified on an IC-7610: **with DIGI-SEL engaged, the radio refuses to switch a preamplifier in.**
+`16 02 01` and `16 02 02` draw a bare NG while `16 02 00` is accepted and the read works
+throughout, so nothing in the exchange says why. With DIGI-SEL off, both preamplifiers select
+immediately.
+
+The radio enforces it from the other side too: switching DIGI-SEL **in** while a preamplifier is
+selected switches that preamplifier **out** by itself, which the next poll reports as `preamp: 0`.
+So the two really are mutually exclusive on this radio, and a client that shows both controls
+should expect one to move when the other is touched.
+
+`Rig.digiSel` holds the last `16 4E` reading for one purpose: to add that explanation to the
+refusal. remoses does **not** switch the preselector off to make the request succeed — that would
+be changing a second control the operator did not ask about, on a receiver they are listening to.
+The hint is appended to the radio's own error rather than replacing it.
+
+---
+
 ## 12. Safety interlocks
 
 This API keys a transmitter over a network, so interlocks are part of the design rather than

@@ -159,6 +159,25 @@ type significant struct {
 	ptt        bool
 	tuner      radio.Tuner
 	cw         radio.CWStatus
+
+	// The receive front end. Flattened out of the pointers State holds them in,
+	// because this type is compared with == and pointers would compare by
+	// address — and each carries its own presence flag, since "this radio has
+	// no preamplifier" and "the preamplifier is off" are both worth drawing and
+	// are not the same thing.
+	havePreamp   bool
+	preamp       int
+	haveAtt      bool
+	attDB        int
+	haveRFGain   bool
+	rfGain       float64
+	agc          radio.AGC
+	haveIPPlus   bool
+	ipPlus       bool
+	haveDigiSel  bool
+	digiSel      bool
+	haveDSShift  bool
+	digiSelShift float64
 }
 
 func (v *view) significant() significant {
@@ -179,6 +198,25 @@ func (v *view) significant() significant {
 	}
 	if w := v.st.Power.Watts; w != nil {
 		s.powerW, s.havePowerW = *w, true
+	}
+	s.agc = v.st.AGC
+	if p := v.st.Preamp; p != nil {
+		s.preamp, s.havePreamp = *p, true
+	}
+	if a := v.st.AttenuatorDB; a != nil {
+		s.attDB, s.haveAtt = *a, true
+	}
+	if g := v.st.RFGain; g != nil {
+		s.rfGain, s.haveRFGain = *g, true
+	}
+	if p := v.st.IPPlus; p != nil {
+		s.ipPlus, s.haveIPPlus = *p, true
+	}
+	if d := v.st.DigiSel; d != nil {
+		s.digiSel, s.haveDigiSel = *d, true
+	}
+	if d := v.st.DigiSelShift; d != nil {
+		s.digiSelShift, s.haveDSShift = *d, true
 	}
 	return s
 }
@@ -354,6 +392,51 @@ func formatTuner(t radio.Tuner) string {
 		return ">> TUNING <<"
 	}
 	return string(t)
+}
+
+// frontEndLine renders the receive front end as one row, or "" on a radio that
+// reports none of it.
+//
+// One row rather than six, because these are read together and take one glance:
+// what the signal meets on its way in, left to right in that order. Each part
+// appears only where the radio reports it, so an FT-891 shows a preamp and a
+// pad and no IP+, and an IC-706 shows two of the six.
+//
+// The preamp is spelled "off" rather than "0" and the attenuator "0 dB" rather
+// than "off", because that is how the front panels label them: a preamplifier
+// is in or out, an attenuator has a depth.
+func frontEndLine(st radio.State) string {
+	var parts []string
+	if p := st.Preamp; p != nil {
+		if *p == 0 {
+			parts = append(parts, "pre off")
+		} else {
+			parts = append(parts, fmt.Sprintf("pre %d", *p))
+		}
+	}
+	if a := st.AttenuatorDB; a != nil {
+		parts = append(parts, fmt.Sprintf("att %d dB", *a))
+	}
+	if g := st.RFGain; g != nil {
+		parts = append(parts, fmt.Sprintf("rf %.0f%%", *g))
+	}
+	if st.AGC != radio.AGCUnknown {
+		parts = append(parts, "agc "+string(st.AGC))
+	}
+	// The two Icom extras, named only when they are on: a client showing
+	// "ip+ off" on every radio that has one would spend a column on a control
+	// nobody has touched.
+	if p := st.IPPlus; p != nil && *p {
+		parts = append(parts, "ip+")
+	}
+	if d := st.DigiSel; d != nil && *d {
+		s := "digi-sel"
+		if v := st.DigiSelShift; v != nil {
+			s += fmt.Sprintf(" %.0f%%", *v)
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, "   ")
 }
 
 // formatCW renders the Morse queue.

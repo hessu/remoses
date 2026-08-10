@@ -659,6 +659,75 @@ components:
             `on`, one that fails ends on `off`. That is observed behaviour
             rather than something its reference promises, and it has not been
             checked on other families.
+        preamp:
+          type: integer
+          description: |
+            The receive preamplifier: 0 for off, 1 to `caps.preamp_levels` for
+            the amplifiers in the order the radio numbers them. On a set with
+            two, 1 is the quieter and 2 the higher gain. Yaesu calls off "IPO".
+
+            Absent on a radio with no preamplifier command — which is not the
+            same as one with no preamplifier. An IC-910H's are external units
+            with their own controllers and nothing on the bus to switch them.
+        attenuator_db:
+          type: integer
+          description: |
+            The attenuation in line, in dB, 0 for switched out.
+
+            A dB figure rather than a step index, because the steps are not the
+            same set twice: an IC-7610 has 3 dB steps to 45, an IC-7600 has 6,
+            12 and 18, and most radios have a single fixed pad.
+            `caps.attenuator_db` lists what this one accepts.
+
+            Where a radio's CAT reference documents only on and off, the dB
+            figure is that radio's published receiver specification rather than
+            something the command table states — it is a label on one switch,
+            not a value remoses can set independently.
+        rf_gain:
+          type: number
+          description: |
+            The receiver's RF gain, 0-100%.
+
+            A percentage rather than the radio's own count, because the counts
+            differ: a TS-480 reads 0-100 for the same knob a TS-590 reads
+            0-255, and a number that means a different thing on two radios of
+            one make is a number a client cannot draw.
+        agc:
+          type: string
+          enum: [off, fast, mid, slow, auto, auto-fast, auto-mid, auto-slow]
+          description: |
+            The AGC speed. `caps.agc_settings` lists what this radio accepts,
+            and the set really does differ between models of one make: a TS-590
+            has slow and fast and no middle, a TS-890 has all three, and Icom's
+            command has no off at all.
+
+            The three `auto-*` values are READINGS ONLY, and only Yaesu reports
+            them. That radio accepts `auto` and answers with the speed auto
+            chose, so a client that sets `auto` and reads `auto-mid` has not
+            failed to set anything. Sending one back is refused with 422 — ask
+            for `auto` instead.
+        ip_plus:
+          type: boolean
+          description: |
+            Icom's IP+ : an intermodulation-rejection mode that trades a little
+            sensitivity for a better third-order intercept by backing the
+            direct-sampling ADC off its clipping point. Absent where the radio
+            has none.
+        digi_sel:
+          type: boolean
+          description: |
+            Icom's DIGI-SEL, a narrow tracking preselector ahead of the ADC.
+
+            Worth knowing on an IC-7610: with this engaged the radio REFUSES to
+            switch a preamplifier in, and says so only as a bare rejection.
+            remoses adds the explanation to the 422 rather than switching the
+            preselector off on the operator's behalf.
+        digi_sel_shift:
+          type: number
+          description: |
+            Where the DIGI-SEL preselector sits, 0-100%. Reported even while the
+            preselector is switched out: the radio remembers it, and a client
+            redrawing the control wants the position it will return to.
         break_in:
           type: string
           enum: [off, semi, full, on]
@@ -769,6 +838,50 @@ components:
             the command. An external CI-V interface stays powered and listening;
             a radio whose CAT arrives over its own USB may take the USB device
             down with it and leave nothing to send the wake-up to.
+        preamp:
+          type: integer
+          description: |
+            Select a preamplifier: 0 for off, up to `caps.preamp_levels`. 422
+            where the radio has no preamplifier command or the level is past
+            what it offers.
+        attenuator_db:
+          type: integer
+          description: |
+            Set the attenuator, in dB, 0 for switched out. Must be 0 or one of
+            `caps.attenuator_db`; 422 otherwise, with the accepted list in the
+            message.
+        rf_gain:
+          type: number
+          description: |
+            Set the receiver RF gain, 0-100%. Needs `caps.rf_gain_control`.
+        agc:
+          type: string
+          enum: [off, fast, mid, slow, auto]
+          description: |
+            Set the AGC speed. Must be one of `caps.agc_settings`.
+
+            The `auto-*` values a state can report are not accepted here: they
+            say what auto CHOSE, and there is no way to tell a radio "be
+            automatic, and also be mid". Ask for `auto`.
+
+            Kenwood radios refuse this in FM — their references say so, and the
+            error tone sounds at the radio — so a request there returns 422 with
+            the rig's own refusal.
+        ip_plus:
+          type: boolean
+          description: |
+            Switch Icom's IP+ mode. Needs `caps.ip_plus_control`.
+        digi_sel:
+          type: boolean
+          description: |
+            Switch Icom's DIGI-SEL preselector in or out of line. Needs
+            `caps.digi_sel_control`.
+        digi_sel_shift:
+          type: number
+          description: |
+            Move the DIGI-SEL preselector, 0-100%. Needs
+            `caps.digi_sel_shift_control`. Accepted while the preselector is
+            switched out; the radio keeps the setting.
         tuner:
           type: string
           enum: [off, on]
@@ -885,6 +998,51 @@ components:
             rather than on the command — see `power_switch` in a state patch —
             so treat this as "the radio has the command", not "you will get it
             back".
+        preamp_levels:
+          type: integer
+          description: |
+            How many preamplifiers remoses can select on this radio: 0 for none
+            on the bus, 1 for a single on/off, 2 for a set with two stages. A
+            client offers 0 to this number.
+        attenuator_db:
+          type: array
+          items:
+            type: integer
+          description: |
+            The attenuation steps this radio accepts, in dB and ascending, NOT
+            including 0 — switched out is always available where the list is not
+            empty. Absent or empty on a radio with no attenuator command, an
+            FTdx9000 among them.
+
+            One entry is a single fixed pad, which is most radios; an IC-7610
+            lists fifteen.
+        rf_gain_control:
+          type: boolean
+          description: |
+            remoses can read and set the receiver's RF gain on this radio.
+        agc_settings:
+          type: array
+          items:
+            type: string
+            enum: [off, fast, mid, slow, auto]
+          description: |
+            The AGC speeds this radio accepts, empty where remoses cannot work
+            its AGC at all. Offer these rather than a fixed three: the set
+            differs between models of one make, and Icom's command has no off.
+        ip_plus_control:
+          type: boolean
+          description: |
+            remoses can switch Icom's IP+ mode on this radio.
+        digi_sel_control:
+          type: boolean
+          description: |
+            remoses can switch Icom's DIGI-SEL preselector on this radio.
+        digi_sel_shift_control:
+          type: boolean
+          description: |
+            remoses can move the DIGI-SEL preselector. Separate from
+            `digi_sel_control` because the big superhets have the preselector
+            and no documented command to move it.
         tuner_control:
           type: boolean
           description: |

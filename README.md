@@ -36,7 +36,11 @@ lock lifecycle including steal and expiry, both its VFOs with split and dual
 watch, and CW both ways — the rig's own CAT keyer and locally generated Morse
 keying DTR and RTS. Later, its **antenna tuner**: switched in and out, and four
 tuning cycles run for real on 80 m, three that found a match and one that could
-not.
+not. Later still, its **power switch** — off to standby, woken again over the bus
+with nobody at the radio — and the whole **receive front end**: both preamplifiers,
+the 3 dB attenuator ladder, RF gain, AGC, IP+ and DIGI-SEL with its shift. That
+last one turned up an interlock in no manual: with DIGI-SEL engaged the radio
+refuses to switch a preamplifier in.
 
 An **IC-9700**, on 2 m and 70 cm with real antennas. Its CAT surface end to end:
 Main's two VFOs addressed without disturbing each other, split, every mode it has
@@ -51,8 +55,10 @@ Frequency, mode, transmit power, the filter width and both IF filter slots,
 explicit PTT, CW break-in in all three states, and CW **heard on the air** at 5 W
 on 28.030 MHz, both semi and full break-in. Later, the **antenna tuner**: switched
 in and out, and four tuning cycles run for real on 80 m — three that found a match
-and one that could not. It found four bugs in the process: one that stopped it
-connecting at all, the break-in gap again, and two in the tuner command.
+and one that could not. Later still, its **receive front end**: preamplifier,
+attenuator, RF gain and all three AGC states. It found five bugs in the process:
+one that stopped it connecting at all, the break-in gap again, two in the tuner
+command, and one that made switching the AGC off a trip with no way back.
 
 **The safety interlocks were fired for real**, not against fakes: band limits
 refusing an out-of-band tune, power clamping, the dead-man `tx_timeout` forcing
@@ -296,6 +302,47 @@ connect — and the second is what `civ.rig_address` is for.
 radio to VFO operation, which is what an operator stuck on a memory channel actually needs; a rig
 left there refuses the per-VFO commands and its readings go stale.
 
+**The receive front end is readable and settable.** `state.preamp`, `state.attenuator_db`,
+`state.rf_gain` and `state.agc`, plus Icom's `state.ip_plus` and `state.digi_sel` with its
+`digi_sel_shift`. Each is absent where the radio has no such command, and the matching capability
+— `preamp_levels`, `attenuator_db`, `rf_gain_control`, `agc_settings`, `ip_plus_control`,
+`digi_sel_control`, `digi_sel_shift_control` — says what to offer. On Icom they are `16 02`, `11`,
+`14 02`, `16 12`, `16 65` and `16 4E` with `14 13`.
+
+**The attenuator is in dB, not in steps**, because no two of these radios step it the same way: an
+IC-7610 goes 3 dB at a time to 45, an IC-7850 to 21, an IC-7600 and IC-7700 have 6/12/18, and
+everything smaller has one fixed pad. `caps.attenuator_db` lists them.
+
+Two traps are per model and worth knowing:
+
+- **`11` is the depth in BCD on every Icom but the IC-718**, whose own table says `01` means 20 dB
+  where the IC-703's says `20` does. Same opcode, same pad, different byte, and nothing in the
+  frame to tell them apart.
+- **`16 12` has five spellings that share only the opcode.** The IC-7610 counts `01` FAST, `02`
+  MID, `03` SLOW; the IC-7600 counts the same three from `00`; the IC-7700 has four, `00` being
+  AGC OFF; the IC-703 has two, `1` fast and `2` slow; and the IC-910H has two the other way round,
+  `0` slow and `1` fast. One byte out sets a different speed and looks like a success.
+
+**Tested on an IC-9700 too**, which has five of the seven: one preamplifier, a 10 dB pad, RF gain,
+AGC and IP+, and correctly no DIGI-SEL. It turned up a restriction of its own, also unmentioned in
+any Icom reference here — **the AGC cannot be set in FM.** All three speeds go in under USB and
+every one draws a rejection in FM, while a read still answers `fast`, so the state looks healthy
+and only the refusal says otherwise. remoses adds the reason and still sends the command, rather
+than fencing off a mode on the strength of one radio.
+
+**Tested on an IC-7610**, which has all seven controls, and which produced a finding that is in no
+manual: **with DIGI-SEL engaged the radio refuses to switch a preamplifier in.** `16 02 01` draws
+a bare NG while `16 02 00` is accepted and the read works throughout, so the refusal says nothing
+about why. remoses adds the reason to the 422 and does not switch the preselector off to make the
+request succeed — that would be changing a second control on a receiver somebody is listening to.
+The radio enforces it from the other side as well: switching DIGI-SEL in while a preamplifier is
+selected switches that preamplifier out, and the next poll reports it.
+
+`preamp_levels` counts amplifiers rather than command values, which the IC-9700 is the reason for:
+its `16 02` runs `00` to `03`, but those are the internal preamp and an external one in
+combination — `02` is "internal off, external on", not a third stage of gain. It reports one, and
+`02` and `03` are left to the front panel.
+
 ### Kenwood (`kenwood` backend)
 
 | Model | `kenwood.model` | Notes | Tested |
@@ -362,6 +409,35 @@ Being wrong there leaves VOX switched on — invisibly, since remoses only write
 surfaces later when the operator moves to SSB and the radio starts keying on room noise. Name
 your model to get the check.
 
+**The receive front end differs by generation more than anything else here**, and three of the
+differences would put a syntax error on the wire rather than a wrong value. `PA` takes one digit
+and answers two — the second is documented "always 0" — and `RA` takes two and answers four on the
+TS-480 and TS-590, one and one on the TS-890S, and a band selector plus a digit on the TS-990S.
+
+**`RG` counts to 100 on a TS-480 and to 255 on everything after it**, which is the same knob
+reported on two scales a factor of two and a half apart. That is why the API publishes a
+percentage and each model states its own ceiling.
+
+**And the AGC moved commands.** A TS-480 keeps the speed on `GT` (`000` off, `001` fast, `002`
+slow); every radio since keeps a *time constant* there and the speed on `GC`. Sending one radio's
+form to the other sets the wrong thing entirely. The speeds differ too: a TS-590 has off, slow and
+fast with no middle, a TS-890S and TS-990S have all three.
+
+remoses does not read the AGC in FM on any of them. Every reference carries the same note — "this
+command cannot be performed in FM mode (an error sounds)" — and the error sounds *at the radio*, so
+polling anyway would beep at whoever is listening once per slow tick. A TS-480 makes it worse by
+answering three spaces instead of refusing, which is decoded as "no reading" rather than as a
+frame to complain about.
+
+**Switching the AGC off is a one-way trip unless you know the trick**, which a TS-590S demonstrated
+on the air: with the AGC off, `GC1` and `GC2` are *both* refused and the radio stays off. A client
+that switched it off could never switch it back and would be told only "command rejected". The
+manual documents the parameter that gets back out — "3: AGC Off → On (AGC returns to its Slow/Fast
+status before turning Off)" — as one option among four; that the other two are *refused* from off,
+making it the only door, is not in there and came from the radio. remoses sends it first when a
+speed is asked for while the AGC is off, and only then. The TS-480 has no such value documented
+and gets none of this.
+
 **The TS-590S needed its control lines raised, not merely set high.** Opening the
 port with DTR and RTS already asserted produced a radio that answered nothing
 whatsoever — correct speed, correct device, well-formed frames going out, not one
@@ -414,7 +490,20 @@ and the FTdx9000.
 The **FTdx9000 has no `ID` command**, so remoses cannot cross-check that the configuration names
 the right radio — it says which command set it is using and carries on. Its `SH` is the position
 of the WIDTH knob rather than a bandwidth in Hz, so remoses reports no filter width for it and
-refuses to set one.
+refuses to set one. It is also the one radio here with **no attenuator command** — no `RA` row at
+all — while keeping `PA`, `RG` and `GT`.
+
+The receive front end is otherwise uniform across the modern family: `PA` for the preamplifier
+(IPO, AMP 1, AMP 2 — the FT-891 has only IPO and AMP), `RA` for the attenuator, `RG` for the gain
+and `GT` for the AGC. The FT-891, FT-991A and FTX-1 have a single pad where the FTdx sets step
+6/12/18 dB.
+
+**`GT` does not round-trip, and that is not a fault.** It *accepts* 0 to 4, where 4 is AUTO, and
+*answers* 0 to 6, where 4, 5 and 6 are auto having settled on fast, mid or slow. So setting `auto`
+and reading back `auto-mid` means the radio is telling you what auto currently is. remoses
+publishes the resolved value rather than flattening the three into the one that was written, and
+refuses a request for an `auto-*` reading — there is no way to tell a radio "be automatic, and
+also be mid".
 
 None of these radios can key arbitrary CW text over CAT — `KY` plays a stored keyer memory, and
 remoses will not overwrite the operator's saved messages to send one — so CW on a Yaesu means

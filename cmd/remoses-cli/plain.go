@@ -128,6 +128,30 @@ func statusFields(v *view) string {
 	if st.Tuner != "" {
 		fmt.Fprintf(&b, " tuner=%s", st.Tuner)
 	}
+	// The receive front end, each only where the radio reports one: a preamp=0
+	// on a radio with no preamplifier command would be a claim about hardware
+	// that may not exist, which is the same rule the transmit meters follow.
+	if p := st.Preamp; p != nil {
+		fmt.Fprintf(&b, " preamp=%d", *p)
+	}
+	if a := st.AttenuatorDB; a != nil {
+		fmt.Fprintf(&b, " att_db=%d", *a)
+	}
+	if g := st.RFGain; g != nil {
+		fmt.Fprintf(&b, " rf_gain=%g", *g)
+	}
+	if st.AGC != "" {
+		fmt.Fprintf(&b, " agc=%s", st.AGC)
+	}
+	if p := st.IPPlus; p != nil {
+		fmt.Fprintf(&b, " ip_plus=%t", *p)
+	}
+	if d := st.DigiSel; d != nil {
+		fmt.Fprintf(&b, " digi_sel=%t", *d)
+	}
+	if s := st.DigiSelShift; s != nil {
+		fmt.Fprintf(&b, " digi_sel_shift=%g", *s)
+	}
 	fmt.Fprintf(&b, " cw_busy=%t cw_queued=%d wpm=%d", st.CW.Busy, st.CW.Queued, st.CW.WPM)
 	fmt.Fprintf(&b, " seq=%d age_ms=%d stale=%t", st.Seq, v.age().Milliseconds(), v.stale)
 	b.WriteString(optQuoted(" conn_error=", v.connErr))
