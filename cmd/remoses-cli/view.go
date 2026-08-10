@@ -392,6 +392,33 @@ func meterBar(frac float64, cells int) string {
 // relative index with no watt meaning and Kenwood's PC is watts; normalising
 // that away would invent a number, so whichever the rig actually supplies is
 // what appears.
+// hasPowerReading, hasFilterWidth and hasFilterSlots report whether the radio
+// has the command behind a field, so the display can leave out what it cannot
+// know rather than drawing a zero.
+//
+// A zero in these three is not a small reading, it is the absence of one. An
+// FT-857 has no CAT command for transmit power or for IF bandwidth in either
+// direction — its optional YF-122 filters are chosen with the front-panel keys
+// — so "power  0 %" beside a radio putting out ten watts reads as a fault, and
+// "passband  0 Hz" as a filter closed to nothing. This is the rule the transmit
+// meters already follow, applied to the three fields that predate it.
+//
+// Unknown counts as present. The descriptor is fetched before the first state
+// and refreshed alongside it, so the only window where it is missing is before
+// anything is on screen at all; blanking on a missing descriptor would make
+// real readings flicker on a reconnect.
+func (v *view) hasPowerReading() bool {
+	return v.desc == nil || v.desc.Caps.PowerControl
+}
+
+func (v *view) hasFilterWidth() bool {
+	return v.desc == nil || v.desc.Caps.FilterWidth
+}
+
+func (v *view) hasFilterSlots() bool {
+	return v.desc == nil || v.desc.Caps.FilterSlots > 0
+}
+
 func formatPower(p radio.Power) string {
 	s := fmt.Sprintf("%.0f %%", p.Pct)
 	if p.Watts != nil {

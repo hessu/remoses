@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/hessu/remoses/internal/client"
 )
 
 // clock is a hand-wound clock, so the throttling rules can be tested without
@@ -23,7 +21,7 @@ func newPlainFixture(t *testing.T, meterInterval time.Duration) (*bytes.Buffer, 
 	r := newPlainRenderer(&buf, c.now, meterInterval)
 
 	v := newView("ic7610", c.now)
-	v.desc = &client.Radio{ID: "ic7610", Name: "IC-7610", Backend: "civ"}
+	v.desc = testRadio()
 	v.setState(sampleState())
 	v.link = linkLive
 	return &buf, r, v, c

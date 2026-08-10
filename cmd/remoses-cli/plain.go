@@ -99,10 +99,21 @@ func statusFields(v *view) string {
 		b.WriteString(" standby=true")
 	}
 	fmt.Fprintf(&b, " freq=%d mode=%s data=%t", st.Frequency, st.Mode, st.DataMode)
-	fmt.Fprintf(&b, " passband=%d filter=%d", st.PassbandHz, st.FilterSlot)
-	fmt.Fprintf(&b, " power_pct=%g", st.Power.Pct)
-	if st.Power.Watts != nil {
-		fmt.Fprintf(&b, " power_w=%g", *st.Power.Watts)
+	// Present only where the radio has the command behind them, for the same
+	// reason the transmit meters below are: a log is read afterwards by somebody
+	// who cannot ask, and power_pct=0 from a radio running ten watts is a
+	// reading rather than a silence. See view.hasPowerReading.
+	if v.hasFilterWidth() {
+		fmt.Fprintf(&b, " passband=%d", st.PassbandHz)
+	}
+	if v.hasFilterSlots() {
+		fmt.Fprintf(&b, " filter=%d", st.FilterSlot)
+	}
+	if v.hasPowerReading() {
+		fmt.Fprintf(&b, " power_pct=%g", st.Power.Pct)
+		if st.Power.Watts != nil {
+			fmt.Fprintf(&b, " power_w=%g", *st.Power.Watts)
+		}
 	}
 	fmt.Fprintf(&b, " ptt=%t", st.PTT)
 	fmt.Fprintf(&b, " s_raw=%d s_scale=%d", st.SMeter.Raw, st.SMeter.Scale)

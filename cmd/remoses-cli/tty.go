@@ -142,14 +142,28 @@ func layout(v *view, width int) []string {
 	out = append(out, meterLines(v)...)
 	out = append(out, "")
 
-	filter := fmt.Sprintf("  passband  %d Hz", st.PassbandHz)
-	if st.FilterSlot > 0 {
-		filter += fmt.Sprintf("   filter %d", st.FilterSlot)
+	// Both halves of this row are omitted on a radio with no command behind
+	// them, and the row itself goes with them when neither is left. See
+	// view.hasPowerReading.
+	var filter string
+	if v.hasFilterWidth() {
+		filter = fmt.Sprintf("  passband  %d Hz", st.PassbandHz)
 	}
-	out = append(out,
-		row(filter, "power  "+formatPower(st.Power), width),
-		row("  cw        "+formatCW(st.CW), lockNote(v), width),
-	)
+	if st.FilterSlot > 0 && v.hasFilterSlots() {
+		if filter == "" {
+			filter = fmt.Sprintf("  filter    %d", st.FilterSlot)
+		} else {
+			filter += fmt.Sprintf("   filter %d", st.FilterSlot)
+		}
+	}
+	power := ""
+	if v.hasPowerReading() {
+		power = "power  " + formatPower(st.Power)
+	}
+	if filter != "" || power != "" {
+		out = append(out, row(filter, power, width))
+	}
+	out = append(out, row("  cw        "+formatCW(st.CW), lockNote(v), width))
 	if st.Tuner != radio.TunerUnknown {
 		out = append(out, "  tuner     "+formatTuner(st.Tuner))
 	}

@@ -80,7 +80,7 @@ func TestFrameMarksTransmitting(t *testing.T) {
 func TestFrameRendersADisconnectedRadio(t *testing.T) {
 	now := time.Date(2026, 8, 4, 20, 11, 4, 0, time.UTC)
 	v := newView("ic7610", func() time.Time { return now })
-	v.desc = &client.Radio{ID: "ic7610", Name: "IC-7610", Backend: "civ"}
+	v.desc = testRadio()
 
 	st := sampleState()
 	st.Connected = false
@@ -102,6 +102,56 @@ func TestFrameRendersADisconnectedRadio(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(got), "error") {
 		t.Errorf("a disconnected radio is not an error:\n%s", got)
+	}
+}
+
+// A radio with no command behind a field must not have one drawn for it. An
+// FT-857 has no CAT transmit power and no IF bandwidth in either direction, so
+// the zeros its State carries are the absence of a reading rather than a small
+// one — and "power  0 %" beside a radio putting out ten watts reads as a fault.
+func TestFrameOmitsFieldsTheRadioCannotReport(t *testing.T) {
+	v := newTestView()
+	v.desc = &client.Radio{
+		ID: "ft857", Name: "Yaesu FT-857D", Backend: "yaesu", Connected: true,
+		Caps: radio.Caps{PTTControl: true, SMeterScale: 15},
+	}
+	st := sampleState()
+	st.PassbandHz, st.FilterSlot = 0, 0
+	st.Power = radio.Power{}
+	v.setState(st)
+
+	got := joined(v, 80)
+	for _, unwanted := range []string{"power", "passband", "filter"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("frame draws %q for a radio that has no such command:\n%s", unwanted, got)
+		}
+	}
+	// The rest of the display is unaffected.
+	for _, want := range []string{"14.025.000", "CW", "PTT   RX", "cw "} {
+		if !strings.Contains(got, want) {
+			t.Errorf("frame is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// The same three fields in the piped renderer, where a log line is read later
+// by somebody who cannot ask what power_pct=0 meant.
+func TestPlainOmitsFieldsTheRadioCannotReport(t *testing.T) {
+	buf, r, v, _ := newPlainFixture(t, time.Second)
+	v.desc = &client.Radio{
+		ID: "ft857", Name: "Yaesu FT-857D", Backend: "yaesu", Connected: true,
+		Caps: radio.Caps{PTTControl: true, SMeterScale: 15},
+	}
+	r.update(v, updateState)
+
+	line := buf.String()
+	for _, unwanted := range []string{"power_pct=", "power_w=", "passband=", "filter="} {
+		if strings.Contains(line, unwanted) {
+			t.Errorf("line carries %q for a radio that has no such command:\n%s", unwanted, line)
+		}
+	}
+	if !strings.Contains(line, "freq=14025000") {
+		t.Errorf("the rest of the line is missing:\n%s", line)
 	}
 }
 

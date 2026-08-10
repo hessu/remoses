@@ -29,10 +29,20 @@ func sampleState() radio.State {
 	}
 }
 
+// testRadio is the descriptor the fixtures share. Its capabilities are not
+// decoration: they decide which fields the renderers draw at all, so an
+// IC-7610 has to say it has the power and filter commands an IC-7610 has.
+func testRadio() *client.Radio {
+	return &client.Radio{
+		ID: "ic7610", Name: "IC-7610", Backend: "civ", Connected: true,
+		Caps: radio.Caps{PowerControl: true, FilterWidth: true, FilterSlots: 3},
+	}
+}
+
 func newTestView() *view {
 	now := time.Date(2026, 8, 4, 20, 11, 4, 0, time.UTC)
 	v := newView("ic7610", func() time.Time { return now })
-	v.desc = &client.Radio{ID: "ic7610", Name: "IC-7610", Backend: "civ", Connected: true}
+	v.desc = testRadio()
 	v.setState(sampleState())
 	v.link = linkLive
 	return v
