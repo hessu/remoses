@@ -1336,6 +1336,32 @@ func (r PatchRequest) namesAVFO() bool {
 		r.VFO == radio.VFOMain || r.VFO == radio.VFOSub
 }
 
+// applyModePair writes a mode together with its data flag through set, and
+// retries without the flag when the radio has no data variant of that mode and
+// the flag was carried forward rather than asked for.
+//
+// Carrying the current flag forward is right whenever both spellings exist — an
+// operator moving from USB-DATA to LSB means LSB-DATA — but it is only ever a
+// guess about what the request left unsaid, and where the target mode has no
+// data code the guess turns a plain mode change into a refusal. An FT-857D
+// found it: PKT is that radio's FM-with-data, and from PKT every mode change
+// that did not spell out data_mode was refused — including the one to DIG, the
+// radio's other data mode. There was no way out of PKT at all.
+//
+// Two conditions keep the retry narrow. The client must have said nothing about
+// data mode, so an explicit data_mode: true on an impossible mode still fails,
+// which is the honest answer to a request that was actually made. And the error
+// must be ErrUnsupported, which a backend raises out of its own mode table
+// before anything reaches the wire — so the second call cannot be a second
+// write to a radio that has already moved.
+func applyModePair(set func(radio.Mode, bool) error, m radio.Mode, dataMode, explicit bool) error {
+	err := set(m, dataMode)
+	if err != nil && !explicit && dataMode && errors.Is(err, ErrUnsupported) {
+		return set(m, false)
+	}
+	return err
+}
+
 // ApplyPatch performs a multi-field change as one ordered transaction.
 //
 // The order is the point of the endpoint existing at all. Mode goes first,
@@ -1346,6 +1372,15 @@ func (r PatchRequest) namesAVFO() bool {
 // Every field is validated against the configured limits BEFORE anything is
 // written, so a rejected request does not leave the rig half-changed.
 func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State, error) {
+	// The VFO name is checked before the empty-request short-circuit below,
+	// because it is not a field that gets applied — it selects what the other
+	// fields address — so a request carrying nothing else looks empty and would
+	// be answered 200 by a radio that cannot reach that VFO at all. An FT-857D
+	// found it: its only VFO command is a blind toggle, Caps advertises
+	// "current" alone, and {"vfo": "B"} came back OK having done nothing.
+	if req.namesAVFO() && s.dualVFO() == nil {
+		return s.State(), fmt.Errorf("radio %s: addressing VFO %s: %w", s.id, req.VFO, ErrUnsupported)
+	}
 	if req.Empty() {
 		return s.State(), nil
 	}
@@ -1421,12 +1456,10 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 			return s.State(), fmt.Errorf("radio %s: leaving memory mode: %w", s.id, ErrUnsupported)
 		}
 	}
-	// The dual-VFO controls, validated here with the rest so that a request
-	// naming VFO B on a radio that cannot address one is refused before
-	// anything reaches the wire.
-	if req.namesAVFO() && s.dualVFO() == nil {
-		return s.State(), fmt.Errorf("radio %s: addressing VFO %s: %w", s.id, req.VFO, ErrUnsupported)
-	}
+	// The rest of the dual-VFO controls, validated here with everything else so
+	// that they are refused before anything reaches the wire. The VFO name
+	// itself is checked at the top of this function, ahead of the
+	// empty-request short-circuit.
 	if req.Split != nil && !caps.Split {
 		return s.State(), fmt.Errorf("radio %s: split: %w", s.id, ErrUnsupported)
 	}
@@ -1503,7 +1536,10 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 			if req.FilterSlot != nil {
 				slot = *req.FilterSlot
 			}
-			if err := d.SetVFOMode(ctx, s, req.VFO, m, dm, slot); err != nil {
+			err := applyModePair(func(mode radio.Mode, data bool) error {
+				return d.SetVFOMode(ctx, s, req.VFO, mode, data, slot)
+			}, m, dm, req.DataMode != nil)
+			if err != nil {
 				return s.State(), err
 			}
 			req.FilterSlot = nil
@@ -1527,7 +1563,10 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		if req.DataMode != nil {
 			dm = *req.DataMode
 		}
-		if err := s.rig.SetMode(ctx, s, m, dm); err != nil {
+		err := applyModePair(func(mode radio.Mode, data bool) error {
+			return s.rig.SetMode(ctx, s, mode, data)
+		}, m, dm, req.DataMode != nil)
+		if err != nil {
 			return s.State(), err
 		}
 		slow = true // mode selection moves the filter on both target rigs

@@ -340,6 +340,9 @@ type fakeRig struct {
 	breakInErr error
 	powerErr   error
 	sets       []string // ordered log of the set commands the session issued
+	// noDataMode names modes this rig has no data-mode spelling of, so that
+	// SetMode refuses the pairing the way a backend's own mode table does.
+	noDataMode map[radio.Mode]bool
 }
 
 func (r *fakeRig) setInitErr(err error) {
@@ -485,7 +488,11 @@ func (r *fakeRig) SetFrequency(ctx context.Context, c backend.Conn, vfo radio.VF
 }
 
 func (r *fakeRig) SetMode(ctx context.Context, c backend.Conn, m radio.Mode, dataMode bool) error {
+	// Recorded before the refusal, so a test can see both halves of a retry.
 	r.record(fmt.Sprintf("mode=%s data=%v", m, dataMode))
+	if dataMode && r.refusesDataMode(m) {
+		return fmt.Errorf("fake: no data mode code for %s: %w", m, backend.ErrUnsupported)
+	}
 	if _, err := c.Do(ctx, []byte(fmt.Sprintf("MD%d;", int(m))), "MD"); err != nil {
 		return err
 	}
@@ -568,6 +575,25 @@ func (r *fakeRig) setPowerErr(err error) {
 	r.mu.Lock()
 	r.powerErr = err
 	r.mu.Unlock()
+}
+
+// setNoDataMode makes the rig refuse the data-mode variant of m, as a radio
+// whose mode table has no code for the pairing does. An FT-857D is the real
+// example: its data modes are DIG and PKT, so there is no CW-with-data to ask
+// for and the backend says so before anything reaches the wire.
+func (r *fakeRig) setNoDataMode(m radio.Mode) {
+	r.mu.Lock()
+	if r.noDataMode == nil {
+		r.noDataMode = map[radio.Mode]bool{}
+	}
+	r.noDataMode[m] = true
+	r.mu.Unlock()
+}
+
+func (r *fakeRig) refusesDataMode(m radio.Mode) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.noDataMode[m]
 }
 
 func (r *fakeRig) setBreakInState(v radio.BreakIn) { r.breakIn.Store(v) }
