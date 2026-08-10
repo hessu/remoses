@@ -1366,12 +1366,13 @@ full-scale power reading and a high-SWR alarm on a radio sitting quietly in rece
 reason the receive-status read `E7` is skipped entirely while transmitting: a transmitting radio
 is not measuring a received signal.
 
-The power reading goes into `s_meter` because `State` has no forward-power field, and that field
-already means this on a transmitting radio — a Kenwood's `SM` reads its RF power meter during
-transmit (§5.2). Leaving the meter alone instead would freeze it at the last receive reading,
-which looks live to a remote operator and is not. HI SWR is a threshold flag rather than a ratio,
-so it is published as 0-or-1 on a scale of 1: it is the only transmit fault these radios report
-over CAT, and a remote operator who cannot see the front panel is exactly who needs it.
+The power reading goes into `power_meter` (§11.4). It went into `s_meter` when this backend was
+written, for want of a forward-power field to put it in — a compromise that made a transmission
+drive the receive signal bar to full scale. `State` carries transmit meters now, and this is what
+they are for. HI SWR is a threshold flag rather than a ratio, so it is published as 0-or-1 on a
+scale of 1 and no `swr_ratio` is derived from it: one bit cannot carry one. It is the only
+transmit fault these radios report over CAT, and a remote operator who cannot see the front panel
+is exactly who needs it.
 
 **Modes, and the two that need naming.** The status answer's table is the larger of the two the
 manuals print, and it disagrees with the mode-set table in one direction: `06` is WFM, which is
@@ -1402,40 +1403,117 @@ case. There is no USB-DATA code anywhere: `DIG` and `PKT` are the data modes.
 - **The two charts swap the titles of opcodes `09` and `F9`** between "Repeater Offset" and
   "Repeater Offset Frequency". Neither is implemented.
 
-**Assumptions worth revisiting on hardware:**
+**Assumptions worth revisiting on hardware.** The three that mattered most — the undocumented
+acknowledgement, `FF` in receive, and the BCD frequency field — have now been seen on a radio;
+see "Confirmed on hardware" below. What is left:
 
-- **The single-byte acknowledgement is a field report, not a transcribed fact.** It is the one
-  thing in this backend that is not in a manual, and it is load-bearing: if a radio turns out not
-  to send it, every set command would wait out the full per-command timeout. Visible immediately,
-  and `debug_wire` (§6.1) shows the sent block with nothing after it.
-- **`F0` as "already in that state"** is field-reported too. remoses does not act on it either
-  way, so being wrong costs nothing.
-- **`FF` as the transmit-status answer in receive** is the reason those fields are gated on the
-  PTT bit. If a radio instead answers something meaningful there, remoses is discarding real
-  readings — the safe direction, and one trace settles it.
-- **Only the outer frequency bounds are enforced**, 100 kHz to 470 MHz. These radios have three
-  coverage gaps (56–76, 108–118, 164–420 MHz) and no manual says what one does with a frequency
-  inside one. Refusing a frequency the rig would have tuned is worse than letting it ignore one it
-  will not, and the read-back reports which happened.
+- **`F0` as "already in that state"** has still not been observed. An FT-857D answered `00` to
+  every set it was given, including the redundant unkey that was the case `F0` was expected for.
+  remoses does not act on the value either way, so being wrong about it costs nothing.
+- **The three coverage gaps** (56–76, 108–118, 164–420 MHz) are unprobed. Only the outer bounds
+  are enforced, and no manual says what one of these radios does with a frequency inside a gap.
+  Refusing a frequency the rig would have tuned is worse than letting it ignore one it will not,
+  and the read-back reports which happened.
 - **The FT-817 and FT-817ND are the same protocol and are not profiled**, because remoses has no
   manual for either and every value here came from one. An owner can name an FT-857 and find out,
   accepting that the label will then say FT-857.
 
-**One rough edge, and it is `ApplyPatch`'s rather than this backend's.** A `PATCH` naming only a
-mode carries the *current* data-mode flag forward, because on a Kenwood the two really are
-orthogonal (§5.2). They are not here: DATA is folded into the mode code and only FM has a data
-variant. So a radio sitting in PKT that is asked for `{"mode": "CW"}` is asked for CW-with-data,
-which does not exist, and is refused with 422 — the operator has to send
-`{"mode": "CW", "data_mode": false}`. The refusal names the two data modes, so it is
-self-explanatory, and quietly dropping the flag instead would be the "succeeds and means
-something else" failure this document keeps returning to. The same applies to the ASCII Yaesus
-and to the TS-890S/TS-990S, which fold DATA into the mode code too; teaching `ApplyPatch` to ask
-a backend whether the target mode has a data variant would fix all three at once.
+**One rough edge that this radio turned into a bug, and it was `ApplyPatch`'s rather than this
+backend's.** A `PATCH` naming only a mode carries the *current* data-mode flag forward, because
+on a Kenwood the two really are orthogonal (§5.2). They are not here: DATA is folded into the
+mode code and only FM has a data variant. So a radio sitting in PKT and asked for
+`{"mode": "CW"}` was asked for CW-with-data, which does not exist, and was refused with 422.
+This was written up as a rough edge on the grounds that the refusal names the two data modes and
+so explains itself. On hardware it is worse than that: PKT is reachable from the front panel, and
+from PKT **every** bare mode change was refused — CW, USB, LSB, AM, and DIG, this radio's other
+data mode. An operator could be left in PKT with no way out over CAT.
+
+So `ApplyPatch` now drops a flag it carried forward and retries the write plain, under two
+conditions. The client must have said nothing about data mode, so an explicit `data_mode: true`
+on an impossible pairing still fails — that request really was made, and answering it with a
+different one would be the "succeeds and means something else" failure this document keeps
+returning to. And the error must be `ErrUnsupported`, which a backend raises from its own mode
+table before anything reaches the wire, so the retry cannot be a second write to a radio that has
+already moved. Where the pairing does exist the flag still carries: FM out of PKT stays PKT.
+
+That is the fix the previous note here proposed as "teaching `ApplyPatch` to ask a backend whether
+the target mode has a data variant", arrived at from the other end. The backend answers by
+refusing rather than by being asked, which needs no new interface and covers the ASCII Yaesus and
+the TS-890S/TS-990S — which fold DATA into the mode code too — for nothing.
 
 The serial settings are worth stating because they are not the defaults: **4800 bps** out of the
 box (menu 019 `CAT RATE`, also 9600 and 38400), 8 data bits, no parity, and the manuals specify
 **two stop bits** — see `remoses.example.yaml`. Menu 020 `CAT/LIN/TUN` must also be set to `CAT`,
 or the rear-panel jack is driving a linear amplifier instead.
+
+#### Confirmed on hardware
+
+An **FT-857D** with two optional filters fitted, on an FTDI cable at 38400 bps and 8N2, with
+`debug_wire` (§6.1) on throughout. It is the first radio of this generation remoses has been
+connected to, and the first Yaesu of either generation.
+
+Confirmed on the wire: the five-byte block with the opcode last; the packed-BCD frequency field
+in units of ten hertz, across the whole 100 kHz – 470 MHz range, with a finer request rounded to
+the step (14.070123 → 14.070120 MHz); every mode the set table has; and both status bytes, `F7`
+answering `FF` in receive and `03` under a ten-watt carrier — bit 7 clear for transmit, PO nibble
+3. Frequency and mode were also seen tracking the front-panel dial at the poll rate, which on
+this generation is the only way they can be.
+
+**The undocumented acknowledgement is real.** Every set answered with a single byte, and the
+value was `00` in every case: set frequency, set mode, PTT on, PTT off. The entire framing design
+of this backend rests on that byte existing, and it does.
+
+**`FF` in receive is real too**, which is what the transmit meters are gated on. Ungated, an idle
+radio would have published a full-scale power meter and a high-SWR alarm.
+
+**`E7` is skipped while keyed, and the trace shows it.** Through a transmission every poll is
+`03` then `F7` and nothing else, with `E7` resuming on the tick after `88`.
+
+**`06` WFM decodes, and the asymmetry holds in both directions.** Tuning to 100 MHz put the radio
+into WFM by its own band memory; remoses read the code back and published the mode, while
+`{"mode": "WFM"}` is refused because no set code exists. That is the one mode that can appear in
+`state.mode` and never in `caps.modes`, and both halves were seen.
+
+**Three things the radio does that no manual here mentions:**
+
+- **A mode change moves the frequency.** Selecting CW adds the radio's CW pitch offset to the
+  displayed frequency — +600 Hz on this one — and DIG subtracts its own shift, −2120 Hz. So
+  `{"mode": "CW"}` alone leaves the dial somewhere else. This is precisely the case `ApplyPatch`'s
+  mode-before-frequency ordering (§8) exists for, and this is the first radio here to demonstrate
+  it mattering rather than merely being prudent: `{"frequency": F, "mode": "CW"}` lands on `F`
+  because the frequency write follows the mode write and undoes the shift. From the trace: set
+  mode FM, read back 3559400, set frequency 3560000, read back 3560000.
+- **CAT PTT in CW transmits nothing.** The radio keys — `F7` reports transmit and the T/R relay
+  closes — and the PO meter stays at 0, because in CW the transmitter needs the key line. So
+  `serial_key` (§11.2) is not merely the only way to *send* CW here, it is the only way to produce
+  RF in CW at all, and a CAT tune-up needs FM or AM. The useful corollary is that CW is the safe
+  mode for exercising the transmit interlocks, which is how the ones below were fired without
+  occupying a frequency.
+- **A radio switched off is silence, not refusal.** Unlike an IC-7610 in standby (§11.6), which
+  answers every command with a rejection, this one simply stops answering while its USB adapter
+  stays present and dialable. The standby detection therefore does not fire, and should not:
+  five poll timeouts tear the connection down and `connected` goes false, which is the honest
+  report. Reconnect attempts then time out one per backoff step — capped at ~5 s — until the radio
+  returns, at which point the first `03` answers and the session comes up on the state it left.
+
+**The safety interlocks were fired on this radio**, in CW where nothing reaches the antenna:
+`limits.bands` refused 14.070 and 7.030 MHz while allowing 3.560 and 28.030; a five-second
+`tx_timeout` forced receive mid-transmission; and a lapsed lease produced `lock expired` →
+`forcing receive` → `88` on the wire, with read-only polling correctly not renewing it.
+
+**And it found three bugs, none of them in this backend** — which is the same lesson §5.4 records
+for the IC-7610, that a first connection tests the layers above the protocol at least as hard as
+the protocol. Two were in `ApplyPatch`: a named VFO validated after the empty-request
+short-circuit, so `{"vfo": "B"}` was answered 200 by a radio whose only VFO command is a blind
+toggle, and the data-mode carry-forward above. The third was in `remoses-cli`, which drew
+`power  0 %` and `passband  0 Hz` for commands this radio does not have — the "absent rather than
+zero" rule of §11.4 not yet applied to the three fields that predate it.
+
+**Still unexercised here: CW itself.** `serial_key` needs a second serial port, and this radio was
+reached over the only one on the machine, so the keying path — confirmed on an IC-7610 on both
+DTR and RTS (§11.2), and not Yaesu-specific — has still never been run against an FT-857. The
+desynchronisation check has not been provoked either: nothing in a healthy session offsets the
+stream, and forcing one would mean corrupting the port from outside.
 
 ---
 

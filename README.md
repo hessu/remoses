@@ -16,15 +16,15 @@ Scope for v1 is control only. Audio is a separate concern.
 
 ## Status
 
-**Experimental. Three radios out of the thirty-seven below have ever been connected —
-but all three have been put through everything they can do.**
+**Experimental. Four radios out of the thirty-seven below have ever been connected —
+but all four have been put through everything they can do.**
 
 Every protocol detail below was transcribed from the manufacturers' own CI-V and
 CAT reference documentation and is exercised against simulated rigs in the test
 suite. That proves the code matches what the manual says. It does not prove the
 manual is right, that the transcription is right, or that a particular radio
-behaves the way its documentation claims — which is why the three radios that have
-been on the wire matter more than the thirty-four that have not.
+behaves the way its documentation claims — which is why the four radios that have
+been on the wire matter more than the thirty-three that have not.
 
 ### What has been verified on hardware
 
@@ -62,36 +62,57 @@ process: one that stopped it connecting at all, the break-in gap again, two in
 the tuner command, one that made switching the AGC off a trip with no way back,
 and one where a request the radio silently ignored was reported as a success.
 
+An **FT-857D**, the first Yaesu of either generation and the first radio of the
+FT-857/FT-897 family — a **completely different CAT protocol** from every other
+Yaesu, five binary bytes with no framing of any kind, and until now written
+entirely from a manual. Everything that protocol has: the packed-BCD frequency
+field across its whole 100 kHz – 470 MHz range, every mode including **WFM read
+back but correctly refused as a set**, PTT and the transmit power meter under a
+**10 W carrier on 80 m and 10 m**, the undocumented acknowledgement byte that the
+whole framing design rests on, disconnect and reconnect through a power cycle,
+and the interlocks again — band limits, the dead-man `tx_timeout`, and a lapsed
+lock dropping PTT. Its CW could not be tried: this radio has no CAT keyer at all,
+and the `serial_key` path needs a second serial port that was not there.
+
 **The safety interlocks were fired for real**, not against fakes: band limits
 refusing an out-of-band tune, power clamping, the dead-man `tx_timeout` forcing
 receive mid-transmission, and lock expiry cutting a live CW transmission inside a
 character. CW pacing was measured at **61 ms of drift over 18.3 seconds** on a rig
 whose buffer cannot be queried, so the timing is dead reckoning.
 
-**Between them they found eleven bugs that no amount of reading the reference
+**Between them they found fourteen bugs that no amount of reading the reference
 would have.** Values written but never read back, so they reported a stale
 figure for ever; setters that quietly changed a neighbouring setting, because on
 CI-V several settings share one command; capabilities describing the radio's own
 keyer while a different one was installed; a config default that addressed every
 Icom as an IC-7610; a poll counter that treated a refusal as silence and
 reconnect-looped a healthy radio; a `Mode` that could not decode its own output;
-and a serial port opened with its control lines already high, which one radio
-answered by saying nothing whatsoever. All eleven are fixed, with the
-measurements and reasoning in [docs/DESIGN.md](docs/DESIGN.md) §5.4, §6 and §11.2.
+a serial port opened with its control lines already high, which one radio
+answered by saying nothing whatsoever; a VFO selection accepted as a success by a
+radio that cannot address a VFO at all; a data-mode flag carried forward into
+modes that have no data spelling, which left one radio with no way out of its
+packet mode; and a display drawing `power  0 %` for a radio with no power command,
+which reads as a fault rather than as a silence. All fourteen are fixed, with the
+measurements and reasoning in [docs/DESIGN.md](docs/DESIGN.md) §5.4, §5.7, §6 and
+§11.2.
 
 The worst of them was invisible from this side: **CW accepted, queued, drained
 on schedule — and never transmitted**, because the radio's break-in was off. Only
 an operator listening could have caught it — and it happened again, on the
 TS-590S, after it had already been found and fixed on the IC-9700, because the
-Kenwood backend had no notion of break-in at all. **Expect the other thirty-four
+Kenwood backend had no notion of break-in at all. **Expect the other thirty-three
 models to be hiding something similar.**
 
 ### What that still does not tell you
 
-- **Three radios have been verified**, two Icoms and one Kenwood. Treat every
-  other model below as "implemented from documentation, awaiting confirmation".
-  The Yaesu backends, the remaining fourteen Icom profiles and the other four Kenwood
-  profiles have never seen a radio.
+- **Four radios have been verified**, two Icoms, a Kenwood and a Yaesu. Treat
+  every other model below as "implemented from documentation, awaiting
+  confirmation". The twelve **ASCII** Yaesu profiles — which are a different
+  protocol from the FT-857D that was tested — the remaining fourteen Icom profiles
+  and the other four Kenwood profiles have never seen a radio.
+- **CW has never been sent by a Yaesu of any kind.** Every Yaesu here keys a
+  control line rather than using a CAT keyer, and that path is confirmed on an
+  IC-7610 and is not Yaesu-specific — but no Yaesu has run it.
 - **`limits.bands` gates tuning, not transmitting.** There is no transmit-only
   band limit, so it cannot express "receive anywhere, transmit only here" — which
   is what you want if a band has no antenna on it.
@@ -110,18 +131,23 @@ Do not leave it running an unattended station yet.
 
 ## Supported radios
 
-The **Tested** column marks radios confirmed against real hardware. Three entries
+The **Tested** column marks radios confirmed against real hardware. Four entries
 are filled in: see the status note above.
 
 "Tested" there means every CAT feature remoses implements **for that radio** was
 exercised on the air — frequency, all its modes, filters, power, PTT, whatever
 VFO and split it has, and CW actually heard — not that the radio was seen to
-connect.
+connect. The FT-857D is the one entry with an exception against it, and it is a
+property of the radio rather than a gap: that generation has no CAT keyer, so its
+CW is locally generated on a second serial port, and there was not one to use.
 
 It does not mean each radio re-ran the whole daemon. The parts that are not
 radio-specific — locking, the WebSocket, the safety interlocks, reconnect —
 were exercised once, on the IC-7610, and are shared code; the IC-9700 and the
-TS-590S confirmed the protocol surface and CW, not those again.
+TS-590S confirmed the protocol surface and CW, not those again. The FT-857D did
+re-run reconnect and the interlocks, because its CAT set has no keyer to spend
+the session on and because it fails in a way the Icoms do not: switched off it
+goes **silent** where an IC-7610 answers every command with a rejection.
 
 ### Icom (`civ` backend)
 
@@ -504,7 +530,7 @@ gets a low-to-high transition. See `port.dtr` / `port.rts` below.
 | FTX-1 | `ftx-1` | 30-byte `IF`; `PC` names the head; C4FM-DN and C4FM-VW | — |
 | other Yaesu | `generic` | FTdx101 shape | — |
 | FT-857 | `ft-857` | **Binary CAT** — a different protocol; see below | — |
-| FT-857D | `ft-857d` | | — |
+| FT-857D | `ft-857d` | Frequency, every mode, PTT and the transmit meters exercised on the air; CW untried, as it needs a second serial port | **yes** |
 | FT-897 | `ft-897` | | — |
 | FT-897D | `ft-897d` | | — |
 
@@ -554,8 +580,12 @@ option there too.
 
 That path is the one part of Yaesu CW support that has been confirmed on hardware, because it is
 not Yaesu-specific: `serial_key` generates the Morse locally and keys a control line, and it was
-tested on both DTR and RTS against an IC-7610's USB keying. What has never been exercised on a
-Yaesu is the CAT side — the frames in the tables above.
+tested on both DTR and RTS against an IC-7610's USB keying. **No Yaesu has ever run it**, and no
+Yaesu has yet put CW on the air through remoses.
+
+The CAT side has now been exercised on **one** Yaesu, an FT-857D — which is the binary protocol
+at the bottom of this section rather than the ASCII dialect the twelve models above it speak.
+None of those twelve has seen a radio.
 
 **The FT-857 and FT-897 are more limited than the rest**, and it is the radios rather than
 remoses: their seventeen-command CAT set has no way to set or read **transmit power**, no
@@ -563,12 +593,39 @@ remoses: their seventeen-command CAT set has no way to set or read **transmit po
 up at the next poll rather than immediately), and no **model identification**. Its one VFO
 command is a blind toggle that reports nothing, so remoses controls whichever VFO the radio is
 on and does not offer A and B by name. Frequency, mode, PTT, the S-meter, the transmit power
-meter and the high-SWR warning all work.
+meter and the high-SWR warning all work, and all of that has now been seen on an FT-857D.
+
+Nothing in the wire format differs across the four, so in principle what that radio confirmed
+holds for the other three — but only the FT-857D has been on a wire, and the **Tested** column
+says so rather than crediting a radio nobody plugged in.
+
+**Three things that radio does are worth knowing before driving one remotely**, and none is in
+any manual.
+
+**A mode change moves the frequency.** Selecting CW adds the radio's CW pitch offset to the
+displayed frequency — +600 Hz on the one tested — and DIG subtracts its own shift, −2120 Hz. So
+`{"mode": "CW"}` on its own leaves the dial somewhere else. Sending frequency and mode together
+is unaffected: remoses applies mode first for exactly this reason, and the frequency write puts
+the offset back.
+
+**Keying it over CAT in CW transmits nothing.** The radio goes into transmit — `ptt` reads true,
+the relay closes — and the power meter stays at zero, because in CW the transmitter needs the key
+line. `serial_key` is therefore not just the only way to *send* CW on these radios, it is the only
+way to get RF out of them in CW at all; a CAT tune-up needs FM or AM. The useful side of this is
+that CW is a safe mode for testing a remote setup, since nothing reaches the antenna.
+
+**Switched off, it goes silent rather than refusing.** An Icom in standby answers every command
+with a rejection, which remoses reports as `standby` on a live link. This one just stops
+answering while its USB adapter stays present, so it is reported as **disconnected** — which is
+the honest answer, and means `power_switch`-style remote waking is not available here in any
+form. It reconnects by itself when the radio comes back.
 
 They also need their serial port set up by hand: **4800 bps** out of the box (menu 019
 `CAT RATE`, which also offers 9600 and 38400) and **two stop bits**, where remoses defaults to
 115200 and one. Menu 020 `CAT/LIN/TUN` has to be on `CAT` as well, or the rear-panel jack is
-driving a linear amplifier instead. See `remoses.example.yaml`.
+driving a linear amplifier instead. See `remoses.example.yaml`. The radio tested was on 38400,
+which is worth setting: at 4800 the fast poll's three commands take a visible slice of a 500 ms
+tick.
 
 ### Anything else (`rigctld` backend)
 
@@ -638,6 +695,14 @@ instead, so what is left is whatever the last receive poll saw. Only the meters 
 reports get a line — an FT-857 has power and a high-SWR bit and no ALC — and the piped form
 carries the same readings as `pwr_raw=`, `swr_raw=`, `swr=` and `alc_raw=` fields, present only
 while they exist.
+
+**The same rule applies to the row above them.** `passband`, `filter` and `power` are drawn only
+where the radio has the command behind each, and the row goes entirely when it has none of the
+three — as on an FT-857, whose CAT set reads neither a bandwidth nor an output power. A zero
+there would not be a small reading, it would be the absence of one, and `power  0 %` beside a
+radio putting out ten watts reads as a fault. The piped form omits `passband=`, `filter=`,
+`power_pct=` and `power_w=` for the same reason, which matters more in a log: it is read
+afterwards by somebody who cannot ask what the zero meant.
 
 **Where it connects.** With no `-url`, the server address is read from the
 daemon's own configuration file (`remoses.yaml` by default, `-config` to point
