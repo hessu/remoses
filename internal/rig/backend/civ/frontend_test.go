@@ -311,13 +311,12 @@ func TestFrontEndCapsMatchTheModelTable(t *testing.T) {
 // ErrUnsupported rather than putting a command on the bus that the radio has
 // never heard of.
 func TestFrontEndSettersRefuseWhereUnsupported(t *testing.T) {
-	r, s := modelRig(t, "ic-910h") // no 16 02, no 14 group, no preselector
+	r, s := modelRig(t, "ic-910h") // no 14 group at all, no preselector
 	ctx := context.Background()
 	for _, tc := range []struct {
 		what string
 		err  error
 	}{
-		{"preamp", r.SetPreamp(ctx, s, 1)},
 		{"rf gain", r.SetRFGain(ctx, s, 50)},
 		{"ip+", r.SetIPPlus(ctx, s, true)},
 		{"digi-sel", r.SetDigiSel(ctx, s, true)},
