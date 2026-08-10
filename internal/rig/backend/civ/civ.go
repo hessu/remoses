@@ -23,6 +23,7 @@ package civ
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -279,6 +280,28 @@ func (r *Rig) Caps() radio.Caps {
 		IPPlusControl:       r.model.IPPlus,
 		DigiSelControl:      r.model.DigiSel,
 		DigiSelShiftControl: r.model.DigiSelShift,
+
+		// The noise processing and the notches. One blanker and one reducer on
+		// this family, so the counts are 0 or 1.
+		//
+		// NotchExclusive is true wherever both notches exist, and that is a
+		// statement about the RADIO rather than about the commands. 16 41 and
+		// 16 48 are separate commands and the reference says nothing about them
+		// interacting — but an IC-7610 switches one off whenever the other goes
+		// on, silently, so a client that asked for both would be given one and
+		// told nothing. Verified on the radio in both directions.
+		NotchExclusive:       r.model.Notch && r.model.AutoNotch,
+		NoiseBlankerLevels:   boolCount(r.model.NoiseBlanker),
+		NBLevelControl:       r.model.NBLevel,
+		NoiseReductionLevels: boolCount(r.model.NoiseReduction),
+		NRLevelControl:       r.model.NRLevel,
+		NotchControl:         r.model.Notch,
+		NotchFreqControl:     r.model.NotchFreq,
+		NotchWidths:          r.model.notchWidths(),
+		AutoNotchControl:     r.model.AutoNotch,
+		// No antenna selector: on this family the antenna is a per-band memory
+		// in the Set menu rather than a live switch. See radio.State.Antenna.
+		Antennas: 0,
 
 		// SubReceiver is whether the radio *has* a second receiver;
 		// SubReceiverReadable is whether remoses can report it. They differ on
@@ -549,6 +572,9 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		if r.model.DigiSelShift {
 			reqs = append(reqs, request{KeyDigiSelShift, r.frame(cmdLevel, subDigiSelShift)})
 		}
+		// The noise processing and the notches, on the same tier and for the
+		// same reason: an operator moves them by hand.
+		reqs = append(reqs, r.noiseReads()...)
 		return r.readAll(ctx, c, reqs...)
 	default:
 		return fmt.Errorf("civ: unknown poll tier %d", tier)
@@ -561,17 +587,45 @@ type request struct {
 	req []byte
 }
 
-// readAll runs the requests in order and stops at the first failure. The
-// session applies the patches from the replies itself, so nothing is returned
-// but the error.
+// readAll runs the requests in order.
+//
+// A REJECTION DOES NOT STOP IT; a transport failure does. The two are different
+// events and treating them alike starves a whole poll tier behind one command
+// the radio happens not to accept just now.
+//
+// Found on an IC-9700 in FM, which rejects 16 57 — the notch width, a DSP
+// setting FM has no use for. Everything queued behind it was then skipped on
+// every slow tick, so the automatic notch was never read at all and its field
+// stayed absent on a radio that reports it perfectly well in every other mode.
+// The refusal itself is correct and expected; losing the rest of the tier to it
+// was not.
+//
+// A transport error still stops the run, because there the link is gone and the
+// remaining reads would each wait out their own timeout. The first rejection is
+// kept and returned once the run finishes, so the session still sees that
+// something was refused and can log it.
 func (r *Rig) readAll(ctx context.Context, c backend.Conn, reqs ...request) error {
+	var refused error
 	for _, q := range reqs {
-		if _, err := r.read(ctx, c, q.key, q.req); err != nil {
+		_, err := r.read(ctx, c, q.key, q.req)
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, ErrRejected) {
 			return err
 		}
+		if refused == nil {
+			refused = err
+		}
 	}
-	return nil
+	return refused
 }
+
+// ErrRejected is a read the rig answered NG to: it is alive and said no.
+//
+// Distinguished from a transport failure so that readAll can carry on past it.
+// The session treats it as a non-fatal poll error either way.
+var ErrRejected = errors.New("civ: rig rejected the command")
 
 // read runs one read transaction. KeyAck is included in the wanted keys so that
 // a rig which rejects the command answers the caller straight away instead of
@@ -582,7 +636,7 @@ func (r *Rig) read(ctx context.Context, c backend.Conn, key backend.Key, req []b
 		return u, fmt.Errorf("civ: read %s: %w", key, err)
 	}
 	if !u.OK {
-		return u, fmt.Errorf("civ: rig rejected read %s", key)
+		return u, fmt.Errorf("civ: read %s: %w", key, ErrRejected)
 	}
 	if u.Key != key {
 		return u, fmt.Errorf("civ: read %s: unexpected reply %s", key, u.Key)

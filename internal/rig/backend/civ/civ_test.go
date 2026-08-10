@@ -42,6 +42,16 @@ type simRig struct {
 	rfGain       [2]byte
 	digiSelShift [2]byte
 
+	// The noise processing and the notches.
+	nb         byte
+	nr         byte
+	autoNotch  byte
+	notch      byte
+	notchWidth byte
+	nbLevel    [2]byte
+	nrLevel    [2]byte
+	notchFreq  [2]byte
+
 	// The dual-VFO side, indexed by the band selector commands 25, 26 and 29
 	// take: [0] is main (VFO A), [1] is sub (VFO B). Held separately from the
 	// single-VFO fields above because that is how the radio holds them — the
@@ -71,6 +81,13 @@ type simRig struct {
 	echo bool
 	// nak makes the rig reject every command.
 	nak bool
+	// reject names individual commands to answer NG to, keyed as the decoder
+	// keys them ("16/57"). This is a radio refusing one setting it cannot do
+	// just now, which is a different event from the link failing — see
+	// TestPollSurvivesARejectedRead.
+	reject map[string]bool
+	// transportErr makes every transaction fail as the link would.
+	transportErr bool
 
 	backend *Rig
 	log     [][]byte
@@ -99,6 +116,9 @@ func newSim(t *testing.T) *simRig {
 		agc:          0x02,                // MID on the default model
 		rfGain:       [2]byte{0x02, 0x30}, // 230 of 255
 		digiSelShift: [2]byte{0x01, 0x28},
+		nbLevel:      [2]byte{0x00, 0x50},
+		nrLevel:      [2]byte{0x01, 0x00},
+		notchFreq:    [2]byte{0x01, 0x28},
 
 		// VFO A on 14.025 CW/FIL2 like the operating fields, VFO B somewhere
 		// else entirely on USB/FIL1, so a test that mixes the two up produces
@@ -155,8 +175,19 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 		return nil, fmt.Errorf("sim: malformed request % X", req)
 	}
 	s.log = append(s.log, bytes.Clone(req))
+	if s.transportErr {
+		return nil, fmt.Errorf("sim: transport failed")
+	}
 	if s.nak {
 		return [][]byte{fromRig(codeNG)}, nil
+	}
+	// One named command refusing, the way a radio refuses a setting its
+	// current mode has no use for.
+	if s.reject != nil && len(req) >= 6 {
+		key := fmt.Sprintf("%02X/%02X", req[4], req[5])
+		if s.reject[key] {
+			return [][]byte{fromRig(codeNG)}, nil
+		}
 	}
 	cmd, body := req[4], req[5:len(req)-1]
 	ng := [][]byte{fromRig(codeNG)}
@@ -193,6 +224,9 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 			subKeyerSpeed:   &s.speed,
 			subRFGain:       &s.rfGain,
 			subDigiSelShift: &s.digiSelShift,
+			subNBLevel:      &s.nbLevel,
+			subNRLevel:      &s.nrLevel,
+			subNotchFreq:    &s.notchFreq,
 		}[body[0]]
 		if dst == nil {
 			return ng, nil
@@ -293,11 +327,16 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 			return ng, nil
 		}
 		dst := map[byte]*byte{
-			subBreakIn: &s.breakIn,
-			subPreamp:  &s.preamp,
-			subAGC:     &s.agc,
-			subIPPlus:  &s.ipPlus,
-			subDigiSel: &s.digiSel,
+			subBreakIn:   &s.breakIn,
+			subPreamp:    &s.preamp,
+			subAGC:       &s.agc,
+			subIPPlus:    &s.ipPlus,
+			subDigiSel:   &s.digiSel,
+			subNB:        &s.nb,
+			subNR:        &s.nr,
+			subAutoNotch: &s.autoNotch,
+			subNotch:     &s.notch,
+			subNotchWide: &s.notchWidth,
 		}[body[0]]
 		if dst == nil {
 			return ng, nil
@@ -530,9 +569,13 @@ func TestPoll(t *testing.T) {
 		// attenuator, 14 02 the RF gain, then 16 12 AGC, 16 65 IP+, 16 4E
 		// DIGI-SEL and 14 13 its shift. All settings an operator moves by hand,
 		// so all of them slow-tier.
+		// And after the front end, the noise processing and the notches: 16 22
+		// and 14 12 for the blanker, 16 40 and 14 06 for the reducer, then the
+		// manual notch, its position and width, and the automatic one.
 		{"slow", backend.PollSlow, []string{"1C/01", "14/0A", "1A/03",
 			"25", "25", "26", "26", "0F", "07", "16", "1A/06",
-			"16", "11", "14/02", "16", "16", "16", "14/13"}},
+			"16", "11", "14/02", "16", "16", "16", "14/13",
+			"16", "14/12", "16", "14/06", "16", "14/0D", "16", "16"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -853,12 +896,16 @@ func TestReadRejectsUnexpectedReply(t *testing.T) {
 func TestSlowPollSkipsWhatAModelLacks(t *testing.T) {
 	// want is what is left after the guards: power on both, break-in on the
 	// IC-910H (whose table does carry 16 47, in its own two-value form), and
-	// each radio's own front end. The IC-718 has a preamp, a pad and an RF
-	// gain and no AGC command; the IC-910H has an AGC and a pad, and its
-	// preamplifiers are external units with no 16 02 row.
+	// each radio's own front end and noise group.
+	//
+	// The IC-718 has a preamp, a pad, an RF gain and no AGC; a blanker, a
+	// reducer with a level, and an automatic notch with no manual one.
+	// The IC-910H has a preamp, a pad and an AGC; a blanker, and no reducer at
+	// all — its 16 40 carries the switch and the level together, which is not
+	// the family's form.
 	for model, want := range map[string][]string{
-		"ic-718":  {"14/0A", "16", "11", "14/02"},
-		"ic-910h": {"14/0A", "16", "11", "16"},
+		"ic-718":  {"14/0A", "16", "11", "14/02", "16", "16", "14/06", "16"},
+		"ic-910h": {"14/0A", "16", "16", "11", "16", "16"},
 	} {
 		t.Run(model, func(t *testing.T) {
 			s := newSim(t)
