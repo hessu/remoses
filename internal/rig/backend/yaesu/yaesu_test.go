@@ -268,12 +268,20 @@ func TestPollSlow(t *testing.T) {
 	}{
 		// NA before SH: it decides which column of the bandwidth table the
 		// index is read against.
-		{name: "CW", mode: "MD03", want: []string{"PC;", "AC;", "NA0;", "SH0;"}},
-		{name: "USB", mode: "MD02", want: []string{"PC;", "AC;", "NA0;", "SH0;"}},
-		{name: "USB-DATA", mode: "MD0C", want: []string{"PC;", "AC;", "NA0;", "SH0;"}},
+		// PA0;, RA0;, RG0; and GT0; are the receive front end, read on every
+		// slow poll whatever the mode. Unlike Kenwood's, Yaesu's AGC command
+		// carries no note about FM, so it is read there too.
+		{name: "CW", mode: "MD03", want: []string{"PC;", "AC;", "NA0;",
+			"PA0;", "RA0;", "RG0;", "GT0;", "SH0;"}},
+		{name: "USB", mode: "MD02", want: []string{"PC;", "AC;", "NA0;",
+			"PA0;", "RA0;", "RG0;", "GT0;", "SH0;"}},
+		{name: "USB-DATA", mode: "MD0C", want: []string{"PC;", "AC;", "NA0;",
+			"PA0;", "RA0;", "RG0;", "GT0;", "SH0;"}},
 		// SH has no bandwidth table in AM or FM on any model here.
-		{name: "FM", mode: "MD04", want: []string{"PC;", "AC;", "NA0;"}},
-		{name: "AM", mode: "MD05", want: []string{"PC;", "AC;", "NA0;"}},
+		{name: "FM", mode: "MD04", want: []string{"PC;", "AC;", "NA0;",
+			"PA0;", "RA0;", "RG0;", "GT0;"}},
+		{name: "AM", mode: "MD05", want: []string{"PC;", "AC;", "NA0;",
+			"PA0;", "RA0;", "RG0;", "GT0;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -689,7 +697,10 @@ func TestPollSlowFTdx9000(t *testing.T) {
 		if err := y.Poll(context.Background(), c, backend.PollSlow); err != nil {
 			t.Fatalf("Poll: %v", err)
 		}
-		c.wantSent(t, "PC;", "AC;")
+		// No RA0;: the FTdx9000's command list has no attenuator row, where
+		// every other radio here has one. Its preamp, RF gain and AGC are all
+		// present.
+		c.wantSent(t, "PC;", "AC;", "PA0;", "RG0;", "GT0;")
 	}
 }
 
@@ -918,7 +929,8 @@ func TestBusyIsNotRemembered(t *testing.T) {
 	if err := y.Poll(ctx, c, backend.PollSlow); err != nil {
 		t.Fatalf("PollSlow after a busy one: %v", err)
 	}
-	c.wantSent(t, "IF;", "TX;", "SM0;", "PC;", "AC;", "NA0;", "SH0;")
+	c.wantSent(t, "IF;", "TX;", "SM0;", "PC;", "AC;", "NA0;",
+		"PA0;", "RA0;", "RG0;", "GT0;", "SH0;")
 
 	// Capabilities are untouched too: a busy answer says nothing about what the
 	// radio can do.

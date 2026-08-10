@@ -31,6 +31,17 @@ type simRig struct {
 	ptt    byte
 	tuner  byte
 
+	// The receive front end. att holds whatever byte command 11 was given, so
+	// that a test can assert on the encoding — BCD dB against the IC-718's
+	// index — rather than only on what the decoder made of it.
+	att          byte
+	preamp       byte
+	agc          byte
+	ipPlus       byte
+	digiSel      byte
+	rfGain       [2]byte
+	digiSelShift [2]byte
+
 	// The dual-VFO side, indexed by the band selector commands 25, 26 and 29
 	// take: [0] is main (VFO A), [1] is sub (VFO B). Held separately from the
 	// single-VFO fields above because that is how the radio holds them — the
@@ -78,6 +89,16 @@ func newSim(t *testing.T) *simRig {
 		speed:   [2]byte{0x01, 0x28},
 		width:   0x10,
 		backend: testRig(t),
+
+		// The front end, set to values that are legal on the default model
+		// rather than to zero. The AGC byte especially: 00 is not one of the
+		// IC-7610's three speeds, so a rig answering 00 would look to the
+		// decoder exactly like a frame it had misread.
+		att:          0x06,                // 6 dB, BCD
+		preamp:       0x01,                // preamp 1
+		agc:          0x02,                // MID on the default model
+		rfGain:       [2]byte{0x02, 0x30}, // 230 of 255
+		digiSelShift: [2]byte{0x01, 0x28},
 
 		// VFO A on 14.025 CW/FIL2 like the operating fields, VFO B somewhere
 		// else entirely on USB/FIL1, so a test that mixes the two up produces
@@ -167,7 +188,12 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 		if len(body) < 1 {
 			return ng, nil
 		}
-		dst := map[byte]*[2]byte{subRFPower: &s.power, subKeyerSpeed: &s.speed}[body[0]]
+		dst := map[byte]*[2]byte{
+			subRFPower:      &s.power,
+			subKeyerSpeed:   &s.speed,
+			subRFGain:       &s.rfGain,
+			subDigiSelShift: &s.digiSelShift,
+		}[body[0]]
 		if dst == nil {
 			return ng, nil
 		}
@@ -261,15 +287,36 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 		return ng, nil
 
 	case cmdFunc:
-		// Only 16 47, CW break-in: the setting that decides whether a CW
-		// message sent over CAT is audible.
-		if len(body) < 1 || body[0] != subBreakIn {
+		// 16 47 is CW break-in, the setting that decides whether a CW message
+		// sent over CAT is audible; the rest are the receive front end.
+		if len(body) < 1 {
+			return ng, nil
+		}
+		dst := map[byte]*byte{
+			subBreakIn: &s.breakIn,
+			subPreamp:  &s.preamp,
+			subAGC:     &s.agc,
+			subIPPlus:  &s.ipPlus,
+			subDigiSel: &s.digiSel,
+		}[body[0]]
+		if dst == nil {
 			return ng, nil
 		}
 		if len(body) == 1 {
-			return [][]byte{fromRig(cmdFunc, subBreakIn, s.breakIn)}, nil
+			return [][]byte{fromRig(cmdFunc, body[0], *dst)}, nil
 		}
-		s.breakIn = body[1]
+		*dst = body[1]
+		return ok, nil
+
+	case cmdAttenuator:
+		// 11 takes no sub-command: a bare read, or one data byte to set.
+		if len(body) == 0 {
+			return [][]byte{fromRig(cmdAttenuator, s.att)}, nil
+		}
+		if len(body) != 1 {
+			return ng, nil
+		}
+		s.att = body[0]
 		return ok, nil
 
 	case cmdSplit:
@@ -479,8 +526,13 @@ func TestPoll(t *testing.T) {
 		// client showing a tuner button wants its state as soon as there is
 		// one. While a tuning cycle is running it moves to the fast tier
 		// instead; see TestTunerIsWatchedWhileTuning.
+		// And the receive front end brings up the rear: 16 02 the preamp, 11 the
+		// attenuator, 14 02 the RF gain, then 16 12 AGC, 16 65 IP+, 16 4E
+		// DIGI-SEL and 14 13 its shift. All settings an operator moves by hand,
+		// so all of them slow-tier.
 		{"slow", backend.PollSlow, []string{"1C/01", "14/0A", "1A/03",
-			"25", "25", "26", "26", "0F", "07", "16", "1A/06"}},
+			"25", "25", "26", "26", "0F", "07", "16", "1A/06",
+			"16", "11", "14/02", "16", "16", "16", "14/13"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -799,11 +851,14 @@ func TestReadRejectsUnexpectedReply(t *testing.T) {
 // every slow tick as a data-mode change — a wrong value in state rather than a
 // missing one, which is the failure DESIGN.md §5.4 records for that radio.
 func TestSlowPollSkipsWhatAModelLacks(t *testing.T) {
-	// want is what is left after the guards: power on both, plus break-in on
-	// the IC-910H, whose table does carry 16 47 — in its own two-value form.
+	// want is what is left after the guards: power on both, break-in on the
+	// IC-910H (whose table does carry 16 47, in its own two-value form), and
+	// each radio's own front end. The IC-718 has a preamp, a pad and an RF
+	// gain and no AGC command; the IC-910H has an AGC and a pad, and its
+	// preamplifiers are external units with no 16 02 row.
 	for model, want := range map[string][]string{
-		"ic-718":  {"14/0A"},
-		"ic-910h": {"14/0A", "16"},
+		"ic-718":  {"14/0A", "16", "11", "14/02"},
+		"ic-910h": {"14/0A", "16", "11", "16"},
 	} {
 		t.Run(model, func(t *testing.T) {
 			s := newSim(t)

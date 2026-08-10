@@ -53,6 +53,20 @@ func newTestConn(t *testing.T, y *Rig, answers map[string]string) *testConn {
 	if answers == nil {
 		answers = map[string]string{}
 	}
+	// The receive front end answers by default, so a test about something else
+	// need not know that the slow poll reads four more commands. Every one of
+	// them echoes the fixed 0 that selects the main receiver, which is what the
+	// decoders index past.
+	//
+	// GT04 is worth noticing: 4 is AUTO-FAST as a READING, and there is no
+	// reading that means plain "auto" — see agcReading.
+	for req, answer := range map[string]string{
+		reqPA: "PA01", reqRA: "RA01", reqRG: "RG0200", reqGT: "GT04",
+	} {
+		if _, ok := answers[req]; !ok {
+			answers[req] = answer
+		}
+	}
 	return &testConn{t: t, y: y, answers: answers}
 }
 

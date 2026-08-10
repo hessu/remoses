@@ -75,6 +75,16 @@ type Rig struct {
 	// and the rest of the time it belongs on the slow one.
 	tuner atomic.Value
 
+	// digiSel is the last 16 4E reading, kept only to explain a refusal.
+	//
+	// An IC-7610 with DIGI-SEL engaged answers NG to 16 02 01 — it will not
+	// switch a preamplifier in behind the preselector — while 16 02 00 is
+	// accepted and the read works throughout. Nothing in the CI-V reference
+	// mentions the interlock, so without this the operator gets a bare "command
+	// rejected" for a request that is refused for a reason they can act on.
+	// Verified on the radio: with DIGI-SEL off, both preamplifiers select.
+	digiSel atomic.Bool
+
 	// transmitting is the last PTT reading, and shapes the poll the same way:
 	// the transmit meters are asked for only while the transmitter is up,
 	// because in receive all three read zero and mean nothing.
@@ -259,6 +269,16 @@ func (r *Rig) Caps() radio.Caps {
 		TunerControl: r.model.Tuner,
 		TunerTune:    r.model.Tuner,
 		PowerSwitch:  r.model.PowerSwitch,
+
+		// The receive front end, straight from the model table. The attenuator
+		// list gets a fresh slice for the same reason the mode list does.
+		PreampLevels:        r.model.Preamp,
+		AttenuatorDB:        append([]int(nil), r.model.Attenuator...),
+		RFGainControl:       r.model.RFGain,
+		AGCSettings:         agcSettings(r.model.AGC),
+		IPPlusControl:       r.model.IPPlus,
+		DigiSelControl:      r.model.DigiSel,
+		DigiSelShiftControl: r.model.DigiSelShift,
 
 		// SubReceiver is whether the radio *has* a second receiver;
 		// SubReceiverReadable is whether remoses can report it. They differ on
@@ -504,6 +524,30 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		// and publish it as a data-mode change every slow tick.
 		if r.model.DataMode {
 			reqs = append(reqs, request{KeyDataMode, r.dataModeRead()})
+		}
+		// The receive front end. All of it is slow-tier: these are settings an
+		// operator changes by hand, and each is one more transaction per tick on
+		// a bus that also has to carry the fast poll.
+		if r.model.Preamp > 0 {
+			reqs = append(reqs, request{KeyPreamp, r.frame(cmdFunc, subPreamp)})
+		}
+		if len(r.model.Attenuator) > 0 {
+			reqs = append(reqs, request{KeyAttenuator, r.frame(cmdAttenuator)})
+		}
+		if r.model.RFGain {
+			reqs = append(reqs, request{KeyRFGain, r.frame(cmdLevel, subRFGain)})
+		}
+		if len(r.model.AGC) > 0 {
+			reqs = append(reqs, request{KeyAGC, r.frame(cmdFunc, subAGC)})
+		}
+		if r.model.IPPlus {
+			reqs = append(reqs, request{KeyIPPlus, r.frame(cmdFunc, subIPPlus)})
+		}
+		if r.model.DigiSel {
+			reqs = append(reqs, request{KeyDigiSel, r.frame(cmdFunc, subDigiSel)})
+		}
+		if r.model.DigiSelShift {
+			reqs = append(reqs, request{KeyDigiSelShift, r.frame(cmdLevel, subDigiSelShift)})
 		}
 		return r.readAll(ctx, c, reqs...)
 	default:

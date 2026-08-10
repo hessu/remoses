@@ -90,6 +90,55 @@ type Model struct {
 	// VFOPair is what this model's FA and FB actually name. See VFOStyle: on
 	// one radio here they are not two VFOs at all.
 	VFOPair VFOStyle
+
+	// The receive front end: PA the preamplifier, RA the attenuator, RG the RF
+	// gain, and the AGC under whichever command this generation puts it.
+	//
+	// Preamp is how many preamplifiers PA offers. One on the TS-480, TS-590 and
+	// TS-990, whose parameter is "0: Pre-amp OFF, 1: Pre-amp ON"; two on the
+	// TS-890S, which names them PRE 1 and PRE 2.
+	Preamp int
+	// Attenuator lists the RA steps in dB, ascending and without the 0. One
+	// entry on the TS-480 and TS-590, whose RA is "00: ATT OFF, 01: ATT ON";
+	// three on the TS-890S and TS-990S, which step 6, 12 and 18 dB.
+	Attenuator []int
+	// AttenuatorWidth is how many digits RA takes, and the two generations
+	// disagree in a way that would otherwise put a syntax error on the wire:
+	// the TS-480 and TS-590 spell it RA00/RA01, the TS-890S RA0, the TS-990S
+	// RA<band><value>. See AttenuatorStyle for the last of those.
+	AttenuatorWidth int
+	// AttenuatorBanded marks the TS-990S, whose RA and PA and GC and RG all
+	// carry a leading main/sub band selector that the others have no room for.
+	Banded bool
+	// RFGainMax is the top of the RG range, and it is NOT the same across the
+	// family: 100 on a TS-480 and 255 on everything since. Publishing a
+	// percentage against the wrong ceiling would misreport the same knob by a
+	// factor of two and a half.
+	RFGainMax int
+	// AGC maps each speed onto its parameter, and AGCCmd says which command
+	// carries it: GC on everything current, GT on the TS-480, whose GT is a
+	// three-digit AGC constant where its successors use GT for a time constant
+	// and GC for the speed.
+	AGC    map[radio.AGC]string
+	AGCCmd string
+	// AGCOnCode is the parameter that turns the AGC back ON, and without it
+	// switching the AGC off is a ONE-WAY TRIP.
+	//
+	// The reference documents the parameter — "3: AGC Off → On (AGC returns to
+	// its Slow/Fast status before turning Off)", "used only for turning AGC
+	// On" — and it reads as one option among four. What no reference says is
+	// that the other two are REFUSED while the AGC is off: on a TS-590S, GC1
+	// and GC2 both draw an error and the radio stays off. That half came from
+	// the radio, and it is what makes this the only way back rather than a
+	// convenience.
+	//
+	// The TS-890S and TS-990S values are transcribed rather than tested;
+	// neither has been on the bench. If they take a speed directly from off,
+	// sending this first is harmless.
+	//
+	// Empty on the TS-480, whose AGC is a different command with no such value
+	// documented.
+	AGCOnCode string
 }
 
 // VFOStyle is what a model's FA and FB commands address.
@@ -298,6 +347,26 @@ func md(name, label string, id int) Model {
 		MaxPowerW:     100,
 		BreakIn:       BreakInVX,
 		VFOPair:       VFOPairAB,
+		// The TS-590 front end. PA is one digit and answers two; RA is two
+		// digits and answers four; RG is three throughout. GC carries the AGC,
+		// in a form with no middle speed — "0: AGC Off, 1: AGC Slow, 2: AGC
+		// Fast" — and its 3 is a set-only "off then on again" that remoses does
+		// not offer, since it means "restore whatever you had", which is not a
+		// state a client can ask for by name.
+		Preamp: 1,
+		// One pad, and the reference does not say how deep: RA is "00: ATT OFF,
+		// 01: ATT ON" and nothing more. 12 dB is this series' published receiver
+		// specification, and it is a LABEL only — the byte on the wire is 01
+		// either way, so a wrong figure here mislabels a control rather than
+		// mis-setting one. Worth confirming against the radio's own display.
+		Attenuator:      []int{12},
+		AttenuatorWidth: 2,
+		RFGainMax:       255,
+		AGCCmd:          "GC",
+		AGC: map[radio.AGC]string{
+			radio.AGCOff: "0", radio.AGCSlow: "1", radio.AGCFast: "2",
+		},
+		AGCOnCode: "3",
 	}
 }
 
@@ -322,6 +391,18 @@ func om(name, label string, id int) Model {
 	// Both of this generation have a real BI command instead of VX's double
 	// meaning. How many values it takes differs, so the TS-890S overrides this.
 	m.BreakIn = BreakInBI3
+	// And both gain a stepped attenuator where the older pair have one pad, in
+	// dB their own references print: "1: 6 dB, 2: 12 dB, 3: 18 dB". Its width
+	// drops to one digit, and the AGC gains a middle speed.
+	m.Attenuator = []int{6, 12, 18}
+	m.AttenuatorWidth = 1
+	m.AGC = map[radio.AGC]string{
+		radio.AGCOff: "0", radio.AGCSlow: "1", radio.AGCMid: "2", radio.AGCFast: "3",
+	}
+	// Their off-then-on value moves up with the extra speed: 4 here, 3 on the
+	// TS-590. Both references describe it the same way, and the TS-890S's adds
+	// "will turn the AGC On and will set the previous AGC state".
+	m.AGCOnCode = "4"
 	return m
 }
 
@@ -386,6 +467,25 @@ var models = map[string]Model{
 		// out to be wrong the cost is bounded: remoses writes VX only in CW,
 		// where the effect would be VOX switched on rather than break-in.
 		m.BreakIn = BreakInVX
+		// Its RF gain counts to 100, not to 255. The same knob, reported on a
+		// different scale from every later radio in the family — which is
+		// exactly why RFGainMax is per model and the API publishes a
+		// percentage.
+		m.RFGainMax = 100
+		// And its AGC is on GT rather than GC, in three digits: "000: OFF,
+		// 001: Fast, 002: Slow". Later radios use GT for the time constant and
+		// put the speed on GC, so the same two letters mean different things
+		// two generations apart.
+		m.AGCCmd = "GT"
+		m.AGC = map[radio.AGC]string{
+			radio.AGCOff: "000", radio.AGCFast: "001", radio.AGCSlow: "002",
+		}
+		// And no off-then-on value: its GT table is those three and stops. Which
+		// may mean this radio takes a speed directly from off, or may mean it has
+		// the TS-590's trap with no documented way out; nothing here can tell,
+		// and inventing a fourth parameter to send blind is not the way to find
+		// out. Whoever puts one on the air will know within a minute.
+		m.AGCOnCode = ""
 		return m
 	}(),
 
@@ -403,6 +503,9 @@ var models = map[string]Model{
 		// Its BI is off/on only, where the TS-990S's takes semi and full
 		// directly; here the SD delay is what separates them.
 		m.BreakIn = BreakInBI2
+		// Two preamplifiers, which its reference names PRE 1 and PRE 2 where
+		// the rest of the family has a single on/off.
+		m.Preamp = 2
 		return m
 	}(),
 
@@ -418,6 +521,11 @@ var models = map[string]Model{
 		// VFOPairMainSub for why that means no VFO addressing rather than
 		// addressing under different names.
 		m.VFOPair = VFOPairMainSub
+		// Two receivers, and every front-end command carries which one it is
+		// about: PA0/PA1, RA<band><value>, GC<band><value>, RG<band><nnn>.
+		// remoses works the main band, as it does everywhere else on this
+		// radio — see VFOPairMainSub.
+		m.Banded = true
 		return m
 	}(),
 }

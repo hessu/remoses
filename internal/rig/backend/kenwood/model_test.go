@@ -457,17 +457,22 @@ func TestPollSlowPerModel(t *testing.T) {
 		want  []string
 	}{
 		// No DA and no FL to read, but break-in is read like the TS-590's:
-		// SD; for the delay, then VX; for the switch.
-		{"ts480", []string{"PC;", "AC;", "FB;", "FR;", "FT;", "SD;", "VX;", "FW;"}},
-		{"ts590sg", []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
+		// SD; for the delay, then VX; for the switch. Its AGC is on GT; where
+		// every later radio has it on GC; — the same two letters mean the time
+		// constant on those.
+		{"ts480", []string{"PC;", "AC;", "FB;", "FR;", "FT;",
+			"PA;", "RA;", "RG;", "GT;", "SD;", "VX;", "FW;"}},
+		{"ts590sg", []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
+			"PA;", "RA;", "RG;", "GC;", "SD;", "VX;", "FW;"}},
 		// DATA came with the mode code, and FW is not a width here. The TS-890S
 		// asks for no filter at all: its FL0 read form carries the selection, so
 		// there is no way to ask without also setting. Its BI is two-valued, so
 		// SD comes first; the TS-990S's is three-valued and needs no delay.
-		{"ts890s", []string{"PC;", "AC;", "FB;", "FR;", "FT;", "SD;", "BI;"}},
+		{"ts890s", []string{"PC;", "AC;", "FB;", "FR;", "FT;",
+			"PA;", "RA;", "RG;", "GC;", "SD;", "BI;"}},
 		// And no FB;/FR;/FT; at all on the TS-990S: its FA and FB are the Main
 		// and Sub bands rather than two VFOs, so remoses does not address them.
-		{"ts990s", []string{"PC;", "AC;", "FL00;", "BI;"}},
+		{"ts990s", []string{"PC;", "AC;", "FL00;", "PA;", "RA;", "RG;", "GC;", "BI;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {

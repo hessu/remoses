@@ -346,6 +346,58 @@ const (
 // key a transmitter. See Patch.TunerTune.
 func (t Tuner) Valid() bool { return t == TunerOff || t == TunerOn }
 
+// AGC is the receiver's automatic gain control setting.
+//
+// The named speeds are the ones every manufacturer agrees on, and the radios
+// disagree about which of them exist: a TS-590 has slow and fast and no middle,
+// a TS-890 and a TS-990 have all three, a TS-480 has off, fast and slow under a
+// different command entirely. Caps.AGCSettings lists what a given radio will
+// accept, and a client should offer those rather than assume the full set.
+type AGC string
+
+const (
+	// AGCUnknown is a radio that has not reported one, or one remoses cannot
+	// ask.
+	AGCUnknown AGC = ""
+	// AGCOff is the AGC switched out. Not every radio can: Icom's command has
+	// no off at all, because on those sets AGC OFF is a per-mode menu item
+	// rather than one of the three speeds.
+	AGCOff  AGC = "off"
+	AGCFast AGC = "fast"
+	AGCMid  AGC = "mid"
+	AGCSlow AGC = "slow"
+	// AGCAuto lets the radio pick a speed from the operating mode. Yaesu only.
+	//
+	// It is settable but never read back, and that is not an inconsistency to
+	// paper over: the radio answers with the speed auto CHOSE, as one of the
+	// three values below. So a client that sets "auto" and reads "auto-mid" has
+	// not failed to set anything — it is being told what auto currently means.
+	AGCAuto AGC = "auto"
+	// The auto-resolved speeds. Read-only: sending one is refused, because the
+	// radio has no way to be told "be automatic, and also be fast".
+	AGCAutoFast AGC = "auto-fast"
+	AGCAutoMid  AGC = "auto-mid"
+	AGCAutoSlow AGC = "auto-slow"
+)
+
+// Settable reports whether a is a value a client may ask for.
+//
+// The auto-resolved readings are excluded, so echoing back a state just read
+// cannot fail on a radio that reported one.
+func (a AGC) Settable() bool {
+	switch a {
+	case AGCOff, AGCFast, AGCMid, AGCSlow, AGCAuto:
+		return true
+	}
+	return false
+}
+
+// Auto reports whether the radio is choosing the speed itself, whichever speed
+// it has currently chosen.
+func (a AGC) Auto() bool {
+	return a == AGCAuto || a == AGCAutoFast || a == AGCAutoMid || a == AGCAutoSlow
+}
+
 // CWStatus describes the CW sending queue.
 type CWStatus struct {
 	Busy           bool `json:"busy"`
@@ -416,6 +468,49 @@ type State struct {
 	// A client should show it as its own condition and offer a power-on, not a
 	// reconnect.
 	Standby bool `json:"standby,omitempty"`
+
+	// The receive front end: what the signal meets between the antenna socket
+	// and the first mixer, plus the gain controls behind it.
+	//
+	// All of them are pointers because zero is a real setting for every one —
+	// preamp off, 0 dB of attenuation, RF gain backed all the way off — and a
+	// client cannot be left to guess whether a 0 means "off" or "this radio
+	// never said". Absent means remoses has no reading, either because the
+	// radio has no such control or because its CAT set cannot report one.
+	//
+	// Preamp is 0 for off and 1..Caps.PreampLevels for the preamplifiers, in
+	// the order the radio numbers them. On a set with two, 1 is the quieter and
+	// 2 the higher gain; Yaesu calls off "IPO" and 1 and 2 "AMP 1" and "AMP 2",
+	// which is the same control under another name.
+	Preamp *int `json:"preamp,omitempty"`
+	// AttenuatorDB is the attenuation actually in line, in dB, 0 for none.
+	//
+	// It is a dB figure rather than a step index because the steps are not the
+	// same set twice: an IC-7610 has 3 dB steps to 45, an IC-7600 has 6, 12 and
+	// 18, an FT-891 has one switch and a TS-590 has another. Caps.AttenuatorDB
+	// lists what this radio will accept.
+	AttenuatorDB *int `json:"attenuator_db,omitempty"`
+	// RFGain is the receiver's RF gain control, 0-100%.
+	//
+	// Percent rather than the radio's own count because the counts differ — a
+	// TS-480 reads 0-100 and a TS-590 reads 0-255 for the same knob — and a
+	// number that means a different thing on two radios of the same make is a
+	// number a client cannot draw.
+	RFGain *float64 `json:"rf_gain,omitempty"`
+	// AGC is the automatic gain control speed.
+	AGC AGC `json:"agc,omitempty"`
+	// IPPlus is Icom's IP+ : an intermodulation-rejection mode that trades a
+	// little sensitivity for a better third-order intercept, by backing the
+	// direct-sampling ADC off its clipping point.
+	IPPlus *bool `json:"ip_plus,omitempty"`
+	// DigiSel is Icom's DIGI-SEL preselector, a narrow tracking filter ahead of
+	// the ADC, and DigiSelShift trims where it sits, 0-100%.
+	//
+	// The shift is meaningless while the preselector is switched out, but it is
+	// still reported: the radio remembers it, and a client redrawing the
+	// control wants the position it will return to.
+	DigiSel      *bool    `json:"digi_sel,omitempty"`
+	DigiSelShift *float64 `json:"digi_sel_shift,omitempty"`
 
 	// Tuner is the internal antenna tuner: off, on, or a tuning cycle in
 	// progress. Absent on a radio that has none or that remoses cannot ask.
@@ -510,6 +605,16 @@ type Patch struct {
 	CWBusy     *bool
 	Connected  *bool
 
+	// The receive front end. AGC is a string enum whose zero value already
+	// means "unknown", so it needs no pointer; the rest carry a real zero.
+	Preamp       *int
+	AttenuatorDB *int
+	RFGain       *float64
+	AGC          *AGC
+	IPPlus       *bool
+	DigiSel      *bool
+	DigiSelShift *float64
+
 	// The dual-VFO fields. VFOA and VFOB are whole-VFO replacements rather than
 	// per-field pointers: the IC-7610's command 26 answers mode, data mode and
 	// filter together and command 25 answers a frequency, so a decoder always
@@ -532,6 +637,9 @@ func (p Patch) Empty() bool {
 		p.SWR == nil && p.ALC == nil && p.SWRRatio == nil &&
 		p.Tuner == nil && p.Standby == nil &&
 		p.CWBusy == nil && p.Connected == nil &&
+		p.Preamp == nil && p.AttenuatorDB == nil && p.RFGain == nil &&
+		p.AGC == nil && p.IPPlus == nil && p.DigiSel == nil &&
+		p.DigiSelShift == nil &&
 		p.VFO == nil && p.VFOA == nil && p.VFOB == nil &&
 		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil &&
 		p.BreakIn == nil
@@ -581,6 +689,36 @@ func (s State) Apply(p Patch) State {
 	}
 	if p.Standby != nil {
 		s.Standby = *p.Standby
+	}
+	// The front end. Each is copied by value into a fresh pointer rather than
+	// aliased, so that a state handed to two readers cannot be changed under
+	// one of them by whoever still holds the patch.
+	if p.Preamp != nil {
+		v := *p.Preamp
+		s.Preamp = &v
+	}
+	if p.AttenuatorDB != nil {
+		v := *p.AttenuatorDB
+		s.AttenuatorDB = &v
+	}
+	if p.RFGain != nil {
+		v := *p.RFGain
+		s.RFGain = &v
+	}
+	if p.AGC != nil {
+		s.AGC = *p.AGC
+	}
+	if p.IPPlus != nil {
+		v := *p.IPPlus
+		s.IPPlus = &v
+	}
+	if p.DigiSel != nil {
+		v := *p.DigiSel
+		s.DigiSel = &v
+	}
+	if p.DigiSelShift != nil {
+		v := *p.DigiSelShift
+		s.DigiSelShift = &v
 	}
 	if p.CWBusy != nil {
 		s.CW.Busy = *p.CWBusy
@@ -656,6 +794,16 @@ func sameRatio(a, b *float64) bool {
 	return *a == *b
 }
 
+// samePtr is sameMeter for any comparable value: the front-end controls are all
+// optional, and for every one of them "went away" is as much a change as a new
+// reading.
+func samePtr[T comparable](a, b *T) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 // Diff returns a patch describing every field in which next differs from s.
 // The WebSocket layer uses it to emit deltas instead of full snapshots.
 func (s State) Diff(next State) Patch {
@@ -704,6 +852,27 @@ func (s State) Diff(next State) Patch {
 	}
 	if s.Standby != next.Standby {
 		p.Standby = &next.Standby
+	}
+	if !samePtr(s.Preamp, next.Preamp) {
+		p.Preamp = next.Preamp
+	}
+	if !samePtr(s.AttenuatorDB, next.AttenuatorDB) {
+		p.AttenuatorDB = next.AttenuatorDB
+	}
+	if !samePtr(s.RFGain, next.RFGain) {
+		p.RFGain = next.RFGain
+	}
+	if s.AGC != next.AGC {
+		p.AGC = &next.AGC
+	}
+	if !samePtr(s.IPPlus, next.IPPlus) {
+		p.IPPlus = next.IPPlus
+	}
+	if !samePtr(s.DigiSel, next.DigiSel) {
+		p.DigiSel = next.DigiSel
+	}
+	if !samePtr(s.DigiSelShift, next.DigiSelShift) {
+		p.DigiSelShift = next.DigiSelShift
 	}
 	if s.Connected != next.Connected {
 		p.Connected = &next.Connected
@@ -812,6 +981,33 @@ type Caps struct {
 	// toggle — and it is refused without the lock for exactly that reason.
 	TunerTune bool `json:"tuner_tune"`
 
+	// The receive front end. Each says only that remoses can read and set the
+	// control over CAT — a radio may well have a preamplifier whose switch is
+	// on the panel and nowhere in its command set.
+	//
+	// PreampLevels is how many preamplifiers there are, so 0 for none, 1 for a
+	// single on/off, 2 for a set with two stages. A client offers 0..n.
+	PreampLevels int `json:"preamp_levels"`
+	// AttenuatorDB lists the attenuation steps the radio accepts, in dB and
+	// ascending, NOT including 0 — off is always available where the list is
+	// not empty. One entry is an on/off attenuator whose depth is fixed, which
+	// is most radios; an IC-7610 lists fifteen.
+	AttenuatorDB []int `json:"attenuator_db,omitempty"`
+	// RFGainControl is the receiver's RF gain, reported as a percentage.
+	RFGainControl bool `json:"rf_gain_control"`
+	// AGCSettings lists the AGC speeds this radio accepts, empty where remoses
+	// cannot work its AGC at all. The set really does differ between models of
+	// one make, so a client should offer these rather than a fixed three.
+	AGCSettings []AGC `json:"agc_settings,omitempty"`
+	// IPPlusControl is Icom's IP+ intermodulation-rejection mode.
+	IPPlusControl bool `json:"ip_plus_control"`
+	// DigiSelControl is Icom's DIGI-SEL tracking preselector, and
+	// DigiSelShiftControl its tuning trim. Separate because the big sets have
+	// both and it is not safe to assume a radio with the preselector will also
+	// let remoses move it.
+	DigiSelControl      bool `json:"digi_sel_control"`
+	DigiSelShiftControl bool `json:"digi_sel_shift_control"`
+
 	// SubReceiver is a second receiver that can be listened to at the same
 	// time as the first — the IC-7610's dual watch. It is not "the radio has
 	// two VFOs", which nearly every radio here does: it is "both can be
@@ -875,6 +1071,42 @@ type Caps struct {
 func (c Caps) SupportsMode(m Mode) bool {
 	for _, x := range c.Modes {
 		if x == m {
+			return true
+		}
+	}
+	return false
+}
+
+// AttenuatorControl reports whether this radio has an attenuator remoses can
+// work at all.
+func (c Caps) AttenuatorControl() bool { return len(c.AttenuatorDB) > 0 }
+
+// SupportsAttenuation reports whether db is a setting this radio accepts.
+//
+// 0 — switched out — is accepted wherever there is an attenuator, and is not in
+// the list for the same reason "not transmitting" is not a transmit meter.
+func (c Caps) SupportsAttenuation(db int) bool {
+	if !c.AttenuatorControl() {
+		return false
+	}
+	if db == 0 {
+		return true
+	}
+	for _, x := range c.AttenuatorDB {
+		if x == db {
+			return true
+		}
+	}
+	return false
+}
+
+// AGCControl reports whether remoses can work this radio's AGC.
+func (c Caps) AGCControl() bool { return len(c.AGCSettings) > 0 }
+
+// SupportsAGC reports whether v is a speed this radio accepts being set to.
+func (c Caps) SupportsAGC(v AGC) bool {
+	for _, x := range c.AGCSettings {
+		if x == v {
 			return true
 		}
 	}

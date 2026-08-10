@@ -62,6 +62,20 @@ const (
 	cmdFunc    = 0x16
 	subBreakIn = 0x47 // 16 47: 00 off, 01 semi, 02 full
 
+	// cmdAttenuator is 11, the front-end pad. Its data byte is the depth in dB
+	// as BCD — 11 20 is 20 dB — on every radio here but the IC-718, whose table
+	// indexes instead. See Model.AttenuatorLiteral.
+	cmdAttenuator = 0x11
+	attenuatorOff = 0x00
+
+	subPreamp  = 0x02 // 16 02: 00 off, 01 preamp 1, 02 preamp 2
+	subAGC     = 0x12 // 16 12: the speeds, per Model.AGC
+	subDigiSel = 0x4E // 16 4E: 00 off, 01 on
+	subIPPlus  = 0x65 // 16 65: 00 off, 01 on
+
+	subRFGain       = 0x02 // 14 02, 0000-0255
+	subDigiSelShift = 0x13 // 14 13, 0000-0255
+
 	subDualWatchOff = 0xC0 // 07 C0
 	subDualWatchOn  = 0xC1 // 07 C1
 	subDualWatch    = 0xC2 // 07 C2, read/set, 00 off 01 on

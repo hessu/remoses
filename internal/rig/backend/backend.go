@@ -203,6 +203,54 @@ type VFOModeSelector interface {
 	SelectVFOMode(ctx context.Context, c Conn, vfo radio.VFO) error
 }
 
+// FrontEndController is implemented by a backend that can work the receive
+// front end: the preamplifier, the attenuator, the RF gain and the AGC.
+//
+// The four travel together because the radios treat them as one panel and an
+// operator uses them as one — turn the preamp off, wind the attenuator in, back
+// the RF gain off — but each method may still refuse individually with
+// ErrUnsupported, because plenty of sets have three of the four. What a given
+// radio accepts is in its Caps: PreampLevels, AttenuatorDB, RFGainControl and
+// AGCSettings.
+//
+// Reading is not part of the interface. All four are ordinary polled values
+// that arrive as patches from the slow tier, so the session never needs to ask
+// a backend for one.
+type FrontEndController interface {
+	// SetPreamp selects preamplifier 0 (off) to Caps.PreampLevels.
+	SetPreamp(ctx context.Context, c Conn, level int) error
+	// SetAttenuator sets attenuation in dB, 0 for switched out. The value is
+	// one of Caps.AttenuatorDB, in the radio's own dB rather than a step index,
+	// because no two families step the same way.
+	SetAttenuator(ctx context.Context, c Conn, db int) error
+	// SetRFGain sets the receiver RF gain, 0-100%. Backends scale to whatever
+	// their radio counts in — 0-255 on most, 0-100 on a TS-480.
+	SetRFGain(ctx context.Context, c Conn, pct float64) error
+	// SetAGC sets the AGC speed. v is one of Caps.AGCSettings, and never one of
+	// the auto-resolved readings, which the radios report but will not accept.
+	SetAGC(ctx context.Context, c Conn, v radio.AGC) error
+}
+
+// PreselectController is implemented by a backend whose radio has Icom's
+// front-end extras: IP+ and the DIGI-SEL preselector.
+//
+// Separate from FrontEndController because these are one manufacturer's, and
+// not even all of that manufacturer's: IP+ belongs to the direct-sampling sets
+// and DIGI-SEL to the big superhets and the IC-7610. A backend implements this
+// only where the model actually has them, and Caps says which.
+type PreselectController interface {
+	// SetIPPlus switches Icom's IP+ intermodulation-rejection mode.
+	SetIPPlus(ctx context.Context, c Conn, on bool) error
+	// SetDigiSel switches the DIGI-SEL preselector in or out of line.
+	SetDigiSel(ctx context.Context, c Conn, on bool) error
+	// SetDigiSelShift moves the preselector's centre, 0-100%.
+	//
+	// It is accepted while the preselector is switched out: the radio keeps the
+	// setting, and refusing would make a client sequence two controls that the
+	// radio itself does not care about the order of.
+	SetDigiSelShift(ctx context.Context, c Conn, pct float64) error
+}
+
 // BreakInController is implemented by a backend that can read and set the CW
 // break-in setting.
 //

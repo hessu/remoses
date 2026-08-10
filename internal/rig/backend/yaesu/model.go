@@ -70,6 +70,26 @@ type Model struct {
 	HasAI     bool
 	HasNarrow bool
 
+	// The receive front end: PA the preamplifier (which Yaesu calls IPO when it
+	// is switched out), RA the attenuator, RG the RF gain, GT the AGC.
+	//
+	// Preamp is how many amplifiers PA offers past IPO: two nearly everywhere,
+	// one on the FT-891, whose parameter is "0: IPO, 1: AMP" with no second
+	// stage.
+	Preamp int
+	// Attenuator lists the RA steps in dB. Three on the FT-950 generation and
+	// the FTdx sets, which print "1: 6 dB, 2: 12 dB, 3: 18 dB"; one on the
+	// FT-891, FT-991A and FTX-1, whose RA is "0: OFF, 1: ON" with the depth
+	// unstated — see the registry entries for where that dB figure comes from.
+	// Empty on the FTdx9000, which has no RA command at all.
+	Attenuator []int
+	// AGC is the GT map. The same five settings across the family, and worth
+	// stating per model anyway because the FTdx9000 is the one radio here whose
+	// reference this backend has not read for it.
+	AGC map[radio.AGC]byte
+	// RFGain is true when RG reads and sets the receiver RF gain, 000-255.
+	RFGain bool
+
 	// Modes are the operating modes this radio accepts, in display order.
 	Modes []radio.Mode
 	// Codes is this model's whole MD table, keyed by the mode character. The
@@ -245,9 +265,51 @@ func modern(name, label string, id int) Model {
 		MaxPowerW:      100,
 		Filter:         FilterFixed,
 		Widths:         widthsFTdx101(),
+		// The family front end: IPO plus two amplifiers on PA, the 6/12/18 dB
+		// ladder on RA, RG for the gain and the five GT settings. The radios
+		// with a single pad or a single amplifier override it below.
+		Preamp:     2,
+		Attenuator: []int{6, 12, 18},
+		RFGain:     true,
+		AGC:        agcYaesu(),
 		MinHz:      30_000,
 		MaxHz:      75_000_000,
 	}
+}
+
+// agcYaesu is the GT map, which is the same across every profiled model.
+//
+// Note what is NOT here: 5 and 6. The radio ACCEPTS 0 to 4 and ANSWERS 0 to 6,
+// because 4 means "choose for me" and the answer says which of fast, mid and
+// slow auto currently chose. So the settable values and the readable ones are
+// different sets, and radio.AGC carries both — see AGCAutoFast and its
+// neighbours, and Model.agcReading below, which decodes them.
+func agcYaesu() map[radio.AGC]byte {
+	return map[radio.AGC]byte{
+		radio.AGCOff: '0', radio.AGCFast: '1', radio.AGCMid: '2',
+		radio.AGCSlow: '3', radio.AGCAuto: '4',
+	}
+}
+
+// agcReading decodes a GT answer, which has three values no set may carry.
+func agcReading(b byte) (radio.AGC, bool) {
+	switch b {
+	case '0':
+		return radio.AGCOff, true
+	case '1':
+		return radio.AGCFast, true
+	case '2':
+		return radio.AGCMid, true
+	case '3':
+		return radio.AGCSlow, true
+	case '4':
+		return radio.AGCAutoFast, true
+	case '5':
+		return radio.AGCAutoMid, true
+	case '6':
+		return radio.AGCAutoSlow, true
+	}
+	return radio.AGCUnknown, false
 }
 
 // older describes an FT-950-generation radio: eight-digit FA/FB and with it the
@@ -273,6 +335,13 @@ func older(name, label string, ids ...int) Model {
 		TunerTuneParam: '2',
 		MaxPowerW:      100,
 		Filter:         FilterShort,
+		// The family front end: IPO plus two amplifiers on PA, the 6/12/18 dB
+		// ladder on RA, RG for the gain and the five GT settings. The radios
+		// with a single pad or a single amplifier override it below.
+		Preamp:     2,
+		Attenuator: []int{6, 12, 18},
+		RFGain:     true,
+		AGC:        agcYaesu(),
 		MinHz:      30_000,
 		MaxHz:      56_000_000,
 	}
@@ -321,6 +390,11 @@ var models = map[string]Model{
 		m.Filter = FilterShort
 		m.Widths = widthsFT991A()
 		m.MaxHz = 470_000_000 // HF through 70 cm
+		// One pad rather than three: its RA is "0: OFF, 1: ON". The depth is
+		// not in the CAT reference; 12 dB is this radio's published receiver
+		// specification, and it is a label — the byte on the wire is 1 either
+		// way. See the same note on the Kenwood single-pad models.
+		m.Attenuator = []int{12}
 		return m
 	}(),
 
@@ -337,6 +411,11 @@ var models = map[string]Model{
 		m.Filter = FilterNarrowFlag
 		m.Widths = widthsFT991A() // byte-identical to the FT-991A's
 		m.MaxHz = 56_000_000
+		// And the smallest front end too: its PA is "0: IPO, 1: AMP", one
+		// amplifier where the rest of the family has two, and its RA is a
+		// single pad. Same note on the 12 dB as the FT-991A's.
+		m.Preamp = 1
+		m.Attenuator = []int{12}
 		return m
 	}(),
 
@@ -385,6 +464,11 @@ var models = map[string]Model{
 		m.MaxPowerW = ftx1HeadMaxW
 		m.Widths = widthsFT710()
 		m.MaxHz = 470_000_000
+		// Its RA is a single on/off like the FT-891's, and its PA parameters
+		// are band-dependent — "0: IPO (HF/50), 1: AMP1 (HF/50), 2: AMP2
+		// (HF/50)" — so the count is the family's two and which of them a given
+		// band offers is the radio's business.
+		m.Attenuator = []int{12}
 		return m
 	}(),
 
@@ -479,6 +563,9 @@ var models = map[string]Model{
 		m.MaxPowerW = 0
 		m.Widths = widths{}
 		m.MaxHz = 60_000_000
+		// And no RA either: its command list has no attenuator row, where every
+		// other radio here has one. PA, RG and GT are all present.
+		m.Attenuator = nil
 		return m
 	}(),
 }

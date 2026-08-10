@@ -33,6 +33,14 @@ const (
 	keyRM backend.Key = "RM"
 	keyAC backend.Key = "AC"
 	keyPS backend.Key = "PS"
+	// The receive front end. GC and GT are both here because the AGC speed
+	// moved between them: GT carries it on a TS-480 and the time constant on
+	// everything since, where GC carries the speed. See Model.AGCCmd.
+	keyPA backend.Key = "PA"
+	keyRA backend.Key = "RA"
+	keyRG backend.Key = "RG"
+	keyGC backend.Key = "GC"
+	keyGT backend.Key = "GT"
 	keyTX backend.Key = "TX"
 	keyRX backend.Key = "RX"
 )
@@ -356,6 +364,33 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 		// completed by whichever arrives first.
 		u.Key = keyRM
 		k.decodeRM(&u, arg)
+
+	// The receive front end. Each sets its key before looking at the argument,
+	// so that a value this backend cannot make sense of completes the read and
+	// publishes nothing, rather than leaving the request unmatched and failing
+	// the whole poll. A TS-480 answering three spaces to GT; in FM is the case
+	// that makes this necessary rather than merely tidy.
+	case keyPA:
+		u.Key = keyPA
+		if k.profile.Preamp > 0 {
+			k.decodePA(&u, arg)
+		}
+	case keyRA:
+		u.Key = keyRA
+		if len(k.profile.Attenuator) > 0 {
+			k.decodeRA(&u, arg)
+		}
+	case keyRG:
+		u.Key = keyRG
+		k.decodeRG(&u, arg)
+	case keyGC, keyGT:
+		// Only the command this model actually keeps its AGC on. A TS-480's
+		// GT answer is the AGC; a TS-590's is a time constant, and reading that
+		// as a speed would publish a wrong value rather than none.
+		u.Key = backend.Key(cmd)
+		if len(k.profile.AGC) > 0 && u.Key == k.agcKey() {
+			k.decodeAGC(&u, arg)
+		}
 	}
 
 	return u, nil

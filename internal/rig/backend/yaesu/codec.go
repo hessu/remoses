@@ -18,6 +18,11 @@ const (
 	keySM backend.Key = "SM"
 	keyRM backend.Key = "RM"
 	keyAC backend.Key = "AC"
+	// The receive front end.
+	keyPA backend.Key = "PA"
+	keyRA backend.Key = "RA"
+	keyRG backend.Key = "RG"
+	keyGT backend.Key = "GT"
 	keyPS backend.Key = "PS"
 	keySH backend.Key = "SH"
 	keyNA backend.Key = "NA"
@@ -257,6 +262,31 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 		if v, ok := y.tunerFromAC(arg); ok {
 			u.Patch.Tuner = &v
 			y.tuner.Store(v)
+		}
+
+	// The receive front end. Each sets its key before parsing, so that a value
+	// this backend cannot make sense of still completes the read: an unmatched
+	// request fails the whole poll, and a run of those tears down a link to a
+	// radio that is answering perfectly well.
+	case keyPA:
+		u.Key = keyPA
+		if y.profile.Preamp > 0 {
+			y.decodePA(&u, arg)
+		}
+	case keyRA:
+		u.Key = keyRA
+		if len(y.profile.Attenuator) > 0 {
+			y.decodeRA(&u, arg)
+		}
+	case keyRG:
+		u.Key = keyRG
+		if y.profile.RFGain {
+			y.decodeRG(&u, arg)
+		}
+	case keyGT:
+		u.Key = keyGT
+		if len(y.profile.AGC) > 0 {
+			y.decodeGT(&u, arg)
 		}
 
 	case keyID:

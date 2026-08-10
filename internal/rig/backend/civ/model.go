@@ -97,6 +97,56 @@ type Model struct {
 	// slow tick, and would have shown an operator a Tune button that could only
 	// ever fail. So it is claimed per model, like everything else here.
 	Tuner bool
+	// Preamp is how many preamplifiers command 16 02 offers, 0 for a radio
+	// whose table has no 16 02 row — the IC-910H, whose preamps are external
+	// units with their own controllers.
+	//
+	// The IC-9700's row is the reason this is a count of PREAMPLIFIERS rather
+	// than of values. Its 16 02 takes 00 to 03, but they are not a gain ladder:
+	// they are the internal preamp and an external one in combination, 02 being
+	// "internal off, external on". Reading 03 as "more gain than 02" would be a
+	// ladder remoses invented, so the IC-9700 is a 1 here and 02 and 03 are left
+	// to the front panel.
+	Preamp int
+	// Attenuator lists the dB steps command 11 accepts, ascending and without
+	// the 0 that switches it out. Empty for a radio with no 11 row.
+	//
+	// The steps are per model because they genuinely differ: 3 dB steps to 45
+	// on the IC-7610, to 21 on the IC-7850, 6/12/18 on the IC-7600 and IC-7700,
+	// and a single fixed pad on everything smaller.
+	Attenuator []int
+	// AttenuatorLiteral marks a radio that indexes the attenuator instead of
+	// naming its depth.
+	//
+	// Command 11 normally carries the dB figure as BCD — 11 20 is 20 dB — and
+	// every reference here reads that way except the IC-718's, which says
+	// outright "00=OFF (0dB), 01=20dB". One byte, two meanings, and no way to
+	// tell from the frame which radio you are talking to.
+	AttenuatorLiteral bool
+	// RFGain is true when the radio has command 14 02, the receiver RF gain.
+	RFGain bool
+	// AGC maps each speed this radio understands onto its command 16 12 byte.
+	//
+	// A map rather than a style enum because the encodings do not fall into
+	// styles. The IC-7610 counts 01 FAST, 02 MID, 03 SLOW; the IC-7600 counts
+	// the same three from 00; the IC-7700 has four, 00 being AGC OFF; the
+	// IC-703 has two, 1 fast and 2 slow; and the IC-910H has two the other way
+	// round, 0 slow and 1 fast. Nothing is shared but the opcode.
+	//
+	// Empty for a radio whose 16 12 this backend has not read.
+	AGC map[radio.AGC]byte
+	// IPPlus is command 16 65, Icom's IP+ intermodulation-rejection mode. It
+	// belongs to the direct-sampling sets.
+	IPPlus bool
+	// DigiSel is command 16 4E, the DIGI-SEL tracking preselector, and
+	// DigiSelShift command 14 13, which moves it.
+	//
+	// Separate because the big superhets have the first and not, so far as
+	// their references say, the second: the IC-7700 and IC-7850 document 16 4E
+	// and no shift command, while the IC-7610 and IC-7760 document both.
+	DigiSel      bool
+	DigiSelShift bool
+
 	// TXMeters is true when the radio has the transmit meters, 15 11 (PO),
 	// 15 12 (SWR) and 15 13 (ALC).
 	//
@@ -285,6 +335,13 @@ func modern(name, label string, addr byte, modes []radio.Mode) Model {
 		DataModeSub:    subDataMode,
 		DataModeFilter: true,
 		MaxWPM:         48,
+		// The front end every radio in this group shares: two preamplifiers on
+		// 16 02, the RF gain on 14 02, and the three AGC speeds on 16 12. The
+		// attenuator is NOT shared — no two of these step it the same way — so
+		// each model states its own ladder.
+		Preamp: 2,
+		RFGain: true,
+		AGC:    agcFMS(),
 	}
 }
 
@@ -336,6 +393,23 @@ func withTuner(m Model) Model {
 	return m
 }
 
+// agcFMS is command 16 12 as the current generation spells it: 01 FAST, 02 MID,
+// 03 SLOW. The IC-7600, IC-7700, IC-703 and IC-910H each spell it differently
+// and write their own map.
+func agcFMS() map[radio.AGC]byte {
+	return map[radio.AGC]byte{radio.AGCFast: 0x01, radio.AGCMid: 0x02, radio.AGCSlow: 0x03}
+}
+
+// attSteps builds an evenly spaced attenuator ladder, first to last inclusive.
+// The IC-7610 goes 3 to 45 in threes; the IC-7850 stops at 21.
+func attSteps(first, last, step int) []int {
+	var out []int
+	for db := first; db <= last; db += step {
+		out = append(out, db)
+	}
+	return out
+}
+
 // mkiiFamily describes an IC-706 of any generation: what the three share, which
 // is a command set with no transmitter control, no power level and no CW
 // buffer. See the registry entries for what each adds.
@@ -373,6 +447,12 @@ func mkiiFamily(name, label string, addr byte) Model {
 		Power:    false,
 		SMeter:   false,
 		CWBuffer: false,
+		// The front end is the one part of the receive side these radios do
+		// have on the bus: 16 02 for the preamp and 11 for the 20 dB pad, the
+		// two controls the panel puts on a shared [P.AMP/ATT] key. Being in the
+		// 14 group, the RF gain is not — it is the panel's own knob.
+		Preamp:     1,
+		Attenuator: []int{20},
 		// No 1A at all, so neither a filter width nor a data mode.
 		FilterWidth: false,
 		DataMode:    false,
@@ -434,14 +514,39 @@ var models = map[string]Model{
 		m.Tuner = true
 		// No VFOSelect: its table has no 07 00 / 07 01. The two VFOs are fixed
 		// receivers and there is no A/B switch to throw.
+
+		// A direct-sampling front end, and the attenuator to go with it: 3 dB
+		// steps all the way to 45, fifteen of them, where a superhet of the same
+		// size has three. IP+ backs the ADC off its clipping point; DIGI-SEL is
+		// the tracking preselector ahead of it, with 14 13 to trim where it
+		// sits.
+		m.Attenuator = attSteps(3, 45, 3)
+		m.IPPlus = true
+		m.DigiSel = true
+		m.DigiSelShift = true
 		return m
 	}(),
 
 	// The MK2 reference lists no PSK in its operating mode table.
-	"ic-7300mk2": withTuner(modern("ic-7300mk2", "Icom IC-7300MK2", 0xB6, modesCommon())),
+	"ic-7300mk2": func() Model {
+		m := withTuner(modern("ic-7300mk2", "Icom IC-7300MK2", 0xB6, modesCommon()))
+		m.Attenuator = []int{20}
+		m.IPPlus = true
+		return m
+	}(),
 
-	"ic-7760": withTuner(modern("ic-7760", "Icom IC-7760", 0xB2,
-		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))),
+	// The IC-7760's CI-V reference is the IC-7610's in layout and in content
+	// for the whole front end: the same 3 dB ladder, the same IP+, the same
+	// DIGI-SEL with its shift.
+	"ic-7760": func() Model {
+		m := withTuner(modern("ic-7760", "Icom IC-7760", 0xB2,
+			withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)))
+		m.Attenuator = attSteps(3, 45, 3)
+		m.IPPlus = true
+		m.DigiSel = true
+		m.DigiSelShift = true
+		return m
+	}(),
 
 	// VHF/UHF/1.2 GHz: D-STAR instead of PSK. DD is 1200 MHz only, which the
 	// radio enforces; remoses does not second-guess the band.
@@ -481,6 +586,12 @@ var models = map[string]Model{
 		// A VHF/UHF set has nothing for one to match. Confirmed on the radio,
 		// which answers NG to 1C 01 in every form.
 		m.Tuner = false
+		// One 10 dB pad, and one preamplifier rather than two: its 16 02 runs
+		// 00 to 03, but those are the internal and an external preamp in
+		// combination rather than a gain ladder. See Model.Preamp.
+		m.Attenuator = []int{10}
+		m.Preamp = 1
+		m.IPPlus = true
 		return m
 	}(),
 
@@ -492,21 +603,59 @@ var models = map[string]Model{
 		m := modern("ic-905", "Icom IC-905", 0xAC,
 			withModes(modesCommon(), radio.ModeDV, radio.ModeDD, radio.ModeATV))
 		m.WideFrequency = true
+		m.Attenuator = []int{10}
+		m.Preamp = 1 // 16 02 is 00/01 here, with no second stage
 		return m
 	}(),
 
 	// Like the MK2: no PSK in its mode table.
-	"ic-7300": withTuner(modern("ic-7300", "Icom IC-7300", 0x94, modesCommon())),
+	"ic-7300": func() Model {
+		m := withTuner(modern("ic-7300", "Icom IC-7300", 0x94, modesCommon()))
+		m.Attenuator = []int{20}
+		m.IPPlus = true
+		return m
+	}(),
 
-	"ic-7600": withTuner(modern("ic-7600", "Icom IC-7600", 0x7A,
-		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))),
+	// The IC-7600's 16 12 counts the same three speeds from 00 rather than 01,
+	// which is why AGC is a map: one byte out and FAST would be MID.
+	"ic-7600": func() Model {
+		m := withTuner(modern("ic-7600", "Icom IC-7600", 0x7A,
+			withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)))
+		m.Attenuator = []int{6, 12, 18}
+		m.AGC = map[radio.AGC]byte{
+			radio.AGCFast: 0x00, radio.AGCMid: 0x01, radio.AGCSlow: 0x02,
+		}
+		return m
+	}(),
 
-	"ic-7700": withTuner(modern("ic-7700", "Icom IC-7700", 0x74,
-		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))),
+	// And the IC-7700's 16 12 has a fourth value the rest do not: 00 is AGC
+	// OFF, with the three speeds shifted up behind it. It is also the only
+	// radio here with DIGI-SEL and no command to move it.
+	"ic-7700": func() Model {
+		m := withTuner(modern("ic-7700", "Icom IC-7700", 0x74,
+			withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)))
+		m.Attenuator = []int{6, 12, 18}
+		m.AGC = map[radio.AGC]byte{
+			radio.AGCOff: 0x00, radio.AGCFast: 0x01,
+			radio.AGCMid: 0x02, radio.AGCSlow: 0x03,
+		}
+		m.DigiSel = true
+		return m
+	}(),
 
 	// The IC-7850 and IC-7851 are the same radio to CI-V and share an address.
-	"ic-7850": withTuner(modern("ic-7850", "Icom IC-7850/7851", 0x8E,
-		withModes(modesCommon(), radio.ModePSK, radio.ModePSKR))),
+	//
+	// Its attenuator steps in threes like the IC-7610's but stops at 21, and its
+	// table has DIGI-SEL with no shift command. No AGC: its 16 group is printed
+	// without a 12 row, and the AGC is a front-panel control with its own knob.
+	"ic-7850": func() Model {
+		m := withTuner(modern("ic-7850", "Icom IC-7850/7851", 0x8E,
+			withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)))
+		m.Attenuator = attSteps(3, 21, 3)
+		m.AGC = nil
+		m.DigiSel = true
+		return m
+	}(),
 
 	// HF/VHF/UHF with D-STAR: DV instead of PSK, and no DD.
 	//
@@ -521,8 +670,17 @@ var models = map[string]Model{
 	// carrying the radio's own NG, which is the truthful answer — but it is
 	// worth knowing that a tune failing on 2 m is the radio saying no, not
 	// remoses malfunctioning.
-	"ic-9100": withTuner(modern("ic-9100", "Icom IC-9100", 0x7C,
-		withModes(modesCommon(), radio.ModeDV))),
+	//
+	// Its 16 02 has the same three values as the rest but names them per band:
+	// 01 is "Preamp ON" on 144/430/1200 and "Preamp 1" on HF/50, 02 the second
+	// stage on HF and 50 only. Two levels, and which of them a given band has is
+	// the radio's business to enforce.
+	"ic-9100": func() Model {
+		m := withTuner(modern("ic-9100", "Icom IC-9100", 0x7C,
+			withModes(modesCommon(), radio.ModeDV)))
+		m.Attenuator = []int{20}
+		return m
+	}(),
 
 	// The IC-910H is the second outlier, and the only radio here that does not
 	// use the family mode-byte table. From its command table (section 13):
@@ -563,6 +721,18 @@ var models = map[string]Model{
 		FilterWidth: false,
 		BreakIn:     BreakInOnOff,
 		MaxWPM:      60,
+		// Its 16 12 is two values and they run backwards from the IC-703's:
+		// "Set AGC (0=Slow; 1=Fast)" against the IC-703's "1=Fast; 2=Slow".
+		// Two radios, one opcode, opposite bytes.
+		AGC: map[radio.AGC]byte{radio.AGCSlow: 0x00, radio.AGCFast: 0x01},
+		// No preamp on the bus: the 910H's preamplifiers are external units,
+		// mast-mounted, with their own controllers, and its 16 group has no 02
+		// row. The attenuator is on the bus, and its table lists 10, 20 and 30
+		// as three ways of spelling ON for a single pad — remoses sends the 20
+		// its specification names and offers one switch, rather than three steps
+		// the radio does not have.
+		Attenuator: []int{20},
+		// No 14 group in its table at all, so no RF gain.
 	},
 
 	// The IC-706 family: three mobiles from the mid-1990s, and the oldest
@@ -694,6 +864,14 @@ var models = map[string]Model{
 		// 14 0C is the keyer speed and the Quick set menu gives its range as
 		// 6 to 60 wpm.
 		MaxWPM: 60,
+		// "11 — Select/read attenuator (00=OFF, 20=ON (20 dB))", one pad, and
+		// the clearest statement in any of these references that the byte is the
+		// depth in BCD rather than an index. Its 16 02 is a single preamp and
+		// its 16 12 is "AGC selection (1=Fast; 2=Slow)" — two speeds, no middle.
+		Attenuator: []int{20},
+		Preamp:     1,
+		RFGain:     true, // 14 02, "[RF] level setting"
+		AGC:        map[radio.AGC]byte{radio.AGCFast: 0x01, radio.AGCSlow: 0x02},
 	},
 
 	// The IC-718 is the outlier, and every difference below is from its own
@@ -724,6 +902,17 @@ var models = map[string]Model{
 		CWBuffer:    false,
 		FilterWidth: false,
 		MaxWPM:      60,
+		// And a second place where this radio spells a shared command its own
+		// way. Its table gives command 11 as "00=OFF (0dB), 01=20dB" — an INDEX,
+		// where the IC-703's table of the same vintage gives "00=OFF, 20=ON
+		// (20 dB)" and means the depth in BCD. Both statements are explicit and
+		// they disagree, so each radio is believed about itself; see
+		// Model.AttenuatorLiteral.
+		Attenuator:        []int{20},
+		AttenuatorLiteral: true,
+		Preamp:            1,    // 16 02, "Read/send Preamplifier (00=OFF, 01=ON)"
+		RFGain:            true, // 14 02
+		// No 16 12: its 16 group is 02, 22, 40, 41, 44, 46 and 47, and stops.
 	},
 }
 

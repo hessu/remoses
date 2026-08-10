@@ -46,6 +46,16 @@ const (
 	// KeyBreakIn is 16 47, the CW break-in setting: the difference between a
 	// CW message being transmitted and being accepted and discarded.
 	KeyBreakIn backend.Key = "16/47"
+
+	// The receive front end. Command 11 has no sub-command, so its key is the
+	// bare command; the rest are the usual cmd/sub.
+	KeyAttenuator   backend.Key = "11"
+	KeyPreamp       backend.Key = "16/02"
+	KeyAGC          backend.Key = "16/12"
+	KeyDigiSel      backend.Key = "16/4E"
+	KeyIPPlus       backend.Key = "16/65"
+	KeyRFGain       backend.Key = "14/02"
+	KeyDigiSelShift backend.Key = "14/13"
 )
 
 // Decode turns one framed message into an Update.
@@ -137,14 +147,70 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		}
 		return u, nil
 
+	case cmdAttenuator:
+		// 11 answers the depth in one byte, and what that byte means is per
+		// model: BCD dB nearly everywhere, an index on the IC-718.
+		//
+		// The key is set as soon as the model says this radio has an
+		// attenuator, before the value is looked at, and every decoder below
+		// does the same. A reading outside what the reference documents — an
+		// IC-910H answering the 10 its table lists for a pad remoses offers as
+		// 20 — then resolves the pending read and publishes nothing, instead of
+		// leaving the request unmatched. Unmatched is far worse than unknown:
+		// the poll fails, the failures accumulate, and the session eventually
+		// tears down a link to a radio that is answering perfectly well.
+		if len(r.model.Attenuator) > 0 && len(body) >= 1 {
+			u.Key = KeyAttenuator
+			if db, ok := r.attenuatorDB(body[0]); ok {
+				u.Patch.AttenuatorDB = &db
+			}
+		}
+		return u, nil
+
 	case cmdFunc:
-		// 16 is a group of on/off functions; only break-in is modelled, because
-		// it is the one that decides whether CW from the computer is audible.
-		if r.model.BreakIn != BreakInNone && len(body) >= 2 && body[0] == subBreakIn {
-			if v, ok := breakInValue(r.model.BreakIn, body[1]); ok {
-				u.Key = KeyBreakIn
-				u.Patch.BreakIn = &v
-				r.breakIn.Store(v)
+		// 16 is a group of on/off functions. Break-in is the one that decides
+		// whether CW from the computer is audible; the rest are the front end.
+		if len(body) < 2 {
+			return u, nil
+		}
+		switch body[0] {
+		case subBreakIn:
+			if r.model.BreakIn != BreakInNone {
+				if v, ok := breakInValue(r.model.BreakIn, body[1]); ok {
+					u.Key = KeyBreakIn
+					u.Patch.BreakIn = &v
+					r.breakIn.Store(v)
+				}
+			}
+		case subPreamp:
+			if r.model.Preamp > 0 {
+				u.Key = KeyPreamp
+				// Anything above this radio's count is left unpublished: on an
+				// IC-9700 a 02 or 03 is the external preamp in the combination
+				// its table describes, not a third stage of gain.
+				if n := int(body[1]); n <= r.model.Preamp {
+					u.Patch.Preamp = &n
+				}
+			}
+		case subAGC:
+			if len(r.model.AGC) > 0 {
+				u.Key = KeyAGC
+				if v, ok := agcValue(r.model.AGC, body[1]); ok {
+					u.Patch.AGC = &v
+				}
+			}
+		case subDigiSel:
+			if r.model.DigiSel {
+				u.Key = KeyDigiSel
+				on := body[1] != 0x00
+				u.Patch.DigiSel = &on
+				r.digiSel.Store(on)
+			}
+		case subIPPlus:
+			if r.model.IPPlus {
+				u.Key = KeyIPPlus
+				on := body[1] != 0x00
+				u.Patch.IPPlus = &on
 			}
 		}
 		return u, nil
@@ -180,6 +246,22 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 			// this only resolves the pending request.
 			if _, ok := decodeBCD2(body[1:]); ok {
 				u.Key = KeyKeyerSpeed
+			}
+		case subRFGain:
+			if r.model.RFGain {
+				u.Key = KeyRFGain
+				if n, ok := decodeBCD2(body[1:]); ok {
+					pct := float64(n) / levelMax * 100
+					u.Patch.RFGain = &pct
+				}
+			}
+		case subDigiSelShift:
+			if r.model.DigiSelShift {
+				u.Key = KeyDigiSelShift
+				if n, ok := decodeBCD2(body[1:]); ok {
+					pct := float64(n) / levelMax * 100
+					u.Patch.DigiSelShift = &pct
+				}
 			}
 		}
 		return u, nil

@@ -277,6 +277,13 @@ func (y *Rig) Caps() radio.Caps {
 		TunerTune:    y.profile.TunerTuneParam != 0,
 		// PS is in every command list read for this backend, both generations.
 		PowerSwitch: true,
+		// The receive front end, per model: the FT-891 has one preamplifier
+		// where the family has two, three radios have a single pad where the
+		// family has three steps, and the FTdx9000 has no attenuator at all.
+		PreampLevels:  y.profile.Preamp,
+		AttenuatorDB:  append([]int(nil), y.profile.Attenuator...),
+		RFGainControl: y.profile.RFGain,
+		AGCSettings:   agcSettings(y.profile.AGC),
 		PowerWattAccurate: !y.profile.PowerRaw,
 		MaxPowerW:         float64(y.maxPowerW()),
 
@@ -460,6 +467,9 @@ func (y *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 	if y.profile.HasNarrow {
 		reads = append(reads, read{reqNA, keyNA})
 	}
+	// The receive front end: preamp, attenuator, RF gain and AGC, none of which
+	// moves except when somebody moves it.
+	reads = append(reads, y.frontEndReads()...)
 	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err

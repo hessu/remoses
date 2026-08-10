@@ -141,6 +141,12 @@ type Rig struct {
 	// tuning cycle is worth watching on the fast tier.
 	tuner atomic.Value
 
+	// agc holds a radio.AGC, the last GC or GT reading. It exists because
+	// switching the AGC off changes what the next set has to send: with it off,
+	// a TS-590S refuses every speed until the off-then-on parameter goes first.
+	// See SetAGC.
+	agc atomic.Value
+
 	// transmitting is the last PTT reading, from an IF answer or a TX;/RX;
 	// push. It decides two things: whether an SM answer is the S-meter or the
 	// RF power meter, and whether the fast poll asks for RM at all.
@@ -260,6 +266,12 @@ func (k *Rig) Caps() radio.Caps {
 		// been read for this command, so this is the one capability here taken
 		// from the TS-590's reference alone.
 		PowerSwitch: true,
+		// The receive front end, per model. On a TS-990S all four address the
+		// main band, as everything else on that radio does.
+		PreampLevels:  k.profile.Preamp,
+		AttenuatorDB:  append([]int(nil), k.profile.Attenuator...),
+		RFGainControl: k.profile.RFGainMax > 0,
+		AGCSettings:   agcSettings(k.profile.AGC),
 		// False even on the TS-990S, which has a second receiver: this backend
 		// reads and writes one of them, so claiming otherwise would promise
 		// control it does not implement.
@@ -546,6 +558,9 @@ func (k *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 	if k.profile.DataMode == DataModeCommand {
 		reads = append(reads, read{reqDA, keyDA})
 	}
+	// The receive front end: preamp, attenuator, RF gain and AGC, all settings
+	// an operator moves by hand and none of them worth a fast tick.
+	reads = append(reads, k.frontEndReads()...)
 	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err

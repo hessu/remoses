@@ -34,6 +34,21 @@ func newTestConn(t *testing.T, k *Rig, answers map[string]string) *testConn {
 	if answers == nil {
 		answers = map[string]string{}
 	}
+	// The receive front end answers by default, so that a test about something
+	// else does not have to know that the slow poll now reads four more
+	// commands. A test that cares supplies its own and overrides these.
+	//
+	// The widths are the ones the references print, and they are not the
+	// widths of the SET forms: PA answers two digits where a set takes one,
+	// RA on this generation answers four where a set takes two.
+	for req, answer := range map[string]string{
+		reqPA: "PA10", reqRA: "RA0100", reqRG: "RG200",
+		"GC;": "GC1", "GT;": "GT002",
+	} {
+		if _, ok := answers[req]; !ok {
+			answers[req] = answer
+		}
+	}
 	return &testConn{t: t, k: k, answers: answers}
 }
 
