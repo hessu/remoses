@@ -1,0 +1,69 @@
+# The three checks `make check` runs — formatting, vet and the race-enabled
+# test suite — on every pull request and on main after a merge.
+#
+# Nothing here has its own copy of a command. Each step calls the Makefile
+# target an operator would run locally, so "it passed on my machine" and "it
+# passed in CI" cannot come to mean different things.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per branch or pull request: a new push cancels the run it supersedes
+# rather than queueing behind it. main is excluded, because its runs are the
+# record of what was merged rather than feedback on work in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain version comes from go.mod, so bumping it there bumps CI
+      # with it and the two can never disagree about what "builds" means.
+      # setup-go caches the module download keyed on go.sum by default.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The targets individually rather than `make check`, which chains them,
+      # so the run says which one failed without anybody opening a log. They
+      # are the same commands either way.
+      #
+      # Each runs even when an earlier one failed — but not after a cancellation
+      # — so one push reports everything that is wrong instead of one thing per
+      # round trip. A misaligned struct literal must not be able to hide a
+      # failing test behind it.
+      - name: gofmt
+        run: make fmt-check
+
+      - name: go vet
+        if: ${{ !cancelled() }}
+        run: make vet
+
+      # One file in internal/transport/serial is built only for macOS without
+      # cgo (`//go:build darwin && !cgo`), which is exactly the configuration
+      # the released darwin binaries use and exactly the one a Linux runner
+      # never compiles. Vetting that target costs a few seconds and is the
+      # difference between vet covering the tree and vet covering most of it.
+      - name: go vet (darwin, no cgo)
+        if: ${{ !cancelled() }}
+        env:
+          GOOS: darwin
+          CGO_ENABLED: "0"
+        run: go vet ./...
+
+      # -race, per the Makefile, and it is the point rather than a flourish:
+      # this project's core is the concurrency between a session's reader
+      # goroutine and everything that writes to its port.
+      - name: go test
+        if: ${{ !cancelled() }}
+        run: make test
