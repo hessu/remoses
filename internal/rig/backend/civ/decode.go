@@ -140,8 +140,8 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 	case cmdFunc:
 		// 16 is a group of on/off functions; only break-in is modelled, because
 		// it is the one that decides whether CW from the computer is audible.
-		if r.model.BreakIn && len(body) >= 2 && body[0] == subBreakIn {
-			if v, ok := breakInValue(body[1]); ok {
+		if r.model.BreakIn != BreakInNone && len(body) >= 2 && body[0] == subBreakIn {
+			if v, ok := breakInValue(r.model.BreakIn, body[1]); ok {
 				u.Key = KeyBreakIn
 				u.Patch.BreakIn = &v
 				r.breakIn.Store(v)

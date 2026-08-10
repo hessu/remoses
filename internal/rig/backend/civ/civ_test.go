@@ -799,7 +799,12 @@ func TestReadRejectsUnexpectedReply(t *testing.T) {
 // every slow tick as a data-mode change — a wrong value in state rather than a
 // missing one, which is the failure DESIGN.md §5.4 records for that radio.
 func TestSlowPollSkipsWhatAModelLacks(t *testing.T) {
-	for _, model := range []string{"ic-718", "ic-910h"} {
+	// want is what is left after the guards: power on both, plus break-in on
+	// the IC-910H, whose table does carry 16 47 — in its own two-value form.
+	for model, want := range map[string][]string{
+		"ic-718":  {"14/0A"},
+		"ic-910h": {"14/0A", "16"},
+	} {
 		t.Run(model, func(t *testing.T) {
 			s := newSim(t)
 			r, err := New(&config.Radio{
@@ -815,9 +820,8 @@ func TestSlowPollSkipsWhatAModelLacks(t *testing.T) {
 			if err := r.Poll(context.Background(), s, backend.PollSlow); err != nil {
 				t.Fatalf("Poll: %v", err)
 			}
-			// Power only: neither radio has 1A 03, and neither has a data mode
-			// on 1A 06.
-			s.wantConversation(t, "14/0A")
+			// Neither radio has 1A 03, and neither has a data mode on 1A 06.
+			s.wantConversation(t, want...)
 		})
 	}
 }

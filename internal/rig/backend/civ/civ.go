@@ -260,7 +260,7 @@ func (r *Rig) Caps() radio.Caps {
 		// radios all three are per-VFO rather than properties of the set.
 		PerVFOMode:     r.model.DualVFO,
 		VFOAddressing:  r.vfoAddressing(),
-		BreakInControl: r.model.BreakIn,
+		BreakInControl: r.model.BreakIn != BreakInNone,
 		// Capability, not configuration: a radio with command 17 has a CAT CW
 		// buffer whether or not this station is configured to use it, and one
 		// without it — the IC-718 — cannot send Morse over CAT at all, however
@@ -477,7 +477,7 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		// changes it — but it has to be read at all, because the CW path
 		// consults it before queueing and an unknown reading is not something
 		// to guess at.
-		if r.model.BreakIn {
+		if r.model.BreakIn != BreakInNone {
 			reqs = append(reqs, request{KeyBreakIn, r.frame(cmdFunc, subBreakIn)})
 		}
 		// Data mode has to be read, not merely written. Nothing else reports it:

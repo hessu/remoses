@@ -298,11 +298,28 @@ const (
 	// path needs to know.
 	BreakInSemi BreakIn = "semi"
 	BreakInFull BreakIn = "full"
+	// BreakInOn is break-in enabled on a radio that does not say which kind.
+	//
+	// Not every rig distinguishes them over CAT: an IC-910H's command is
+	// "0=OFF, 1=ON" where the rest of its family has three values. Reporting
+	// that as semi or full would be inventing a distinction the radio declined
+	// to make, and the difference is audible — full is QSK and clocks the
+	// relays between elements. So it gets its own value, and a client that
+	// wants to show "semi" or "full" can tell when it may not.
+	//
+	// Setting semi or full on such a radio is not an error: both mean "on"
+	// there, both are sent as on, and the state reads back "on".
+	BreakInOn BreakIn = "on"
 )
 
 // Transmits reports whether CW keyed from the computer will actually go out
 // without somebody holding a switch down.
-func (b BreakIn) Transmits() bool { return b == BreakInSemi || b == BreakInFull }
+//
+// Which is the whole reason BreakInOn can exist without disturbing anything:
+// the CW path only ever asks this question, and "on" answers it.
+func (b BreakIn) Transmits() bool {
+	return b == BreakInSemi || b == BreakInFull || b == BreakInOn
+}
 
 // Tuner is the state of a radio's internal antenna tuner.
 type Tuner string

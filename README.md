@@ -132,7 +132,7 @@ TS-590S confirmed the protocol surface and CW, not those again.
 | IC-7760 | `ic-7760` | | — |
 | IC-7850 / IC-7851 | `ic-7850` | One profile; identical over CI-V | — |
 | IC-905 | `ic-905` | 6-byte frequency field on the 10 GHz band | — |
-| IC-910H | `ic-910h` | Own mode-code table; no CAT CW buffer | — |
+| IC-910H | `ic-910h` | Own mode-code table; no CAT CW buffer; break-in is off/on only | — |
 | IC-9100 | `ic-9100` | | — |
 | IC-9700 | `ic-9700` | Main's two VFOs and split; sub band present but not readable; CW break-in | **yes** |
 | other Icom | `generic` | Requires an explicit `civ.rig_address` | — |
@@ -164,6 +164,11 @@ operator's focus and fight whoever is holding the dial. So `caps.sub_receiver` i
 **CW break-in is controllable, and it matters more than it sounds.** On an Icom a CW message sent
 over CAT is transmitted only if break-in is on or the transmitter is already keyed — otherwise
 the rig accepts the message, empties its buffer on schedule and puts nothing on the air.
+
+**Not every radio says which kind of break-in.** An IC-910H's command is "0=OFF, 1=ON" where the
+rest of its family has off, semi and full, so `state.break_in` reads `on` there rather than
+guessing — the difference is audible, full being QSK. Setting `semi` or `full` on such a radio is
+still accepted; both mean its single "on".
 
 This is not Icom-specific; it caught a Kenwood too. remoses reads the setting
 (`state.break_in`, `caps.break_in_control`), lets you change it (`{"break_in": "semi"}`), and

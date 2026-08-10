@@ -209,20 +209,41 @@ type Model struct {
 	// its two VFOs are fixed receivers with no A/B switch between them.
 	VFOSelect bool
 
-	// BreakIn marks command 16 47, the CW break-in setting.
+	// BreakIn is how command 16 47, the CW break-in setting, is spelled on this
+	// radio. See BreakInStyle.
 	//
-	// It gates whether CW sent over CAT is audible at all. Both references
-	// remoses has read carry the same footnote against command 17: a message
-	// from the PC is transmitted "if the [TRANSMIT] or an external TX switch is
-	// ON, or the Break-in function is ON". With break-in off and nothing keying
-	// manually, 17 is accepted and nothing goes out — which is exactly what
-	// happened on an IC-9700 the first time this was tried.
-	BreakIn bool
+	// It gates whether CW sent over CAT is audible at all. The references carry
+	// the same footnote against command 17: a message from the PC is
+	// transmitted "if the [TRANSMIT] or an external TX switch is ON, or the
+	// Break-in function is ON". With break-in off and nothing keying manually,
+	// 17 is accepted and nothing goes out — which is exactly what happened on
+	// an IC-9700 the first time this was tried.
+	BreakIn BreakInStyle
 	// DualWatch marks 07 C0/C1/C2, receiving on both VFOs at once. This is what
 	// makes the second VFO a second *receiver* rather than a stored frequency,
 	// and so what makes a sub S-meter reading mean anything.
 	DualWatch bool
 }
+
+// BreakInStyle is how many values command 16 47 takes on a radio.
+//
+// One command, two vocabularies. Most of the family reads "00=OFF, 01=semi
+// break-in, 02=full break-in"; the IC-910H's table says only "Set break-in
+// (0=OFF; 1=ON)". Sending 02 to that radio would be an out-of-range parameter
+// for a distinction it does not make, and reading its 01 as "semi" would invent
+// one — full and semi differ audibly, full being QSK.
+type BreakInStyle int
+
+const (
+	// BreakInNone is a radio with no 16 47 at all.
+	BreakInNone BreakInStyle = iota
+	// BreakInSemiFull is the three-value form: off, semi, full.
+	BreakInSemiFull
+	// BreakInOnOff is the two-value form, which is the IC-910H's. It publishes
+	// radio.BreakInOn rather than picking one of semi and full, and accepts a
+	// request for either by sending its single "on".
+	BreakInOnOff
+)
 
 // Mode sets. The common set is what essentially every Icom has; the variants
 // differ at the edges.
@@ -400,7 +421,7 @@ var models = map[string]Model{
 		m.SubReceiver = true
 		m.DualWatch = true
 		m.VFOModeSelect = true
-		m.BreakIn = true
+		m.BreakIn = BreakInSemiFull
 		// "1C 01 Antenna tuner (00=OFF, 01=ON, 02=Tune)". Exercised on the air:
 		// switched in and out, and four tuning cycles run on 80 m.
 		m.Tuner = true
@@ -445,7 +466,7 @@ var models = map[string]Model{
 		// its sub band is not the IC-7610's dual watch in any case.
 		m.VFOModeSelect = true
 		m.VFOSelect = true // 07 00 and 07 01 select VFO A and VFO B
-		m.BreakIn = true
+		m.BreakIn = BreakInSemiFull
 		// Its PO meter reaches 100% at 213, not the 255 of the IC-7610.
 		m.POScale = 213
 		// And no antenna tuner: its 1C table is 00, 02, 03, with no 01 row.
@@ -509,10 +530,11 @@ var models = map[string]Model{
 	//
 	// PTT is the ordinary 1C 00 here, unlike the IC-718.
 	//
-	// Its table does carry 16 47 break-in, but as 0=OFF / 1=ON rather than the
-	// three values the rest of the family uses — so BreakIn stays false until
-	// this backend can express a two-value one, rather than claiming a control
-	// that would send an invalid 02 for "full".
+	// Its 16 47 is the two-value form: "Set break-in (0=OFF; 1=ON)", where the
+	// rest of the family has off, semi and full. So it publishes radio.BreakInOn
+	// rather than picking one of the two it cannot tell apart, and a request
+	// for either semi or full sends its single "on" — accurate rather than
+	// approximate, since they are the same setting on this radio.
 	"ic-910h": {
 		Name:    "ic-910h",
 		Label:   "Icom IC-910H",
@@ -531,6 +553,7 @@ var models = map[string]Model{
 		SMeter:      true,
 		CWBuffer:    false,
 		FilterWidth: false,
+		BreakIn:     BreakInOnOff,
 		MaxWPM:      60,
 	},
 
@@ -583,7 +606,13 @@ var models = map[string]Model{
 	"ic-706mkiig": func() Model {
 		m := mkiiFamily("ic-706mkiig", "Icom IC-706MKIIG", 0x58)
 		m.SMeter = true
-		m.BreakIn = true
+		// Its table lists "16 47 BK-IN setting" and no data values at all —
+		// that table has no Data column. Taken as the three-value form, which
+		// is the family norm and which fails LOUDLY if wrong: a request for
+		// full would send 02 and draw an NG, where guessing the two-value form
+		// on a three-value radio would quietly deliver semi to somebody who
+		// asked for QSK.
+		m.BreakIn = BreakInSemiFull
 		return m
 	}(),
 
@@ -649,7 +678,7 @@ var models = map[string]Model{
 		// 16 47, "Break-in (0=OFF; 1=semi break-in; 2=full break-in)". It has
 		// no CAT CW buffer for this to gate, but an operator keying a control
 		// line still needs the rig in break-in to hear themselves through it.
-		BreakIn: true,
+		BreakIn: BreakInSemiFull,
 		// 07 with no sub-command selects VFO mode; 07 00 and 07 01 select VFO A
 		// and VFO B. Both are in the table.
 		VFOModeSelect: true,

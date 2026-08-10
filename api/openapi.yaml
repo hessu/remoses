@@ -645,7 +645,7 @@ components:
             checked on other families.
         break_in:
           type: string
-          enum: [off, semi, full]
+          enum: [off, semi, full, on]
           description: |
             CW break-in. Absent on a radio remoses cannot ask. It decides
             whether CW sent over CAT reaches the air: with it off and the
@@ -655,6 +655,16 @@ components:
             break-in on first or refuses with 422. A client offering a CW box
             should show this beside it, and may see it change by itself after a
             send for that reason.
+
+            `on` means break-in is enabled on a radio that does not say which
+            kind. Not every rig distinguishes them over CAT — an IC-910H's
+            command is "0=OFF, 1=ON" where the rest of its family has three
+            values — and reporting that as `semi` or `full` would invent a
+            distinction the radio declined to make. It is an audible one: full
+            is QSK and switches the rig between transmit and receive inside the
+            gaps between elements. On such a radio, setting `semi` or `full` is
+            still accepted, both mean its single "on", and the state reads back
+            `on`.
 
         connected: { type: boolean }
         seq: { type: integer, format: int64 }
@@ -695,11 +705,16 @@ components:
           description: Needs `caps.dual_watch`; 422 otherwise.
         break_in:
           type: string
-          enum: [off, semi, full]
+          enum: [off, semi, full, on]
           description: |
             CW break-in. Needs `caps.break_in_control`; 422 otherwise. Applied
             before PTT, so a request that enables break-in and then sends does
             the two in the order that makes the first message audible.
+
+            On a radio that only distinguishes off from on, `semi` and `full`
+            both set its single "on" and the state reads back `on` — see
+            `State.break_in`. `on` on a radio that does distinguish them selects
+            `semi`, the quieter of the two.
         tuner:
           type: string
           enum: [off, on]

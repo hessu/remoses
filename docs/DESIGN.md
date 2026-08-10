@@ -863,6 +863,23 @@ on an unknown does not block either, since the command not applying is not evide
 will go nowhere; and PTT already being up is accepted, because that is one of the three
 conditions the footnote names.
 
+**`16 47` is not the same command on every Icom either.** Most of the family reads it
+"00=OFF, 01=semi break-in, 02=full break-in"; the IC-910H's table says only "Set break-in
+(0=OFF; 1=ON)". So `Model.BreakIn` is a style rather than a flag, and the two-value radios
+publish `radio.BreakInOn` instead of choosing between semi and full — the distinction is audible,
+full being QSK, and the radio declined to make it.
+
+Setting is asymmetric on purpose. On a two-value radio a request for semi *or* full sends its
+single `01`: they are the same setting there, so honouring both is accurate rather than
+approximate, and sending `02` would be an out-of-range parameter. On a three-value radio a bare
+`on` becomes semi — the radio distinguishes them and the caller did not, so the quieter one is
+chosen, which is the choice `cw.break_in`'s default already makes.
+
+Where a table names the command and no values — the IC-706MKIIG's does exactly that, its command
+table having no Data column at all — the three-value form is assumed, because it fails **loudly**
+if wrong. A request for full sends `02` and draws an NG; guessing the two-value form on a
+three-value radio would instead deliver semi, quietly, to somebody who asked for QSK.
+
 Setting it exposed a second bug in the same hour: `16 47` is read on the slow tier, and
 `ApplyPatch` did not mark a break-in request as needing that tier, so the write succeeded while
 the response carried the value from before it. The radio's own display showed BKIN on while
