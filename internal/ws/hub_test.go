@@ -886,7 +886,15 @@ func TestChangedFieldsUsesStateNames(t *testing.T) {
 
 	// Every name must exist in radio.State's own encoding, or a client would
 	// need two vocabularies.
-	sb, err := json.Marshal(radio.State{SWR: &meter, ALC: &meter})
+	//
+	// The reference state has to carry the OPTIONAL fields too. They are
+	// omitempty, so a zero State encodes without them and every one of them
+	// would look like a name radio.State does not have.
+	ratio := 1.5
+	sb, err := json.Marshal(radio.State{
+		SWR: &meter, ALC: &meter, PowerMeter: &meter, SWRRatio: &ratio,
+		Tuner: radio.TunerOn, Standby: true,
+	})
 	if err != nil {
 		t.Fatalf("marshal state: %v", err)
 	}

@@ -131,12 +131,6 @@ func changedFields(p radio.Patch, st radio.State) map[string]any {
 	if p.SMeter != nil {
 		m["s_meter"] = *p.SMeter
 	}
-	if p.SWR != nil {
-		m["swr"] = *p.SWR
-	}
-	if p.ALC != nil {
-		m["alc"] = *p.ALC
-	}
 	if p.CWBusy != nil {
 		m["cw"] = st.CW
 	}
@@ -167,6 +161,33 @@ func changedFields(p radio.Patch, st radio.State) map[string]any {
 	}
 	if p.BreakIn != nil {
 		m["break_in"] = *p.BreakIn
+	}
+
+	// The transmit meters go out as a group, and from st rather than from the
+	// patch, because they are absent in receive rather than zero.
+	//
+	// A patch cannot express "this went away": Diff sets the field to the new
+	// value, and the new value at the end of a transmission is nil, which is
+	// indistinguishable from "not mentioned". Reading them off st instead means
+	// a cleared meter is sent as an explicit null, which is what stops the last
+	// transmission's SWR staying on a client's display for ever.
+	//
+	// PTT dropping is therefore a trigger in its own right: that is the moment
+	// State.Apply clears all four, and the moment there is nothing left in the
+	// patch to notice it by.
+	if p.PowerMeter != nil || p.SWR != nil || p.ALC != nil || p.SWRRatio != nil ||
+		(p.PTT != nil && !*p.PTT) {
+		m["power_meter"] = st.PowerMeter
+		m["swr"] = st.SWR
+		m["alc"] = st.ALC
+		m["swr_ratio"] = st.SWRRatio
+	}
+
+	if p.Tuner != nil {
+		m["tuner"] = *p.Tuner
+	}
+	if p.Standby != nil {
+		m["standby"] = *p.Standby
 	}
 	return m
 }
