@@ -893,8 +893,8 @@ var models = map[string]Model{
 		// tuning or while tuning)" — the clearest statement of the command in
 		// any of these references, and the one that says a read of 02 means a
 		// cycle is running rather than about to start.
-		Tuner:    true,
-		CWBuffer: false,
+		Tuner:       true,
+		CWBuffer:    false,
 		FilterWidth: false,
 		DataMode:    true,
 		DataModeSub: 0x04,

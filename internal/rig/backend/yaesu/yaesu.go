@@ -265,11 +265,11 @@ func (y *Rig) Caps() radio.Caps {
 		// TX and PC are family-wide here, and so is RM: it is in every command
 		// list read for this backend, with the same meter numbers in both
 		// generations.
-		PTTControl:        true,
-		PowerControl:      true,
-		PowerMeter:        true,
-		SWRMeter:          true,
-		ALCMeter:          true,
+		PTTControl:   true,
+		PowerControl: true,
+		PowerMeter:   true,
+		SWRMeter:     true,
+		ALCMeter:     true,
 		// AC is in every command list read for this backend. Starting a cycle
 		// needs the per-generation parameter, so it is offered only where that
 		// has been transcribed.
@@ -297,7 +297,7 @@ func (y *Rig) Caps() radio.Caps {
 		AutoNotchControl:     y.profile.AutoNotch,
 		// No notch width and no receive antenna: neither has a row in any
 		// command list read for this backend.
-		Antennas: y.profile.Antennas,
+		Antennas:          y.profile.Antennas,
 		PowerWattAccurate: !y.profile.PowerRaw,
 		MaxPowerW:         float64(y.maxPowerW()),
 

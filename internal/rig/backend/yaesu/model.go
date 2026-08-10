@@ -293,7 +293,7 @@ func modern(name, label string, id int) Model {
 		Notch:          true,
 		AutoNotch:      true,
 		MinHz:          30_000,
-		MaxHz:      75_000_000,
+		MaxHz:          75_000_000,
 	}
 }
 
@@ -370,7 +370,7 @@ func older(name, label string, ids ...int) Model {
 		Notch:          true,
 		AutoNotch:      true,
 		MinHz:          30_000,
-		MaxHz:      56_000_000,
+		MaxHz:          56_000_000,
 	}
 }
 
