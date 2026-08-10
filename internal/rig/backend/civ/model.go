@@ -76,6 +76,15 @@ type Model struct {
 	// False on the IC-706 family, whose output is a front-panel control with no
 	// bus equivalent.
 	Power bool
+	// Tuner is true when 1C 01 is the antenna tuner: 00 off, 01 on, 02 start a
+	// tuning cycle, and 02 read back while one is running.
+	//
+	// It is per model for a reason that would otherwise be a transmit accident.
+	// On the IC-718 1C 01 is not the tuner at all — it is PTT, that radio's
+	// table having no 1C 00 row — so a "start tuning" sent there would key the
+	// transmitter and hold it keyed. Nothing about the frame distinguishes the
+	// two; only the model does.
+	Tuner bool
 	// TXMeters is true when the radio has the transmit meters, 15 11 (PO),
 	// 15 12 (SWR) and 15 13 (ALC).
 	//
@@ -237,6 +246,7 @@ func modern(name, label string, addr byte, modes []radio.Mode) Model {
 		TXMeters:       true,
 		SWRCal:         true,
 		POScale:        255,
+		Tuner:          true,
 		CWBuffer:       true,
 		FilterWidth:    true,
 		DataMode:       true,
@@ -573,6 +583,11 @@ var models = map[string]Model{
 		TXMeters: true,
 		SWRCal:   false,
 		POScale:  255,
+		// 1C 01, "set/read antenna tuner condition (0=OFF, 1=ON, 2=Start
+		// tuning or while tuning)" — the clearest statement of the command in
+		// any of these references, and the one that says a read of 02 means a
+		// cycle is running rather than about to start.
+		Tuner:    true,
 		CWBuffer: false,
 		FilterWidth: false,
 		DataMode:    true,
@@ -595,7 +610,10 @@ var models = map[string]Model{
 	// The IC-718 is the outlier, and every difference below is from its own
 	// command table (Advanced Manual section 5):
 	//
-	//   - PTT is 1C 01, not 1C 00. Its table has no 1C 00 row at all.
+	//   - PTT is 1C 01, not 1C 00. Its table has no 1C 00 row at all. That is
+	//     also why Tuner stays false here and must: on every other radio 1C 01
+	//     is the antenna tuner, so a "start tuning" sent to this one would key
+	//     the transmitter and leave it keyed.
 	//   - No command 17, so no CW over CAT. Keying needs a serial control line.
 	//   - No 1A 03, so no IF filter width.
 	//   - Command 14 0C runs 6-60 wpm, not 6-48.

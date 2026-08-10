@@ -149,6 +149,7 @@ const (
 	reqSM = "SM0;"
 	reqSH = "SH0;"
 	reqNA = "NA0;"
+	reqAC = "AC;" // internal antenna tuner
 	// reqTX is the PTT READ. It is not a typo for a keying command: TX1; keys
 	// and TX0; unkeys. See the package doc.
 	reqTX = "TX;"
@@ -178,6 +179,9 @@ type Rig struct {
 	// transmitting is the last TX reading. The transmit meters are read only
 	// while it is set, because in receive all three answer zero.
 	transmitting atomic.Bool
+	// tuner holds a radio.Tuner, the last AC reading, and decides whether a
+	// tuning cycle is worth watching on the fast tier.
+	tuner atomic.Value
 	// pcHead is the FTX-1's PC head selector as last reported: 1 the field
 	// head, 2 the SPA-1 amplifier. Zero until PC; has been read.
 	pcHead atomic.Uint32
@@ -266,6 +270,11 @@ func (y *Rig) Caps() radio.Caps {
 		PowerMeter:        true,
 		SWRMeter:          true,
 		ALCMeter:          true,
+		// AC is in every command list read for this backend. Starting a cycle
+		// needs the per-generation parameter, so it is offered only where that
+		// has been transcribed.
+		TunerControl: true,
+		TunerTune:    y.profile.TunerTuneParam != 0,
 		PowerWattAccurate: !y.profile.PowerRaw,
 		MaxPowerW:         float64(y.maxPowerW()),
 
@@ -426,6 +435,12 @@ func (y *Rig) pollFast(ctx context.Context, c backend.Conn) error {
 	// already known when the meter reads are chosen.
 	reads := []read{{reqIF, keyIF}, {reqTX, keyTX}, {reqSM, keySM}}
 	reads = append(reads, y.txMeterReads()...)
+	// A tuning cycle lasts a second or two, so while one runs it belongs here
+	// rather than on the slow tier, where a whole cycle could pass between two
+	// reads. It drops back by itself once the cycle ends.
+	if y.Tuner() == radio.TunerTuning {
+		reads = append(reads, read{reqAC, keyAC})
+	}
 	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err
@@ -439,7 +454,7 @@ func (y *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 	// is read against on the FT-991A, FT-891 and the whole FT-950 generation.
 	// The FTdx9000 has no NA command, and no bandwidth table for it to choose a
 	// column of either.
-	reads := []read{{reqPC, keyPC}}
+	reads := []read{{reqPC, keyPC}, {reqAC, keyAC}}
 	if y.profile.HasNarrow {
 		reads = append(reads, read{reqNA, keyNA})
 	}

@@ -57,6 +57,7 @@ func answersFor(m Model) map[string]string {
 		a[reqMD] = "MD3"
 		a[reqDA] = "DA0"
 	}
+	a[reqAC] = "AC110" // antenna tuner in line, not tuning
 	// The parked VFO and the receive/transmit selection, where FA and FB are
 	// two VFOs at all.
 	if m.VFOPair == VFOPairAB {
@@ -457,16 +458,16 @@ func TestPollSlowPerModel(t *testing.T) {
 	}{
 		// No DA and no FL to read, but break-in is read like the TS-590's:
 		// SD; for the delay, then VX; for the switch.
-		{"ts480", []string{"PC;", "FB;", "FR;", "FT;", "SD;", "VX;", "FW;"}},
-		{"ts590sg", []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
+		{"ts480", []string{"PC;", "AC;", "FB;", "FR;", "FT;", "SD;", "VX;", "FW;"}},
+		{"ts590sg", []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
 		// DATA came with the mode code, and FW is not a width here. The TS-890S
 		// asks for no filter at all: its FL0 read form carries the selection, so
 		// there is no way to ask without also setting. Its BI is two-valued, so
 		// SD comes first; the TS-990S's is three-valued and needs no delay.
-		{"ts890s", []string{"PC;", "FB;", "FR;", "FT;", "SD;", "BI;"}},
+		{"ts890s", []string{"PC;", "AC;", "FB;", "FR;", "FT;", "SD;", "BI;"}},
 		// And no FB;/FR;/FT; at all on the TS-990S: its FA and FB are the Main
 		// and Sub bands rather than two VFOs, so remoses does not address them.
-		{"ts990s", []string{"PC;", "FL00;", "BI;"}},
+		{"ts990s", []string{"PC;", "AC;", "FL00;", "BI;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {

@@ -29,6 +29,7 @@ type simRig struct {
 	speed  [2]byte
 	width  byte
 	ptt    byte
+	tuner  byte
 
 	// The dual-VFO side, indexed by the band selector commands 25, 26 and 29
 	// take: [0] is main (VFO A), [1] is sub (VFO B). Held separately from the
@@ -206,14 +207,27 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 		}
 		return ng, nil
 	case cmdTransceiver:
-		if len(body) < 1 || body[0] != subPTT {
+		if len(body) < 1 {
 			return ng, nil
 		}
-		if len(body) == 1 {
-			return [][]byte{fromRig(cmdTransceiver, subPTT, s.ptt)}, nil
+		switch body[0] {
+		case subPTT:
+			if len(body) == 1 {
+				return [][]byte{fromRig(cmdTransceiver, subPTT, s.ptt)}, nil
+			}
+			s.ptt = body[1]
+			return ok, nil
+		case subTuner:
+			// The tuner answers its own sub-command. A "start tuning" is
+			// accepted and left showing as a cycle in progress, which is what
+			// the radio does until it finishes.
+			if len(body) == 1 {
+				return [][]byte{fromRig(cmdTransceiver, subTuner, s.tuner)}, nil
+			}
+			s.tuner = body[1]
+			return ok, nil
 		}
-		s.ptt = body[1]
-		return ok, nil
+		return ng, nil
 	case cmdSendCW:
 		if len(body) == 1 && body[0] == 0xFF {
 			s.cwAborts++
@@ -461,7 +475,11 @@ func TestPoll(t *testing.T) {
 		// 16 is CW break-in, read here because the CW path consults it before
 		// queueing anything: with it off, a message would be accepted and
 		// never transmitted.
-		{"slow", backend.PollSlow, []string{"14/0A", "1A/03",
+		// 1C 01 is the antenna tuner, first because it is cheap and because a
+		// client showing a tuner button wants its state as soon as there is
+		// one. While a tuning cycle is running it moves to the fast tier
+		// instead; see TestTunerIsWatchedWhileTuning.
+		{"slow", backend.PollSlow, []string{"1C/01", "14/0A", "1A/03",
 			"25", "25", "26", "26", "0F", "07", "16", "1A/06"}},
 	}
 	for _, tc := range tests {

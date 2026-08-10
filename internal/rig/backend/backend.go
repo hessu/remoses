@@ -220,6 +220,31 @@ type BreakInController interface {
 	BreakIn() radio.BreakIn
 }
 
+// TunerController is implemented by a backend that can work the rig's internal
+// antenna tuner.
+//
+// The two halves are separate because they are different in kind. SetTuner
+// switches the matching network in or out of line and is an ordinary setting;
+// StartTune KEYS THE TRANSMITTER, briefly and without anyone holding a switch,
+// while the radio hunts for a match. The session treats the second as a
+// transmit operation — lock, band limits, dead-man timer — and the first as a
+// setting, which it could not do if they shared an entry point.
+type TunerController interface {
+	// SetTuner puts the tuner in line or bypasses it.
+	SetTuner(ctx context.Context, c Conn, on bool) error
+	// StartTune begins a tuning cycle. It transmits.
+	//
+	// It returns as soon as the radio has accepted the command, not when the
+	// cycle finishes: the rig decides how long that takes and reports progress
+	// through the tuner state, which the poller follows to radio.TunerTuning
+	// and back.
+	StartTune(ctx context.Context, c Conn) error
+	// Tuner is the last reading, from the poll rather than a fresh
+	// transaction, so that the session can answer "is it still tuning" without
+	// a round trip.
+	Tuner() radio.Tuner
+}
+
 // MorseSender is implemented by backends whose rig has a CAT CW buffer.
 //
 // The pacing loop lives in internal/cw and is shared; this interface is only

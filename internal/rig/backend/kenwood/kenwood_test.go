@@ -27,8 +27,9 @@ func initAnswers() map[string]string {
 		"VX;": "VX1", // break-in on the TS-590 generation
 		"BI;": "BI1", // and on the TS-890S/TS-990S
 		reqFB: "FB00007050000",
-		reqFR: "FR0", // receiving on VFO A
-		reqFT: "FT0", // transmitting on it too, so simplex
+		reqFR: "FR0",   // receiving on VFO A
+		reqFT: "FT0",   // transmitting on it too, so simplex
+		reqAC: "AC110", // tuner in line, not tuning
 	}
 }
 
@@ -316,19 +317,19 @@ func TestPollSlow(t *testing.T) {
 		// and FSK. Break-in (SD; then VX; on this model) is read only in CW,
 		// where the command means break-in rather than VOX.
 		{"CW includes the filter width and break-in", radio.ModeCW,
-			[]string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
+			[]string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
 		{"CW-R includes the filter width and break-in", radio.ModeCWR,
-			[]string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
+			[]string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;", "SD;", "VX;", "FW;"}},
 		{"FSK includes the filter width but not break-in", radio.ModeFSK,
-			[]string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;", "FW;"}},
+			[]string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;", "FW;"}},
 		// In SSB and AM the rig refuses FW outright; in FM it answers with a
 		// modulation-degree switch that would land in State as a 0 Hz passband.
-		{"USB skips it", radio.ModeUSB, []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
-		{"LSB skips it", radio.ModeLSB, []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
-		{"AM skips it", radio.ModeAM, []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
-		{"FM skips it", radio.ModeFM, []string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
+		{"USB skips it", radio.ModeUSB, []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
+		{"LSB skips it", radio.ModeLSB, []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
+		{"AM skips it", radio.ModeAM, []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
+		{"FM skips it", radio.ModeFM, []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
 		{"an unknown mode skips it", radio.ModeUnknown,
-			[]string{"PC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
+			[]string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

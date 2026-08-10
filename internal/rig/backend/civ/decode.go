@@ -26,6 +26,7 @@ const (
 	KeyFilterWidth backend.Key = "1A/03"
 	KeyDataMode    backend.Key = "1A/06"
 	KeyPTT         backend.Key = "1C/00"
+	KeyTuner       backend.Key = "1C/01"
 	KeyID          backend.Key = "19/00"
 
 	// The dual-VFO commands. 25 and 26 answer for whichever VFO the request
@@ -270,12 +271,27 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		return u, nil
 
 	case cmdTransceiver:
+		if len(body) < 2 {
+			return u, nil
+		}
+		// 1C 01 is the antenna tuner on every radio here except the IC-718,
+		// where it is PTT. Model.Tuner is false there, so this branch is never
+		// reached on that radio and the PTT branch below still is — the two
+		// readings of one frame stay apart because the model says which applies.
+		if body[0] == subTuner && r.model.Tuner {
+			if v, ok := tunerFromByte(body[1]); ok {
+				u.Key = KeyTuner
+				u.Patch.Tuner = &v
+				r.tuner.Store(v)
+			}
+			return u, nil
+		}
 		// The sub-command carrying transmitter status is per model: 0x00 on
 		// every radio here except the IC-718, whose table puts it on 0x01 and
 		// has no 0x00 row at all. Matching on the model's value rather than a
 		// constant also keeps 1C 01 on the other radios — where it is the
 		// antenna tuner — from being decoded as PTT.
-		if len(body) < 2 || body[0] != r.model.PTTSub {
+		if body[0] != r.model.PTTSub {
 			return u, nil
 		}
 		if body[1] > 0x01 {

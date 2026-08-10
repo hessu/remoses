@@ -73,6 +73,9 @@ func (y *Rig) decodeRM(u *backend.Update, arg []byte) {
 // Nothing at all in receive: forward power, SWR and ALC all read zero there and
 // would cost three transactions a tick to publish three zeroes that a client
 // could not tell from a real reading of a transmitter into a dummy load.
+// A tuning cycle gets no special case: whether a radio reports PTT during one
+// is per model — a TS-590S does and an IC-7610 does not — so the rig's own PTT
+// is followed rather than second-guessed. See radio.State.Apply.
 func (y *Rig) txMeterReads() []read {
 	if !y.transmitting.Load() {
 		return nil

@@ -17,6 +17,7 @@ const (
 	keyPC backend.Key = "PC"
 	keySM backend.Key = "SM"
 	keyRM backend.Key = "RM"
+	keyAC backend.Key = "AC"
 	keySH backend.Key = "SH"
 	keyNA backend.Key = "NA"
 	keyIF backend.Key = "IF"
@@ -243,6 +244,13 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 	case keyRM:
 		u.Key = keyRM
 		y.decodeRM(&u, arg)
+
+	case keyAC:
+		u.Key = keyAC
+		if v, ok := y.tunerFromAC(arg); ok {
+			u.Patch.Tuner = &v
+			y.tuner.Store(v)
+		}
 
 	case keyID:
 		u.Key = keyID

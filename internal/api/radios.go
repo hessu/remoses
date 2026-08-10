@@ -162,6 +162,14 @@ type statePatchBody struct {
 	// BreakIn is off, semi or full. It decides whether CW sent over CAT is
 	// audible, so a client offering a CW box should offer this beside it.
 	BreakIn *radio.BreakIn `json:"break_in"`
+
+	// Tuner switches the antenna tuner in or out of line: "off" or "on" only.
+	// The state can also read "tuning", but that is not something to ask for.
+	Tuner *radio.Tuner `json:"tuner"`
+	// TunerTune true starts a tuning cycle, which TRANSMITS for a second or
+	// two. An action rather than a state, and a separate field from Tuner so
+	// that a client echoing back a state it just read can never key the radio.
+	TunerTune *bool `json:"tuner_tune"`
 }
 
 // toRequest converts the body into the session's patch request.
@@ -187,6 +195,8 @@ func (b statePatchBody) toRequest() (rig.PatchRequest, error) {
 		DualWatch:     b.DualWatch,
 		VFOMode:       b.VFOMode,
 		BreakIn:       b.BreakIn,
+		Tuner:         b.Tuner,
+		TunerTune:     b.TunerTune,
 	}
 	if b.VFO != nil {
 		req.VFO = *b.VFO
@@ -227,6 +237,15 @@ func (b statePatchBody) auditAttrs() []any {
 	}
 	if b.PTT != nil {
 		attrs = append(attrs, "ptt", *b.PTT)
+	}
+	if b.Tuner != nil {
+		attrs = append(attrs, "tuner", string(*b.Tuner))
+	}
+	// Audited because it transmits: an operator reading the log later should
+	// find every one of those, not only the ones that went through the PTT
+	// field.
+	if b.TunerTune != nil {
+		attrs = append(attrs, "tuner_tune", *b.TunerTune)
 	}
 	return attrs
 }

@@ -2009,6 +2009,90 @@ render alike, with the exact figure published alongside so nothing is lost when 
 
 ---
 
+## 11.5 The antenna tuner
+
+`state.tuner` reads `off`, `on` or `tuning`; `{"tuner": "on"}` switches the matching network in
+or out of line, and `{"tuner_tune": true}` starts a tuning cycle. `caps.tuner_control` and
+`caps.tuner_tune` say which a radio has.
+
+**They are two fields rather than one because a tuning cycle transmits.** The radio keys itself
+for a second or two with nobody holding a switch, so `tuner_tune` is treated as a transmit
+operation: it needs the lock, it is checked against `limits.bands` — a station that may not
+transmit on a band may not tune into it either — and it arms the dead-man timer, so a cycle that
+never ends is caught by the interlock that catches a stuck PTT. Keeping it out of the `tuner`
+enum also means a client that reads the state and writes it back, which is an ordinary thing to
+do, can never key a transmitter by echoing `"tuning"` at the radio it just read it from.
+
+It does not wait for the cycle. The rig decides how long one takes and reports progress in its
+own state, which the poller follows — on the fast tier while a cycle runs, because on the slow
+one a whole cycle can begin and end between two reads.
+
+| | Command | Off / on | Start a cycle |
+|---|---|---|---|
+| Icom | `1C 01` | `00` / `01` | `02`, which a read also answers while running |
+| Kenwood | `AC` | P2 `0` / `1` | P3 `1` — `AC111` |
+| Yaesu | `AC` | P3 `0` / `1` | P3 **`2` or `3`**, per generation |
+
+**The Icom row is a safety interlock, not a table entry.** On the IC-718 `1C 01` is *PTT* — its
+table has no `1C 00` row at all — so a "start tuning" sent there would key the transmitter and
+hold it keyed, and nothing in the frame would say so. `Model.Tuner` is false on that radio and
+must stay false.
+
+**The Yaesu row differs by generation.** The FT-950's `AC` reads "0: Tuner OFF, 1: Tuner ON,
+2: Tuning Start"; the FT-710's reads "0: Tuner OFF (Tuning Stop), 1: Tuner ON, 2: -, 3: Tuning
+Start". Being wrong fails safe in both directions — a documented no-op on one, an out-of-range
+parameter on the other — so the cost is a tune that does not happen rather than one that happens
+unasked.
+
+### What a TS-590S says that its reference does not
+
+Three things, all found by putting one on the air, and two of them make a set fail:
+
+- **An on/off set must send P1 as 0.** `AC010` and `AC000` are accepted; `AC110`, `AC100` and
+  `AC101` all answer `?;`. That is the reference's "the setting cannot be performed for RX
+  IN/THRU" read strictly: a set may not ask for a receive-tuner state, so it must ask for none.
+  Switching the tuner in with `AC010` answers `AC110` — the radio brings the receive tuner in on
+  its own. `AC111` keeps its `1` regardless, because that is the form the reference names and the
+  one verified transmitting; the rig evidently special-cases it.
+- **A set that changes nothing is rejected.** Asking for off while already off answers `?;`. That
+  would make an ordinary idempotent request fail the second time — the same PATCH twice, or the
+  same button pressed twice — so `SetTuner` reads first and skips a write it does not need. It
+  also bit once in the way this protocol's rejections always do: the `?;` from the refused set
+  arrived while the read-back was outstanding and failed *that*, which is the late-rejection
+  hazard §5.5 already warns about.
+- **A finished cycle reports success in the tuner state itself.** Neither the command nor the
+  reference has a result code, but the radio answers the question anyway: a cycle that finds a
+  match ends with the tuner IN (`AC110`, published as `on`) and one that fails ends with it THRU
+  (`AC000`, published as `off`). Confirmed across four frequencies — 3560, 3530 and 3502 kHz all
+  matched, 3770 kHz did not, and on that one the rig found the SWR too high and gave up in well
+  under a second where a real hunt took two or three. So a client watching `tuner` alone can tell
+  a successful tune from a failed one, without a result code existing anywhere.
+
+**An IC-7610 does the same thing**, tested on the same four frequencies: `1C 01` reads `01` after
+a cycle that matched and `00` after one that did not, and 3770 kHz failed there too. So "ends on,
+matched; ends off, failed" now holds on both families that have been tried. Nothing in either
+reference says so. Yaesu is untested.
+
+### What the two radios disagree about, and why PTT wins
+
+They report a cycle completely differently, and following the rig rather than the calendar of
+what *ought* to be true is what gets both right:
+
+- A **TS-590S** reports PTT true through the cycle, and its transmit meters carry real readings —
+  the SWR visibly falling as the tuner closes on a match, 13 → 5 → 1 of 30 dots.
+- An **IC-7610** reports PTT **false** for the whole cycle and answers **zero** to all three
+  meters. Its bursts are also shorter than a poll interval, especially where it already knows the
+  band: "very quick since it remembers the correct parameters".
+
+So `State.Apply` clears the transmit meters on PTT alone and does *not* treat "tuning" as
+transmitting. That was tried, on the grounds that a tuning cycle plainly does key the
+transmitter, and reverted the same session: on the IC-7610 it published a zero SWR as a confident
+**1.0:1 — the best possible match — at the exact moment the tuner was failing to find one**. The
+same reasoning as everywhere else in this backend: a number that looks real and is not is worse
+than no number, and the rig's own PTT is the only signal that distinguishes them.
+
+---
+
 ## 12. Safety interlocks
 
 This API keys a transmitter over a network, so interlocks are part of the design rather than

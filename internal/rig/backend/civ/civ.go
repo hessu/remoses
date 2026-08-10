@@ -65,6 +65,11 @@ type Rig struct {
 	// asking for and would be a stale number if it were.
 	dualWatch atomic.Bool
 
+	// tuner holds a radio.Tuner, the last 1C 01 reading. It shapes the poll:
+	// while a cycle is running the state is worth watching at the fast rate,
+	// and the rest of the time it belongs on the slow one.
+	tuner atomic.Value
+
 	// transmitting is the last PTT reading, and shapes the poll the same way:
 	// the transmit meters are asked for only while the transmitter is up,
 	// because in receive all three read zero and mean nothing.
@@ -238,6 +243,10 @@ func (r *Rig) Caps() radio.Caps {
 		PowerMeter: r.model.TXMeters,
 		SWRMeter:   r.model.TXMeters,
 		ALCMeter:   r.model.TXMeters,
+		// 1C 01 does both halves on the radios that have it: 00/01 switch the
+		// tuner in and out, 02 starts a cycle.
+		TunerControl: r.model.Tuner,
+		TunerTune:    r.model.Tuner,
 
 		// SubReceiver is whether the radio *has* a second receiver;
 		// SubReceiverReadable is whether remoses can report it. They differ on
@@ -262,6 +271,18 @@ func (r *Rig) Caps() radio.Caps {
 		CWMinWPM:  minWPM,
 		CWMaxWPM:  r.model.MaxWPM,
 	}
+}
+
+// metersAreLive reports whether the transmit meters are worth reading.
+//
+// The rig's own PTT, and nothing else. Reading them during a tuning cycle as
+// well was tried on an IC-7610 and abandoned: that radio reports PTT false for
+// the whole cycle and answers zero to all three meters, so the only thing the
+// extra traffic bought was a zero SWR published as a perfect 1.0:1 match while
+// the tuner was in fact failing to find one. A TS-590S, which does report PTT
+// during a cycle, gets real readings through this path already.
+func (r *Rig) metersAreLive() bool {
+	return r.transmitting.Load()
 }
 
 // sMeterScale is the full-scale meter reading, or 0 on a radio with no readable
@@ -391,11 +412,18 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		// This uses the PTT the last poll decoded rather than a fresh read: one
 		// tick of lag at the start of a transmission costs a single sample, and
 		// the alternative is serialising every fast poll behind a PTT read.
-		if r.model.TXMeters && r.transmitting.Load() {
+		if r.model.TXMeters && r.metersAreLive() {
 			reqs = append(reqs,
 				request{KeyPOMeter, r.frame(cmdMeter, subPOMeter)},
 				request{KeySWRMeter, r.frame(cmdMeter, subSWRMeter)},
 				request{KeyALCMeter, r.frame(cmdMeter, subALCMeter)})
+		}
+		// A tuning cycle lasts a second or two, so while one is running the
+		// tuner belongs on this tier: on the slow one a whole cycle could begin
+		// and end between two reads, and a client would see nothing happen.
+		// Once it finishes this drops back to the slow tier by itself.
+		if r.model.Tuner && r.Tuner() == radio.TunerTuning {
+			reqs = append(reqs, request{KeyTuner, r.frame(cmdTransceiver, subTuner)})
 		}
 		// The second receiver's meter belongs in the fast tier for the same
 		// reason the first one does — it is a signal level, and a client draws
@@ -409,6 +437,9 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		return r.readAll(ctx, c, reqs...)
 	case backend.PollSlow:
 		var reqs []request
+		if r.model.Tuner {
+			reqs = append(reqs, request{KeyTuner, r.frame(cmdTransceiver, subTuner)})
+		}
 		if r.model.Power {
 			reqs = append(reqs, request{KeyPower, r.frame(cmdLevel, subRFPower)})
 		}

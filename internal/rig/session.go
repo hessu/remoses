@@ -536,6 +536,66 @@ func (s *Session) SetBreakIn(ctx context.Context, v radio.BreakIn) (radio.State,
 	return s.readback(ctx, backend.PollSlow, backend.PollFast)
 }
 
+// tunerController reports the backend's antenna tuner, or nil.
+func (s *Session) tunerController() backend.TunerController {
+	t, _ := s.rig.(backend.TunerController)
+	return t
+}
+
+// SetTuner puts the antenna tuner in line or bypasses it.
+//
+// An ordinary setting: it changes what the matching network is doing but does
+// not transmit. Starting a tuning cycle does, and lives in StartTune.
+func (s *Session) SetTuner(ctx context.Context, on bool) (radio.State, error) {
+	t := s.tunerController()
+	if t == nil || !s.Caps().TunerControl {
+		return s.State(), fmt.Errorf("radio %s: antenna tuner: %w", s.id, ErrUnsupported)
+	}
+	if err := s.requireConnected(); err != nil {
+		return s.State(), err
+	}
+	if err := t.SetTuner(ctx, s, on); err != nil {
+		return s.State(), err
+	}
+	return s.readback(ctx, backend.PollSlow, backend.PollFast)
+}
+
+// StartTune runs a tuning cycle, which transmits.
+//
+// It is gated like any other transmit path rather than like a setting. The
+// radio keys itself for a second or two with nobody holding a switch, on
+// whatever frequency the rig is sitting on, so:
+//
+//   - the frequency is checked against limits.bands, because a tune is a
+//     transmission and a station that may not transmit on a band may not tune
+//     into it either;
+//   - the dead-man timer is armed, so a cycle that never ends — a tuner hunting
+//     into an antenna that cannot be matched — is caught by the same interlock
+//     that catches a stuck PTT.
+//
+// The cycle is not waited on. The rig decides how long it takes, reports
+// progress as radio.TunerTuning, and the poller follows it back to on or off;
+// blocking here would hold a lock and a request open for the duration and tell
+// the caller nothing it could not see in the state.
+func (s *Session) StartTune(ctx context.Context) (radio.State, error) {
+	t := s.tunerController()
+	if t == nil || !s.Caps().TunerTune {
+		return s.State(), fmt.Errorf("radio %s: starting a tuning cycle: %w", s.id, ErrUnsupported)
+	}
+	if err := s.requireConnected(); err != nil {
+		return s.State(), err
+	}
+	if hz := s.State().Frequency; hz > 0 && !s.cfg.Limits.AllowsFrequency(hz) {
+		return s.State(), fmt.Errorf("radio %s: tuning transmits on %d Hz: %w",
+			s.id, hz, ErrOutOfBand)
+	}
+	if err := t.StartTune(ctx, s); err != nil {
+		return s.State(), err
+	}
+	s.armDeadman()
+	return s.readback(ctx, backend.PollSlow, backend.PollFast)
+}
+
 // EnsureCWWillTransmit makes sure Morse queued now would actually reach the
 // air, switching break-in on if configuration allows it.
 //
@@ -759,13 +819,26 @@ type PatchRequest struct {
 	// BreakIn is the CW break-in setting, which decides whether Morse sent
 	// over CAT reaches the air.
 	BreakIn *radio.BreakIn
+
+	// Tuner switches the antenna tuner in or out of line. Only off and on are
+	// accepted: "tuning" is a state to observe, not one to ask for.
+	Tuner *radio.Tuner
+	// TunerTune starts a tuning cycle, which TRANSMITS. Write only, and true
+	// only, like VFOMode.
+	//
+	// It is a separate field from Tuner rather than a third value of it so that
+	// a client which reads the state and writes it back — a perfectly ordinary
+	// thing to do — can never key a transmitter by echoing "tuning" at the
+	// radio it just read it from.
+	TunerTune *bool
 }
 
 // Empty reports whether the request would change nothing.
 func (r PatchRequest) Empty() bool {
 	return r.Mode == nil && r.DataMode == nil && r.Frequency == nil &&
 		r.FilterSlot == nil && r.FilterWidthHz == nil && r.Power == nil && r.PTT == nil &&
-		r.Split == nil && r.DualWatch == nil && r.VFOMode == nil && r.BreakIn == nil
+		r.Split == nil && r.DualWatch == nil && r.VFOMode == nil && r.BreakIn == nil &&
+		r.Tuner == nil && r.TunerTune == nil
 }
 
 // vfoState is the cached state of one named VFO, for filling in the half of a
@@ -834,6 +907,32 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		return s.State(), fmt.Errorf("radio %s: this radio has no RF power command; "+
 			"its output is set on the radio: %w", s.id, ErrUnsupported)
 	}
+	if req.Tuner != nil {
+		if !(*req.Tuner).Valid() {
+			return s.State(), fmt.Errorf("radio %s: tuner %q, want off or on; "+
+				"start a tuning cycle with tuner_tune: %w", s.id, *req.Tuner, ErrUnsupported)
+		}
+		if !caps.TunerControl {
+			return s.State(), fmt.Errorf("radio %s: antenna tuner: %w", s.id, ErrUnsupported)
+		}
+	}
+	if req.TunerTune != nil {
+		if !*req.TunerTune {
+			return s.State(), fmt.Errorf("radio %s: tuner_tune can only be set true; "+
+				"it starts a tuning cycle and there is nothing false would stop: %w",
+				s.id, ErrUnsupported)
+		}
+		if !caps.TunerTune {
+			return s.State(), fmt.Errorf("radio %s: starting a tuning cycle: %w",
+				s.id, ErrUnsupported)
+		}
+		// A tuning cycle transmits, so it answers to the band limits like any
+		// other transmission rather than to the tuning ones.
+		if hz := s.State().Frequency; hz > 0 && !s.cfg.Limits.AllowsFrequency(hz) {
+			return s.State(), fmt.Errorf("radio %s: tuning transmits on %d Hz: %w",
+				s.id, hz, ErrOutOfBand)
+		}
+	}
 	if req.VFOMode != nil {
 		if !*req.VFOMode {
 			return s.State(), fmt.Errorf("radio %s: vfo_mode can only be set true; "+
@@ -880,7 +979,8 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	// path went on refusing to send.
 	slow := req.Power != nil || req.FilterSlot != nil || req.FilterWidthHz != nil ||
 		req.Split != nil || req.DualWatch != nil || req.namesAVFO() ||
-		req.VFOMode != nil || req.BreakIn != nil
+		req.VFOMode != nil || req.BreakIn != nil ||
+		req.Tuner != nil || req.TunerTune != nil
 
 	// First of everything: a radio on a memory channel refuses several of the
 	// commands below, so a request that says "get back on a VFO and tune there"
@@ -988,10 +1088,30 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 			return s.State(), err
 		}
 	}
+	// The tuner goes in before PTT and before the tuning cycle: switching the
+	// matching network in or out mid-transmission is not something to do, and a
+	// cycle started with the tuner bypassed either does nothing or means
+	// something else — on a Kenwood the reference says outright that "AT Tuning
+	// will not begin when using the TX THRU status".
+	if req.Tuner != nil {
+		if err := s.tunerController().SetTuner(ctx, s, *req.Tuner == radio.TunerOn); err != nil {
+			return s.State(), err
+		}
+	}
 	if req.PTT != nil {
 		if err := s.rig.SetPTT(ctx, s, *req.PTT); err != nil {
 			return s.State(), err
 		}
+	}
+	// Last, because it transmits, for the same reason PTT is last: the radio is
+	// fully configured before anything keys it. The dead-man timer is armed as
+	// it is for any other transmission, so a cycle that never ends is caught by
+	// the interlock that catches a stuck PTT.
+	if req.TunerTune != nil {
+		if err := s.tunerController().StartTune(ctx, s); err != nil {
+			return s.State(), err
+		}
+		s.armDeadman()
 	}
 
 	if slow {

@@ -628,6 +628,21 @@ components:
 
             Note that full scale is not always the data field's range: an Icom's
             ALC runs to 120 of a possible 255, and `scale` carries that.
+        tuner:
+          type: string
+          enum: [off, on, tuning]
+          description: |
+            The internal antenna tuner: bypassed, in line, or running a tuning
+            cycle. Absent on a radio that has none or that remoses cannot ask.
+
+            `tuning` means the radio is keying its own transmitter right now to
+            find a match, so a client should show it the way it shows PTT.
+
+            On a TS-590S the state also reports whether a finished cycle
+            succeeded, which no command does: a cycle that finds a match ends on
+            `on`, one that fails ends on `off`. That is observed behaviour
+            rather than something its reference promises, and it has not been
+            checked on other families.
         break_in:
           type: string
           enum: [off, semi, full]
@@ -685,6 +700,34 @@ components:
             CW break-in. Needs `caps.break_in_control`; 422 otherwise. Applied
             before PTT, so a request that enables break-in and then sends does
             the two in the order that makes the first message audible.
+        tuner:
+          type: string
+          enum: [off, on]
+          description: |
+            Switch the antenna tuner in or out of line. Needs
+            `caps.tuner_control`; 422 otherwise.
+
+            Only `off` and `on` are accepted. `tuning` is a state to observe,
+            not one to ask for — start a cycle with `tuner_tune`.
+
+            Applied before `ptt` and before `tuner_tune`, so a request that
+            switches the tuner in and then tunes does the two in the order that
+            works: a Kenwood will not begin a cycle with the tuner bypassed.
+        tuner_tune:
+          type: boolean
+          description: |
+            `true` starts a tuning cycle. **This transmits**: the radio keys
+            itself for a second or two while it hunts for a match.
+
+            An action rather than a state, and a separate field from `tuner` so
+            that a client which reads the state and writes it back can never key
+            a transmitter by echoing `"tuning"`. `false` is a 422 — there is
+            nothing it could mean.
+
+            Treated as a transmit operation throughout: it needs the lock, it is
+            refused outside `limits.bands`, and it arms the transmit dead-man
+            timer. It returns as soon as the radio accepts the command, not when
+            the cycle ends; watch `state.tuner` for that.
         vfo_mode:
           type: boolean
           description: |
@@ -764,6 +807,17 @@ components:
         alc_meter:
           type: boolean
           description: This radio can report ALC action while transmitting.
+        tuner_control:
+          type: boolean
+          description: |
+            remoses can switch this radio's internal antenna tuner in and out of
+            line, and read which it is.
+        tuner_tune:
+          type: boolean
+          description: |
+            remoses can start a tuning cycle on this radio. A client should
+            treat it as a transmit control rather than a settings toggle: it
+            keys the transmitter, and it is refused without the lock.
         ptt_control:
           type: boolean
           description: |

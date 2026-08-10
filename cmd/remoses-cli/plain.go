@@ -120,6 +120,9 @@ func statusFields(v *view) string {
 	if m := st.ALC; m != nil {
 		fmt.Fprintf(&b, " alc_raw=%d alc_scale=%d", m.Raw, m.Scale)
 	}
+	if st.Tuner != "" {
+		fmt.Fprintf(&b, " tuner=%s", st.Tuner)
+	}
 	fmt.Fprintf(&b, " cw_busy=%t cw_queued=%d wpm=%d", st.CW.Busy, st.CW.Queued, st.CW.WPM)
 	fmt.Fprintf(&b, " seq=%d age_ms=%d stale=%t", st.Seq, v.age().Milliseconds(), v.stale)
 	b.WriteString(optQuoted(" conn_error=", v.connErr))

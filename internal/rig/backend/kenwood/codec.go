@@ -31,6 +31,7 @@ const (
 	keyVX backend.Key = "VX"
 	keySD backend.Key = "SD"
 	keyRM backend.Key = "RM"
+	keyAC backend.Key = "AC"
 	keyTX backend.Key = "TX"
 	keyRX backend.Key = "RX"
 )
@@ -330,6 +331,16 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 		on := cmd == string(keyTX)
 		u.Patch.PTT = &on
 		k.transmitting.Store(on)
+
+	case keyAC:
+		// The antenna tuner. Its three parameters collapse into one published
+		// state: tuning while P3 says a cycle is running, otherwise in or out
+		// of line as P2 says.
+		u.Key = keyAC
+		if v, ok := tunerFromAC(arg); ok {
+			u.Patch.Tuner = &v
+			k.tuner.Store(v)
+		}
 
 	case keyRM:
 		// The meter function. One RM; read draws three answers — the reference

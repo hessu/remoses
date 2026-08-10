@@ -178,6 +178,7 @@ func answersFor(m Model) map[string]string {
 		reqSM: "SM0123",
 		reqIF: sampleIFFor(m),
 		reqSH: shAnswer(m, 10, false),
+		reqAC: "AC001", // internal tuner in line, not tuning
 	}
 	if m.HasID {
 		// generic asks but claims no number of its own, so it gets one no

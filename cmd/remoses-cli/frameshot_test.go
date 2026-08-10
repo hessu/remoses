@@ -31,6 +31,8 @@ func TestFrameShot(t *testing.T) {
 	tx.SWR = &radio.Meter{Raw: 38, Scale: 120}
 	tx.SWRRatio = &ratio
 	tx.ALC = &radio.Meter{Raw: 72, Scale: 120}
+	tx.Tuner = radio.TunerTuning
+	base.Tuner = radio.TunerOn
 
 	for _, tc := range []struct {
 		name string

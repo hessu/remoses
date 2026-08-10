@@ -156,6 +156,7 @@ type significant struct {
 	powerW     float64
 	havePowerW bool
 	ptt        bool
+	tuner      radio.Tuner
 	cw         radio.CWStatus
 }
 
@@ -171,6 +172,7 @@ func (v *view) significant() significant {
 		filterSlot: v.st.FilterSlot,
 		powerPct:   v.st.Power.Pct,
 		ptt:        v.st.PTT,
+		tuner:      v.st.Tuner,
 		cw:         v.st.CW,
 	}
 	if w := v.st.Power.Watts; w != nil {
@@ -338,6 +340,18 @@ func formatSWR(m radio.Meter, ratio *float64) string {
 		return fmt.Sprintf("%.1f:1", *ratio)
 	}
 	return formatMeterValue(m)
+}
+
+// formatTuner renders the antenna tuner, spelling out a running cycle rather
+// than leaving "tuning" to be read as a settled state.
+//
+// A cycle transmits, so it is worth saying so on a display whose whole purpose
+// is to tell an operator what a radio they cannot see is doing.
+func formatTuner(t radio.Tuner) string {
+	if t == radio.TunerTuning {
+		return ">> TUNING <<"
+	}
+	return string(t)
 }
 
 // formatCW renders the Morse queue.

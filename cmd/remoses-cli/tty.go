@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/hessu/remoses/internal/radio"
 )
 
 // Frame width bounds. Below the minimum the two-column layout stops lining up;
@@ -148,6 +150,9 @@ func layout(v *view, width int) []string {
 		row(filter, "power  "+formatPower(st.Power), width),
 		row("  cw        "+formatCW(st.CW), lockNote(v), width),
 	)
+	if st.Tuner != radio.TunerUnknown {
+		out = append(out, "  tuner     "+formatTuner(st.Tuner))
+	}
 
 	if note := stateNote(v); note != "" {
 		out = append(out, "", "  "+note)

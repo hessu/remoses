@@ -63,6 +63,10 @@ func (k *Rig) decodeRM(u *backend.Update, arg []byte) {
 //
 // SM is already on the fast poll in both directions — it is the S-meter in
 // receive and the power meter in transmit — so only RM is added here.
+//
+// A tuning cycle needs no special case here: this radio reports PTT true while
+// one runs, so the meters follow by themselves — and they are real, the SWR
+// visibly falling as the tuner finds its match.
 func (k *Rig) txMeterReads() []read {
 	if !k.transmitting.Load() {
 		return nil

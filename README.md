@@ -34,7 +34,9 @@ three filter slots and the filter-width ladder, transmit power, PTT, Icom
 Transceive push updates tracking the VFO knob, the REST and WebSocket APIs, the
 lock lifecycle including steal and expiry, both its VFOs with split and dual
 watch, and CW both ways — the rig's own CAT keyer and locally generated Morse
-keying DTR and RTS.
+keying DTR and RTS. Later, its **antenna tuner**: switched in and out, and four
+tuning cycles run for real on 80 m, three that found a match and one that could
+not.
 
 An **IC-9700**, on 2 m and 70 cm with real antennas. Its CAT surface end to end:
 Main's two VFOs addressed without disturbing each other, split, every mode it has
@@ -47,8 +49,10 @@ A **TS-590S** on its built-in USB — the first non-Icom radio to be tried, and 
 first test of the Kenwood backend against anything but its own unit tests.
 Frequency, mode, transmit power, the filter width and both IF filter slots,
 explicit PTT, CW break-in in all three states, and CW **heard on the air** at 5 W
-on 28.030 MHz, both semi and full break-in. It found two bugs in the process: one
-that stopped it connecting at all, and the break-in gap again.
+on 28.030 MHz, both semi and full break-in. Later, the **antenna tuner**: switched
+in and out, and four tuning cycles run for real on 80 m — three that found a match
+and one that could not. It found four bugs in the process: one that stopped it
+connecting at all, the break-in gap again, and two in the tuner command.
 
 **The safety interlocks were fired for real**, not against fakes: band limits
 refusing an out-of-band tune, power clamping, the dead-man `tx_timeout` forcing
@@ -188,6 +192,41 @@ documentation calibrates its meter: Icom prints four points (`0`, `48`, `80`, `1
 calibrated point remoses stops rather than extrapolating — the curve is undocumented, an SWR that
 high is a fault either way, and "7.4:1" would be a number invented about your antenna. A rigctld
 radio is the exception: Hamlib reports a true ratio, so that one arrives calibrated.
+
+**The antenna tuner can be switched and tuned.** `state.tuner` reads `off`, `on` or `tuning`;
+`{"tuner": "on"}` switches the matching network in or out of line, and `{"tuner_tune": true}`
+runs a tuning cycle. `caps.tuner_control` and `caps.tuner_tune` say which a radio has. It is
+`1C 01` on Icom, `AC` on Kenwood and Yaesu.
+
+**Starting a cycle transmits**, so it is gated like any other transmit path: it needs the lock,
+it is refused outside `limits.bands`, and it arms the dead-man timer. That is also why it is a
+separate field from `tuner` rather than a third value of it — a client reading the state and
+writing it back must never key a radio by echoing `"tuning"` at it. The call returns as soon as
+the radio accepts the command; watch `state.tuner` for the cycle, which remoses follows at the
+fast poll rate while it runs.
+
+**Tested on the air on both a TS-590S and an IC-7610**, four frequencies each on 80 m — three
+that matched and one whose SWR was too high for the antenna.
+
+The most useful thing they reported is not in either manual: **the tuner state itself says
+whether a cycle succeeded.** A match ends on `on`, a failure ends on `off`. Both radios do it,
+and no command reports it any other way.
+
+They disagree about everything else, which is why remoses follows the radio rather than assuming.
+A TS-590S reports PTT true through a cycle and returns real meter readings — the SWR visibly
+falling as the tuner closes in. An IC-7610 reports PTT false throughout and answers zero to every
+meter, and its cycles are shorter than a poll where it already knows the band. So the transmit
+meters follow the rig's own PTT and nothing else: treating "tuning" as transmitting was tried and
+reverted, because on the IC-7610 it published a zero SWR as a confident 1.0:1 — a perfect match —
+at the moment the tuner was failing to find one.
+
+The TS-590S also refuses two things its reference does not mention: an on/off set must send `P1`
+as `0`, and **a set that changes nothing is refused as well** — so remoses reads before writing,
+or the same request sent twice would fail the second time.
+
+**The IC-718 is the reason this is per model.** There `1C 01` is *PTT*, not the tuner — so a
+"start tuning" sent to one would key the transmitter and hold it keyed. It reports
+`tuner_control: false`, and must.
 
 **The IC-706 family cannot be keyed over CI-V at all.** None of the three has a transmitter
 command — no `1C` at any sub-command — so remoses can neither key them nor tell whether they are

@@ -185,11 +185,28 @@ func TestDecode(t *testing.T) {
 			check:   wantEmpty,
 		},
 		{
-			name:    "antenna tuner status is not implemented",
-			frame:   fromRig(cmdTransceiver, 0x01, 0x01),
-			wantKey: backend.KeyUnsolicited,
+			name:    "antenna tuner status",
+			frame:   fromRig(cmdTransceiver, subTuner, tunerOn),
+			wantKey: KeyTuner,
 			wantOK:  true,
-			check:   wantEmpty,
+			check: func(t *testing.T, p radio.Patch) {
+				if p.Tuner == nil || *p.Tuner != radio.TunerOn {
+					t.Errorf("tuner = %v, want on", p.Tuner)
+				}
+			},
+		},
+		{
+			// A cycle in progress, which is what a read answers while the
+			// radio is hunting for a match.
+			name:    "antenna tuner mid-cycle",
+			frame:   fromRig(cmdTransceiver, subTuner, tunerTuning),
+			wantKey: KeyTuner,
+			wantOK:  true,
+			check: func(t *testing.T, p radio.Patch) {
+				if p.Tuner == nil || *p.Tuner != radio.TunerTuning {
+					t.Errorf("tuner = %v, want tuning", p.Tuner)
+				}
+			},
 		},
 		{
 			name:    "unimplemented command",

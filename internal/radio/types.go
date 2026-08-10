@@ -304,6 +304,31 @@ const (
 // without somebody holding a switch down.
 func (b BreakIn) Transmits() bool { return b == BreakInSemi || b == BreakInFull }
 
+// Tuner is the state of a radio's internal antenna tuner.
+type Tuner string
+
+const (
+	// TunerUnknown is a radio that has not reported one, or one remoses cannot
+	// ask. Absent from the published state rather than shown as "off", which
+	// would be a claim about hardware that may not exist.
+	TunerUnknown Tuner = ""
+	// TunerOff is the tuner bypassed — "THRU" in Kenwood's vocabulary.
+	TunerOff Tuner = "off"
+	// TunerOn is the tuner in line, using whatever match it last found.
+	TunerOn Tuner = "on"
+	// TunerTuning is a tuning cycle running right now. The radio is keying its
+	// own transmitter to find a match, which is why this is a state a client
+	// can observe rather than something that happens invisibly inside a set.
+	TunerTuning Tuner = "tuning"
+)
+
+// Valid reports whether t is a state a client may ask for.
+//
+// "tuning" is deliberately excluded: a tuning cycle is started with the
+// separate TunerTune action, so that echoing back a state just read can never
+// key a transmitter. See Patch.TunerTune.
+func (t Tuner) Valid() bool { return t == TunerOff || t == TunerOn }
+
 // CWStatus describes the CW sending queue.
 type CWStatus struct {
 	Busy           bool `json:"busy"`
@@ -362,6 +387,9 @@ type State struct {
 	PowerMeter *Meter `json:"power_meter,omitempty"`
 	SWR        *Meter `json:"swr,omitempty"`
 	ALC        *Meter `json:"alc,omitempty"`
+	// Tuner is the internal antenna tuner: off, on, or a tuning cycle in
+	// progress. Absent on a radio that has none or that remoses cannot ask.
+	Tuner Tuner `json:"tuner,omitempty"`
 	// SWRRatio is the standing-wave ratio as a number — 1.5, 2.0, 3.0 — where
 	// the radio's own documentation calibrates its meter well enough to say.
 	//
@@ -447,6 +475,7 @@ type Patch struct {
 	SWR        *Meter
 	ALC        *Meter
 	SWRRatio   *float64
+	Tuner      *Tuner
 	CWBusy     *bool
 	Connected  *bool
 
@@ -470,7 +499,7 @@ func (p Patch) Empty() bool {
 		p.PassbandHz == nil && p.FilterSlot == nil && p.Power == nil &&
 		p.PTT == nil && p.SMeter == nil && p.PowerMeter == nil &&
 		p.SWR == nil && p.ALC == nil && p.SWRRatio == nil &&
-		p.CWBusy == nil && p.Connected == nil &&
+		p.Tuner == nil && p.CWBusy == nil && p.Connected == nil &&
 		p.VFO == nil && p.VFOA == nil && p.VFOB == nil &&
 		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil &&
 		p.BreakIn == nil
@@ -515,6 +544,9 @@ func (s State) Apply(p Patch) State {
 	if p.ALC != nil {
 		s.ALC = p.ALC
 	}
+	if p.Tuner != nil {
+		s.Tuner = *p.Tuner
+	}
 	if p.CWBusy != nil {
 		s.CW.Busy = *p.CWBusy
 	}
@@ -554,6 +586,19 @@ func (s State) Apply(p Patch) State {
 	// It is done here rather than in each backend because it is a property of
 	// the state, not of any protocol: every radio that reports these reports
 	// them only while keyed.
+	//
+	// A tuning cycle is deliberately NOT special-cased here, though it does key
+	// the transmitter. The two radios tested disagree about what they report
+	// during one, and following the rig's own PTT is what gets both right:
+	//
+	//   - A TS-590S reports PTT true through the cycle and returns real
+	//     readings, the SWR visibly falling as the tuner finds its match.
+	//   - An IC-7610 reports PTT false throughout and answers zero to all three
+	//     meters, its bursts being shorter than a poll interval in any case.
+	//
+	// Treating "tuning" as transmitting was tried and reverted: on the IC-7610
+	// it published a zero SWR as a confident 1.0:1 — the best possible match —
+	// at the exact moment the tuner was failing to find one.
 	if !s.PTT {
 		s.PowerMeter, s.SWR, s.ALC, s.SWRRatio = nil, nil, nil, nil
 	}
@@ -618,6 +663,9 @@ func (s State) Diff(next State) Patch {
 	}
 	if !sameRatio(s.SWRRatio, next.SWRRatio) {
 		p.SWRRatio = next.SWRRatio
+	}
+	if s.Tuner != next.Tuner {
+		p.Tuner = &next.Tuner
 	}
 	if s.Connected != next.Connected {
 		p.Connected = &next.Connected
@@ -704,6 +752,17 @@ type Caps struct {
 	PowerMeter bool `json:"power_meter"`
 	SWRMeter   bool `json:"swr_meter"`
 	ALCMeter   bool `json:"alc_meter"`
+
+	// TunerControl is true when remoses can switch the internal antenna tuner
+	// in and out of line and read which it is.
+	TunerControl bool `json:"tuner_control"`
+	// TunerTune is true when remoses can start a tuning cycle.
+	//
+	// Separate from TunerControl because it is a different kind of thing: it
+	// KEYS THE TRANSMITTER for a second or two while the radio hunts for a
+	// match. A client should treat it as a transmit control, not a settings
+	// toggle — and it is refused without the lock for exactly that reason.
+	TunerTune bool `json:"tuner_tune"`
 
 	// SubReceiver is a second receiver that can be listened to at the same
 	// time as the first — the IC-7610's dual watch. It is not "the radio has

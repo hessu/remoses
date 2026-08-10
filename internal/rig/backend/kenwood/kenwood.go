@@ -96,6 +96,7 @@ const (
 	reqFR           = "FR;" // receive VFO; sending it also forces simplex
 	reqFT           = "FT;" // transmit VFO; sending it also forces split
 	reqRM           = "RM;" // meter function; answers SWR, COMP and ALC in turn
+	reqAC           = "AC;" // internal antenna tuner: RX-AT, TX-AT, tuning
 )
 
 // Rig is the Kenwood ASCII CAT backend. Construct it with New.
@@ -135,6 +136,10 @@ type Rig struct {
 	// has only two values it is the only thing that separates semi from full,
 	// so it is kept even though State does not publish it.
 	breakInDelayMS atomic.Int32
+
+	// tuner holds a radio.Tuner, the last AC reading. It decides whether a
+	// tuning cycle is worth watching on the fast tier.
+	tuner atomic.Value
 
 	// transmitting is the last PTT reading, from an IF answer or a TX;/RX;
 	// push. It decides two things: whether an SM answer is the S-meter or the
@@ -246,6 +251,10 @@ func (k *Rig) Caps() radio.Caps {
 		PowerMeter: true,
 		SWRMeter:   true,
 		ALCMeter:   true,
+		// AC is family-wide, and does both halves: P2 switches the transmit
+		// tuner in and out, P3 starts and reports a cycle.
+		TunerControl: true,
+		TunerTune:    true,
 		// False even on the TS-990S, which has a second receiver: this backend
 		// reads and writes one of them, so claiming otherwise would promise
 		// control it does not implement.
@@ -448,7 +457,7 @@ func (k *Rig) pollFast(ctx context.Context, c backend.Conn) error {
 		if _, err := do(ctx, c, k.profile.SMeterRequest, keySM); err != nil {
 			return err
 		}
-		return k.pollTXMeters(ctx, c)
+		return k.pollFastExtras(ctx, c)
 	}
 
 	// The frequency of the VFO being received, which is not always A: on a
@@ -465,7 +474,26 @@ func (k *Rig) pollFast(ctx context.Context, c backend.Conn) error {
 	if _, err := do(ctx, c, k.profile.SMeterRequest, keySM); err != nil {
 		return err
 	}
-	return k.pollTXMeters(ctx, c)
+	return k.pollFastExtras(ctx, c)
+}
+
+// pollFastExtras reads what belongs on the fast tier only some of the time: the
+// transmit meters while keyed, and the tuner while a cycle is running.
+//
+// A tuning cycle lasts a second or two, so on the slow tier a whole one could
+// begin and end between two reads and a client would see nothing happen. It
+// drops back to the slow tier by itself once the cycle ends.
+func (k *Rig) pollFastExtras(ctx context.Context, c backend.Conn) error {
+	reads := k.txMeterReads()
+	if k.Tuner() == radio.TunerTuning {
+		reads = append(reads, read{reqAC, keyAC})
+	}
+	for _, r := range reads {
+		if _, err := do(ctx, c, r.req, r.key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // pollTXMeters reads SWR and ALC, and only while the transmitter is up.
@@ -497,7 +525,7 @@ func (k *Rig) receiveFreqRead() (string, backend.Key) {
 }
 
 func (k *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
-	reads := []read{{reqPC, keyPC}}
+	reads := []read{{reqPC, keyPC}, {reqAC, keyAC}}
 	// The parked VFO and the split selection. The received VFO's frequency is
 	// already on the fast tier; this is the other one, which changes only when
 	// somebody moves it.

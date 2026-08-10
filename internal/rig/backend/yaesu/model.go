@@ -86,6 +86,16 @@ type Model struct {
 	// zero-padded decimal Hz and a misconfigured station should still be read
 	// correctly — the rule DESIGN.md §5.4 settled on for the IC-905.
 	FreqDigits int
+	// TunerTuneParam is the AC P3 value that starts a tuning cycle, which is
+	// not the same on both generations: the FT-950's table reads "0: Tuner OFF,
+	// 1: Tuner ON, 2: Tuning Start" and the FT-710's "0: Tuner OFF (Tuning
+	// Stop), 1: Tuner ON, 2: -, 3: Tuning Start".
+	//
+	// A wrong value here fails safe, which is worth knowing: 2 on the newer
+	// radios is the documented no-op, and 3 on the older ones is out of range.
+	// Neither keys the transmitter, so the failure mode is a tune that does not
+	// happen rather than one that happens unasked.
+	TunerTuneParam byte
 
 	// MaxPowerW is the top of the PC range in watts: 100 W on most, 200 on the
 	// FTdx101MP and per-head on the FTX-1. See Rig.maxPowerW. Zero where PC is
@@ -229,9 +239,12 @@ func modern(name, label string, id int) Model {
 		Modes:      withModes(modesCommon(), radio.ModePSK),
 		Codes:      codesModern(),
 		FreqDigits: 9,
-		MaxPowerW:  100,
-		Filter:     FilterFixed,
-		Widths:     widthsFTdx101(),
+		// This generation's AC has "2: -" where the older one has Tuning Start,
+		// and puts the start on 3.
+		TunerTuneParam: '3',
+		MaxPowerW:      100,
+		Filter:         FilterFixed,
+		Widths:         widthsFTdx101(),
 		MinHz:      30_000,
 		MaxHz:      75_000_000,
 	}
@@ -256,8 +269,10 @@ func older(name, label string, ids ...int) Model {
 		Modes:      modesCommon(),
 		Codes:      codesOlder(),
 		FreqDigits: 8,
-		MaxPowerW:  100,
-		Filter:     FilterShort,
+		// The FT-950 generation starts a tuning cycle with 2, not 3.
+		TunerTuneParam: '2',
+		MaxPowerW:      100,
+		Filter:         FilterShort,
 		MinHz:      30_000,
 		MaxHz:      56_000_000,
 	}
