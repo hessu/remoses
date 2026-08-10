@@ -178,6 +178,27 @@ type significant struct {
 	digiSel      bool
 	haveDSShift  bool
 	digiSelShift float64
+
+	// The noise processing and the notches, flattened for the same reason.
+	haveNB      bool
+	nb          int
+	haveNBLevel bool
+	nbLevel     float64
+	haveNR      bool
+	nr          int
+	haveNRLevel bool
+	nrLevel     float64
+	haveNotch   bool
+	notch       bool
+	haveNotchF  bool
+	notchFreq   float64
+	notchWidth  radio.NotchWidth
+	haveAuto    bool
+	autoNotch   bool
+	haveAnt     bool
+	antenna     int
+	haveRXAnt   bool
+	rxAntenna   bool
 }
 
 func (v *view) significant() significant {
@@ -217,6 +238,34 @@ func (v *view) significant() significant {
 	}
 	if d := v.st.DigiSelShift; d != nil {
 		s.digiSelShift, s.haveDSShift = *d, true
+	}
+	s.notchWidth = v.st.NotchWidth
+	if n := v.st.NoiseBlanker; n != nil {
+		s.nb, s.haveNB = *n, true
+	}
+	if l := v.st.NBLevel; l != nil {
+		s.nbLevel, s.haveNBLevel = *l, true
+	}
+	if n := v.st.NoiseReduction; n != nil {
+		s.nr, s.haveNR = *n, true
+	}
+	if l := v.st.NRLevel; l != nil {
+		s.nrLevel, s.haveNRLevel = *l, true
+	}
+	if n := v.st.Notch; n != nil {
+		s.notch, s.haveNotch = *n, true
+	}
+	if f := v.st.NotchFreq; f != nil {
+		s.notchFreq, s.haveNotchF = *f, true
+	}
+	if a := v.st.AutoNotch; a != nil {
+		s.autoNotch, s.haveAuto = *a, true
+	}
+	if a := v.st.Antenna; a != nil {
+		s.antenna, s.haveAnt = *a, true
+	}
+	if a := v.st.RXAntenna; a != nil {
+		s.rxAntenna, s.haveRXAnt = *a, true
 	}
 	return s
 }
@@ -437,6 +486,56 @@ func frontEndLine(st radio.State) string {
 		parts = append(parts, s)
 	}
 	return strings.Join(parts, "   ")
+}
+
+// noiseLine renders the noise processing and the notches as one row, or "" on
+// a radio that reports none of it.
+//
+// Each part appears only where the radio reports it, and the levels ride with
+// their switch rather than getting a column of their own: "nb 1 40%" is one
+// control an operator thinks of as one thing.
+func noiseLine(st radio.State) string {
+	var parts []string
+	if n := st.NoiseBlanker; n != nil {
+		parts = append(parts, withLevel("nb", *n, st.NBLevel))
+	}
+	if n := st.NoiseReduction; n != nil {
+		parts = append(parts, withLevel("nr", *n, st.NRLevel))
+	}
+	if n := st.Notch; n != nil && *n {
+		s := "notch"
+		if f := st.NotchFreq; f != nil {
+			s += fmt.Sprintf(" %.0f%%", *f)
+		}
+		if st.NotchWidth != radio.NotchWidthUnknown {
+			s += " " + string(st.NotchWidth)
+		}
+		parts = append(parts, s)
+	}
+	if a := st.AutoNotch; a != nil && *a {
+		parts = append(parts, "auto-notch")
+	}
+	if a := st.Antenna; a != nil {
+		s := fmt.Sprintf("ant %d", *a)
+		if rx := st.RXAntenna; rx != nil && *rx {
+			s += "+rx"
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, "   ")
+}
+
+// withLevel renders a noise circuit and its level: "nb off" when it is out,
+// "nb 1 40%" when it is in and the radio reports a level.
+func withLevel(name string, sel int, level *float64) string {
+	if sel == 0 {
+		return name + " off"
+	}
+	s := fmt.Sprintf("%s %d", name, sel)
+	if level != nil {
+		s += fmt.Sprintf(" %.0f%%", *level)
+	}
+	return s
 }
 
 // formatCW renders the Morse queue.

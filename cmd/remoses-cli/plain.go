@@ -152,6 +152,38 @@ func statusFields(v *view) string {
 	if s := st.DigiSelShift; s != nil {
 		fmt.Fprintf(&b, " digi_sel_shift=%g", *s)
 	}
+	// The noise processing and the notches, on the same rule: only where the
+	// radio reports one.
+	if n := st.NoiseBlanker; n != nil {
+		fmt.Fprintf(&b, " nb=%d", *n)
+	}
+	if l := st.NBLevel; l != nil {
+		fmt.Fprintf(&b, " nb_level=%g", *l)
+	}
+	if n := st.NoiseReduction; n != nil {
+		fmt.Fprintf(&b, " nr=%d", *n)
+	}
+	if l := st.NRLevel; l != nil {
+		fmt.Fprintf(&b, " nr_level=%g", *l)
+	}
+	if n := st.Notch; n != nil {
+		fmt.Fprintf(&b, " notch=%t", *n)
+	}
+	if f := st.NotchFreq; f != nil {
+		fmt.Fprintf(&b, " notch_freq=%g", *f)
+	}
+	if st.NotchWidth != "" {
+		fmt.Fprintf(&b, " notch_width=%s", st.NotchWidth)
+	}
+	if a := st.AutoNotch; a != nil {
+		fmt.Fprintf(&b, " auto_notch=%t", *a)
+	}
+	if a := st.Antenna; a != nil {
+		fmt.Fprintf(&b, " antenna=%d", *a)
+	}
+	if a := st.RXAntenna; a != nil {
+		fmt.Fprintf(&b, " rx_antenna=%t", *a)
+	}
 	fmt.Fprintf(&b, " cw_busy=%t cw_queued=%d wpm=%d", st.CW.Busy, st.CW.Queued, st.CW.WPM)
 	fmt.Fprintf(&b, " seq=%d age_ms=%d stale=%t", st.Seq, v.age().Milliseconds(), v.stale)
 	b.WriteString(optQuoted(" conn_error=", v.connErr))

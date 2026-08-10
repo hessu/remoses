@@ -56,9 +56,11 @@ explicit PTT, CW break-in in all three states, and CW **heard on the air** at 5 
 on 28.030 MHz, both semi and full break-in. Later, the **antenna tuner**: switched
 in and out, and four tuning cycles run for real on 80 m — three that found a match
 and one that could not. Later still, its **receive front end**: preamplifier,
-attenuator, RF gain and all three AGC states. It found five bugs in the process:
-one that stopped it connecting at all, the break-in gap again, two in the tuner
-command, and one that made switching the AGC off a trip with no way back.
+attenuator, RF gain and all three AGC states, then the **noise blanker, noise
+reduction, both notches and the antenna selector**. It found six bugs in the
+process: one that stopped it connecting at all, the break-in gap again, two in
+the tuner command, one that made switching the AGC off a trip with no way back,
+and one where a request the radio silently ignored was reported as a success.
 
 **The safety interlocks were fired for real**, not against fakes: band limits
 refusing an out-of-band tune, power clamping, the dead-man `tx_timeout` forcing
@@ -323,9 +325,10 @@ Two traps are per model and worth knowing:
   AGC OFF; the IC-703 has two, `1` fast and `2` slow; and the IC-910H has two the other way round,
   `0` slow and `1` fast. One byte out sets a different speed and looks like a success.
 
-**Tested on an IC-9700 too**, which has five of the seven: one preamplifier, a 10 dB pad, RF gain,
-AGC and IP+, and correctly no DIGI-SEL. It turned up a restriction of its own, also unmentioned in
-any Icom reference here — **the AGC cannot be set in FM.** All three speeds go in under USB and
+**Tested on an IC-9700 too**, which has five of the seven front-end controls plus the whole noise
+and notch group: one preamplifier, a 10 dB pad, RF gain, AGC and IP+, and correctly no DIGI-SEL.
+It turned up a restriction of its own, also unmentioned in any Icom reference here — **the AGC
+cannot be set in FM.** All three speeds go in under USB and
 every one draws a rejection in FM, while a read still answers `fast`, so the state looks healthy
 and only the refusal says otherwise. remoses adds the reason and still sends the command, rather
 than fencing off a mode on the strength of one radio.
@@ -337,6 +340,28 @@ about why. remoses adds the reason to the 422 and does not switch the preselecto
 request succeed — that would be changing a second control on a receiver somebody is listening to.
 The radio enforces it from the other side as well: switching DIGI-SEL in while a preamplifier is
 selected switches that preamplifier out, and the next poll reports it.
+
+**The noise processing and the notches are there too.** `state.noise_blanker` and
+`state.noise_reduction` with their levels, `state.notch` with a position and (on Icom) a width,
+and `state.auto_notch`. On Icom they are `16 22`/`14 12`, `16 40`/`14 06`, `16 48`/`14 0D`/`16 57`
+and `16 41`.
+
+**The two notches cannot both run**, and the radios enforce it without saying so. A Kenwood is
+honest — `NT` is one selector, off/auto/manual — but on an IC-7610 they are *separate commands*
+that silently switch each other off, which no reference mentions. Verified on the radio in both
+directions. `caps.notch_exclusive` says so and a request for both is refused, rather than applying
+one and leaving the other to vanish.
+
+**An IC-9700 in FM refuses `16 57`**, the notch width, which is correct — FM has no use for a DSP
+notch. That exposed a general bug worth knowing about if you run an older build: **one refused
+read used to stop the whole slow poll**, so everything queued behind it was skipped on every tick.
+The automatic notch sat two places back and never appeared at all. A rejection now carries on to
+the next read; only a transport failure stops the run.
+
+**No Icom gets an antenna selector**, and that is about the radios. They have no live one: on an
+IC-7610 the antenna is a per-band *memory* (`1A 05 02 76`–`02 87`, one entry per band range), so
+switching it means writing a stored setting rather than throwing a switch. `caps.antennas` is 0.
+Kenwood's `AN` and the FTdx101's are live selectors and are offered.
 
 `preamp_levels` counts amplifiers rather than command values, which the IC-9700 is the reason for:
 its `16 02` runs `00` to `03`, but those are the internal preamp and an external one in
@@ -428,6 +453,22 @@ command cannot be performed in FM mode (an error sounds)" — and the error soun
 polling anyway would beep at whoever is listening once per slow tick. A TS-480 makes it worse by
 answering three spaces instead of refusing, which is decoded as "no reading" rather than as a
 frame to complain about.
+
+**The noise blanker and reducer are counts, not switches**: this family has NB1 and NB2, NR1 and
+NR2, and they are different circuits rather than two strengths of one. NR2 is SPAC, whose level is
+a *following speed* of 2 ms to 20 ms where NR1's is an effective level of 01 to 10 — so `nr_level`
+is a percentage of whichever range is running. Both radios can also run both blankers at once and
+answer `NB3` for it; that is a combination rather than a third blanker, so it is not published.
+
+**The levels are refused while their circuit is off** — "an error occurs", in as many words — so
+`NL` and `RL` are only asked for once the radio has reported the blanker or reducer on, and a
+request applies each switch before its level.
+
+**A TS-590S in CW ignores a request for the automatic notch.** No error, no change: `NT10` is
+accepted and a read still answers `NT20`. The reason is sound — the automatic notch hunts for
+tones, and in CW the tone is the signal you are listening to — but nothing in the exchange says the
+request did not happen. remoses checks the read-back and answers 422 naming the mode, rather than
+reporting a success that did not occur.
 
 **Switching the AGC off is a one-way trip unless you know the trick**, which a TS-590S demonstrated
 on the air: with the AGC off, `GC1` and `GC2` are *both* refused and the radio stays off. A client

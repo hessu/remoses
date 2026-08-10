@@ -156,6 +156,9 @@ func layout(v *view, width int) []string {
 	if fe := frontEndLine(st); fe != "" {
 		out = append(out, "  rx        "+fe)
 	}
+	if nl := noiseLine(st); nl != "" {
+		out = append(out, "  noise     "+nl)
+	}
 
 	if note := stateNote(v); note != "" {
 		out = append(out, "", "  "+note)

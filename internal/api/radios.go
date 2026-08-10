@@ -187,6 +187,29 @@ type statePatchBody struct {
 	DigiSel      *bool      `json:"digi_sel"`
 	DigiSelShift *float64   `json:"digi_sel_shift"`
 
+	// The noise processing and the notch filters. NoiseBlanker and
+	// NoiseReduction are 0 for off and 1..caps.noise_*_levels to select a
+	// circuit — Kenwood has two of each, and they are different algorithms
+	// rather than two strengths of one. The levels are percentages.
+	//
+	// Notch and AutoNotch are independent on Icom and Yaesu and can both be on;
+	// where caps.notch_exclusive is true they are one selector and asking for
+	// both is refused.
+	NoiseBlanker   *int              `json:"noise_blanker"`
+	NBLevel        *float64          `json:"nb_level"`
+	NoiseReduction *int              `json:"noise_reduction"`
+	NRLevel        *float64          `json:"nr_level"`
+	Notch          *bool             `json:"notch"`
+	NotchFreq      *float64          `json:"notch_freq"`
+	NotchWidth     *radio.NotchWidth `json:"notch_width"`
+	AutoNotch      *bool             `json:"auto_notch"`
+
+	// Antenna selects a socket, counting from 1; RXAntenna switches the
+	// separate receive-only input. Refused on every Icom, which keeps the
+	// antenna as a per-band memory rather than a live selector.
+	Antenna   *int  `json:"antenna"`
+	RXAntenna *bool `json:"rx_antenna"`
+
 	// Tuner switches the antenna tuner in or out of line: "off" or "on" only.
 	// The state can also read "tuning", but that is not something to ask for.
 	Tuner *radio.Tuner `json:"tuner"`
@@ -228,6 +251,17 @@ func (b statePatchBody) toRequest() (rig.PatchRequest, error) {
 		IPPlus:        b.IPPlus,
 		DigiSel:       b.DigiSel,
 		DigiSelShift:  b.DigiSelShift,
+
+		NoiseBlanker:   b.NoiseBlanker,
+		NBLevel:        b.NBLevel,
+		NoiseReduction: b.NoiseReduction,
+		NRLevel:        b.NRLevel,
+		Notch:          b.Notch,
+		NotchFreq:      b.NotchFreq,
+		NotchWidth:     b.NotchWidth,
+		AutoNotch:      b.AutoNotch,
+		Antenna:        b.Antenna,
+		RXAntenna:      b.RXAntenna,
 	}
 	if b.VFO != nil {
 		req.VFO = *b.VFO
@@ -272,7 +306,11 @@ func (b statePatchBody) onlyPowerSwitch() bool {
 		b.PTT == nil && b.Split == nil && b.DualWatch == nil && b.VFOMode == nil &&
 		b.BreakIn == nil && b.Tuner == nil && b.TunerTune == nil &&
 		b.Preamp == nil && b.AttenuatorDB == nil && b.RFGain == nil && b.AGC == nil &&
-		b.IPPlus == nil && b.DigiSel == nil && b.DigiSelShift == nil
+		b.IPPlus == nil && b.DigiSel == nil && b.DigiSelShift == nil &&
+		b.NoiseBlanker == nil && b.NBLevel == nil && b.NoiseReduction == nil &&
+		b.NRLevel == nil && b.Notch == nil && b.NotchFreq == nil &&
+		b.NotchWidth == nil && b.AutoNotch == nil &&
+		b.Antenna == nil && b.RXAntenna == nil
 }
 
 // auditAttrs names what the request asked for, so the audit line records the

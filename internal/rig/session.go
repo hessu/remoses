@@ -857,6 +857,172 @@ func (s *Session) applyFrontEnd(ctx context.Context, req PatchRequest) error {
 	return nil
 }
 
+// noise reports the backend's noise and notch controls, or nil.
+func (s *Session) noise() backend.NoiseController {
+	n, _ := s.rig.(backend.NoiseController)
+	return n
+}
+
+// antenna reports the backend's antenna selector, or nil.
+func (s *Session) antenna() backend.AntennaSelector {
+	a, _ := s.rig.(backend.AntennaSelector)
+	return a
+}
+
+// validateNoise rejects every noise, notch and antenna field the radio cannot
+// honour, before any of them reaches the wire.
+func (s *Session) validateNoise(req PatchRequest, caps radio.Caps) error {
+	if req.noiseRequested() && s.noise() == nil {
+		return fmt.Errorf("radio %s: noise processing: %w", s.id, ErrUnsupported)
+	}
+	if err := s.validateLevelPair("noise blanker", req.NoiseBlanker, req.NBLevel,
+		caps.NoiseBlankerLevels, caps.NBLevelControl); err != nil {
+		return err
+	}
+	if err := s.validateLevelPair("noise reduction", req.NoiseReduction, req.NRLevel,
+		caps.NoiseReductionLevels, caps.NRLevelControl); err != nil {
+		return err
+	}
+	if req.Notch != nil && !caps.NotchControl {
+		return fmt.Errorf("radio %s: manual notch: %w", s.id, ErrUnsupported)
+	}
+	if req.AutoNotch != nil && !caps.AutoNotchControl {
+		return fmt.Errorf("radio %s: auto notch: %w", s.id, ErrUnsupported)
+	}
+	// The one combination a radio can be asked for and not hold. On a Kenwood
+	// the two notches are a single selector — off, auto or manual — so both at
+	// once is not a thing that radio can be in, and saying so beats writing one
+	// and silently cancelling the other.
+	if caps.NotchExclusive && req.Notch != nil && req.AutoNotch != nil &&
+		*req.Notch && *req.AutoNotch {
+		return fmt.Errorf("radio %s: this radio has one notch selector, so the manual "+
+			"and automatic notches cannot both be on; ask for one: %w", s.id, ErrUnsupported)
+	}
+	if req.NotchFreq != nil {
+		if !caps.NotchFreqControl {
+			return fmt.Errorf("radio %s: notch position: %w", s.id, ErrUnsupported)
+		}
+		if err := percentInRange("notch position", *req.NotchFreq); err != nil {
+			return fmt.Errorf("radio %s: %w", s.id, err)
+		}
+	}
+	if req.NotchWidth != nil {
+		if len(caps.NotchWidths) == 0 {
+			return fmt.Errorf("radio %s: notch width: %w", s.id, ErrUnsupported)
+		}
+		if !caps.SupportsNotchWidth(*req.NotchWidth) {
+			return fmt.Errorf("radio %s: no notch width %q, only %v: %w",
+				s.id, *req.NotchWidth, caps.NotchWidths, ErrUnsupported)
+		}
+	}
+
+	if req.Antenna != nil || req.RXAntenna != nil {
+		if s.antenna() == nil {
+			return fmt.Errorf("radio %s: antenna selection: %w", s.id, ErrUnsupported)
+		}
+	}
+	if req.Antenna != nil {
+		if caps.Antennas == 0 {
+			return fmt.Errorf("radio %s: antenna selection: %w", s.id, ErrUnsupported)
+		}
+		if *req.Antenna < 1 || *req.Antenna > caps.Antennas {
+			return fmt.Errorf("radio %s: antenna %d, want 1 to %d: %w",
+				s.id, *req.Antenna, caps.Antennas, ErrUnsupported)
+		}
+	}
+	if req.RXAntenna != nil && !caps.RXAntennaControl {
+		return fmt.Errorf("radio %s: receive antenna: %w", s.id, ErrUnsupported)
+	}
+	return nil
+}
+
+// validateLevelPair is the shared check for the blanker and the reducer, which
+// have the same shape: a count of circuits and a level behind it.
+func (s *Session) validateLevelPair(what string, sel *int, level *float64,
+	levels int, hasLevel bool) error {
+	if sel != nil {
+		if levels == 0 {
+			return fmt.Errorf("radio %s: %s: %w", s.id, what, ErrUnsupported)
+		}
+		if *sel < 0 || *sel > levels {
+			return fmt.Errorf("radio %s: %s %d, want 0 to %d: %w",
+				s.id, what, *sel, levels, ErrUnsupported)
+		}
+	}
+	if level != nil {
+		if !hasLevel {
+			return fmt.Errorf("radio %s: %s level: %w", s.id, what, ErrUnsupported)
+		}
+		if err := percentInRange(what+" level", *level); err != nil {
+			return fmt.Errorf("radio %s: %w", s.id, err)
+		}
+	}
+	return nil
+}
+
+// applyNoise writes the noise, notch and antenna fields a request carries.
+//
+// The switches go before their levels throughout, and that ordering is load
+// bearing rather than tidy: a Kenwood refuses NL while the blanker is off and
+// RL while the reducer is off, with "an error occurs" in as many words. Sending
+// a level first would fail a request that is perfectly sensible as a whole.
+func (s *Session) applyNoise(ctx context.Context, req PatchRequest) error {
+	n := s.noise()
+	if req.NoiseBlanker != nil {
+		if err := n.SetNoiseBlanker(ctx, s, *req.NoiseBlanker); err != nil {
+			return err
+		}
+	}
+	if req.NBLevel != nil {
+		if err := n.SetNBLevel(ctx, s, *req.NBLevel); err != nil {
+			return err
+		}
+	}
+	if req.NoiseReduction != nil {
+		if err := n.SetNoiseReduction(ctx, s, *req.NoiseReduction); err != nil {
+			return err
+		}
+	}
+	if req.NRLevel != nil {
+		if err := n.SetNRLevel(ctx, s, *req.NRLevel); err != nil {
+			return err
+		}
+	}
+	// The notches, switches before position and width for the same reason.
+	if req.AutoNotch != nil {
+		if err := n.SetAutoNotch(ctx, s, *req.AutoNotch); err != nil {
+			return err
+		}
+	}
+	if req.Notch != nil {
+		if err := n.SetNotch(ctx, s, *req.Notch); err != nil {
+			return err
+		}
+	}
+	if req.NotchWidth != nil {
+		if err := n.SetNotchWidth(ctx, s, *req.NotchWidth); err != nil {
+			return err
+		}
+	}
+	if req.NotchFreq != nil {
+		if err := n.SetNotchFreq(ctx, s, *req.NotchFreq); err != nil {
+			return err
+		}
+	}
+
+	if req.Antenna != nil {
+		if err := s.antenna().SetAntenna(ctx, s, *req.Antenna); err != nil {
+			return err
+		}
+	}
+	if req.RXAntenna != nil {
+		if err := s.antenna().SetRXAntenna(ctx, s, *req.RXAntenna); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // percentInRange is the shared 0-100 check for the front end's two level
 // controls.
 func percentInRange(what string, pct float64) error {
@@ -1113,6 +1279,18 @@ type PatchRequest struct {
 	IPPlus       *bool
 	DigiSel      *bool
 	DigiSelShift *float64
+
+	// The noise processing, the notches and the antenna, for the same reason.
+	NoiseBlanker   *int
+	NBLevel        *float64
+	NoiseReduction *int
+	NRLevel        *float64
+	Notch          *bool
+	NotchFreq      *float64
+	NotchWidth     *radio.NotchWidth
+	AutoNotch      *bool
+	Antenna        *int
+	RXAntenna      *bool
 }
 
 // Empty reports whether the request would change nothing.
@@ -1122,13 +1300,23 @@ func (r PatchRequest) Empty() bool {
 		r.Split == nil && r.DualWatch == nil && r.VFOMode == nil && r.BreakIn == nil &&
 		r.Tuner == nil && r.TunerTune == nil &&
 		r.Preamp == nil && r.AttenuatorDB == nil && r.RFGain == nil &&
-		r.AGC == nil && r.IPPlus == nil && r.DigiSel == nil && r.DigiSelShift == nil
+		r.AGC == nil && r.IPPlus == nil && r.DigiSel == nil && r.DigiSelShift == nil &&
+		!r.noiseRequested() && r.Antenna == nil && r.RXAntenna == nil
 }
 
 // frontEndRequested reports whether this request touches the receive front end.
 func (r PatchRequest) frontEndRequested() bool {
 	return r.Preamp != nil || r.AttenuatorDB != nil || r.RFGain != nil ||
 		r.AGC != nil || r.IPPlus != nil || r.DigiSel != nil || r.DigiSelShift != nil
+}
+
+// noiseRequested reports whether this request touches the noise processing or
+// the notch filters.
+func (r PatchRequest) noiseRequested() bool {
+	return r.NoiseBlanker != nil || r.NBLevel != nil ||
+		r.NoiseReduction != nil || r.NRLevel != nil ||
+		r.Notch != nil || r.NotchFreq != nil || r.NotchWidth != nil ||
+		r.AutoNotch != nil
 }
 
 // vfoState is the cached state of one named VFO, for filling in the half of a
@@ -1248,6 +1436,9 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	if err := s.validateFrontEnd(req, caps); err != nil {
 		return s.State(), err
 	}
+	if err := s.validateNoise(req, caps); err != nil {
+		return s.State(), err
+	}
 	var power radio.PowerSet
 	if req.Power != nil {
 		p, err := s.clampPower(*req.Power)
@@ -1274,7 +1465,8 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		req.Split != nil || req.DualWatch != nil || req.namesAVFO() ||
 		req.VFOMode != nil || req.BreakIn != nil ||
 		req.Tuner != nil || req.TunerTune != nil ||
-		req.frontEndRequested()
+		req.frontEndRequested() || req.noiseRequested() ||
+		req.Antenna != nil || req.RXAntenna != nil
 
 	// First of everything: a radio on a memory channel refuses several of the
 	// commands below, so a request that says "get back on a VFO and tune there"
@@ -1364,6 +1556,9 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	// stages first, then the gain controls behind them. Nothing here keys the
 	// transmitter, so all of it goes before PTT.
 	if err := s.applyFrontEnd(ctx, req); err != nil {
+		return s.State(), err
+	}
+	if err := s.applyNoise(ctx, req); err != nil {
 		return s.State(), err
 	}
 	// Break-in before PTT and before anything that might key: a request that

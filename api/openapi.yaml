@@ -728,6 +728,87 @@ components:
             Where the DIGI-SEL preselector sits, 0-100%. Reported even while the
             preselector is switched out: the radio remembers it, and a client
             redrawing the control wants the position it will return to.
+        noise_blanker:
+          type: integer
+          description: |
+            The noise blanker: 0 for off, 1..`caps.noise_blanker_levels` to
+            select one.
+
+            A count rather than a switch because a Kenwood has two, NB1 and NB2,
+            and they are different circuits rather than two strengths of one.
+            That radio can also run both at once and answers 3 for it — a
+            combination rather than a third blanker, so it is not published.
+        nb_level:
+          type: number
+          description: |
+            The blanker's threshold, 0-100%. On Kenwood this is refused while
+            the blanker is off, so it is absent until one is running.
+        noise_reduction:
+          type: integer
+          description: |
+            The noise reducer: 0 for off, 1..`caps.noise_reduction_levels`.
+            Kenwood has two, and NR2 is not "more NR1" — it is a different
+            algorithm whose level means something else entirely.
+        nr_level:
+          type: number
+          description: |
+            The reducer's level, 0-100%.
+
+            What the percentage is a percentage OF depends on the radio and, on
+            Kenwood, on which reducer is running: NR1's range is an effective
+            level 01-10 and NR2's is a following speed of 2 ms to 20 ms. Absent
+            while the reducer is off, which Kenwood refuses the read for.
+        notch:
+          type: boolean
+          description: |
+            The manual notch — the one an operator parks on a carrier.
+
+            On most radios this cannot be on at the same time as `auto_notch`;
+            see `caps.notch_exclusive`. Where that is true, the radios enforce
+            it themselves and not always politely: an Icom switches the other
+            notch off silently, so remoses refuses a request for both rather
+            than letting one vanish.
+        notch_freq:
+          type: number
+          description: |
+            Where the manual notch sits, 0-100% of the radio's own range.
+
+            A percentage because the underlying counts have nothing in common:
+            0-255 on Icom, 0-127 on Kenwood, and an actual 10 Hz to 3200 Hz on
+            Yaesu.
+        notch_width:
+          type: string
+          enum: [wide, mid, narrow]
+          description: |
+            How wide the manual notch bites. Icom only — see
+            `caps.notch_widths`, which is empty elsewhere. A Kenwood accepts a
+            width and then always answers 0 for it, so remoses does not offer
+            one it could write and never read back.
+        auto_notch:
+          type: boolean
+          description: |
+            The automatic notch, which hunts for tones by itself.
+
+            Not useful in CW, and the radios know it: a TS-590S IGNORES a
+            request for it in CW — no error, no change — because notching a tone
+            is exactly what would remove the signal being listened to. remoses
+            checks the read-back and returns 422 rather than reporting a success
+            that did not happen.
+        antenna:
+          type: integer
+          description: |
+            Which antenna socket is selected, counting from 1.
+
+            Absent on every Icom, and that is about those radios rather than
+            about remoses: they have no live antenna selector on the bus. The
+            antenna is a per-band MEMORY in the Set menu, so switching it would
+            mean writing a stored setting rather than throwing a switch.
+        rx_antenna:
+          type: boolean
+          description: |
+            The separate receive-only input, where the radio has one and can
+            report it. Kenwood's `AN` carries it; no Yaesu or Icom read for this
+            backend does.
         break_in:
           type: string
           enum: [off, semi, full, on]
@@ -882,6 +963,62 @@ components:
             Move the DIGI-SEL preselector, 0-100%. Needs
             `caps.digi_sel_shift_control`. Accepted while the preselector is
             switched out; the radio keeps the setting.
+        noise_blanker:
+          type: integer
+          description: |
+            Select a noise blanker: 0 for off, up to
+            `caps.noise_blanker_levels`.
+        nb_level:
+          type: number
+          description: |
+            Set the blanker threshold, 0-100%. Applied AFTER `noise_blanker` in
+            the same request, because Kenwood refuses a level while the blanker
+            is off — so one request can switch a blanker in and set it.
+        noise_reduction:
+          type: integer
+          description: |
+            Select a noise reducer: 0 for off, up to
+            `caps.noise_reduction_levels`.
+        nr_level:
+          type: number
+          description: |
+            Set the reducer's level, 0-100%, against whichever range the
+            running reducer uses. Applied after `noise_reduction`.
+        notch:
+          type: boolean
+          description: |
+            Switch the manual notch. Needs `caps.notch_control`.
+
+            Where `caps.notch_exclusive` is true, setting this true together
+            with `auto_notch` true is refused with 422 — the radio has one notch
+            and would silently give you whichever was written last.
+        notch_freq:
+          type: number
+          description: |
+            Park the manual notch, 0-100% of the radio's range.
+        notch_width:
+          type: string
+          enum: [wide, mid, narrow]
+          description: |
+            Set the manual notch width. Must be one of `caps.notch_widths`,
+            which is empty outside Icom.
+        auto_notch:
+          type: boolean
+          description: |
+            Switch the automatic notch. Needs `caps.auto_notch_control`.
+
+            A TS-590S in CW will decline this without saying so; remoses
+            verifies the read-back and answers 422 naming the mode rather than
+            reporting a success that did not happen.
+        antenna:
+          type: integer
+          description: |
+            Select an antenna socket, 1 to `caps.antennas`. Refused on every
+            Icom, which has no live selector — see the state field.
+        rx_antenna:
+          type: boolean
+          description: |
+            Switch the receive-only input. Needs `caps.rx_antenna_control`.
         tuner:
           type: string
           enum: [off, on]
@@ -1043,6 +1180,59 @@ components:
             remoses can move the DIGI-SEL preselector. Separate from
             `digi_sel_control` because the big superhets have the preselector
             and no documented command to move it.
+        noise_blanker_levels:
+          type: integer
+          description: |
+            How many noise blankers remoses can select on this radio: 0 for
+            none, 1 for a plain on/off, 2 on a Kenwood. A client offers 0..n.
+        nb_level_control:
+          type: boolean
+          description: remoses can read and set the blanker's threshold.
+        noise_reduction_levels:
+          type: integer
+          description: |
+            How many noise reducers, on the same rule. Kenwood's NR1 and NR2 are
+            different algorithms, not two strengths.
+        nr_level_control:
+          type: boolean
+          description: remoses can read and set the reducer's level.
+        notch_control:
+          type: boolean
+          description: remoses can switch this radio's manual notch.
+        notch_freq_control:
+          type: boolean
+          description: remoses can move the manual notch.
+        notch_widths:
+          type: array
+          items:
+            type: string
+            enum: [wide, mid, narrow]
+          description: |
+            The manual notch widths this radio accepts, empty where it has none
+            that remoses can both set and read back.
+        auto_notch_control:
+          type: boolean
+          description: remoses can switch this radio's automatic notch.
+        notch_exclusive:
+          type: boolean
+          description: |
+            The manual and automatic notches cannot both be on. True on Kenwood,
+            whose `NT` is one selector, and true on Icom — where the two are
+            separate commands that nonetheless switch each other off, verified
+            on an IC-7610 rather than documented anywhere.
+
+            Where this is true a client should draw the two as one three-way
+            choice, and a request setting both true is refused.
+        antennas:
+          type: integer
+          description: |
+            How many antenna sockets remoses can select between, 0 where it
+            cannot. Zero on every Icom: the antenna there is a per-band memory
+            rather than a live selector.
+        rx_antenna_control:
+          type: boolean
+          description: |
+            remoses can switch the separate receive-only input.
         tuner_control:
           type: boolean
           description: |

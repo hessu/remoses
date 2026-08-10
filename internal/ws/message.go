@@ -214,5 +214,39 @@ func changedFields(p radio.Patch, st radio.State) map[string]any {
 	if p.DigiSelShift != nil {
 		m["digi_sel_shift"] = p.DigiSelShift
 	}
+
+	// The noise processing, the notches and the antenna, sent as their pointers
+	// for the same reason as the front end: a control that stops being reported
+	// goes out as an explicit null.
+	if p.NoiseBlanker != nil {
+		m["noise_blanker"] = p.NoiseBlanker
+	}
+	if p.NBLevel != nil {
+		m["nb_level"] = p.NBLevel
+	}
+	if p.NoiseReduction != nil {
+		m["noise_reduction"] = p.NoiseReduction
+	}
+	if p.NRLevel != nil {
+		m["nr_level"] = p.NRLevel
+	}
+	if p.Notch != nil {
+		m["notch"] = p.Notch
+	}
+	if p.NotchFreq != nil {
+		m["notch_freq"] = p.NotchFreq
+	}
+	if p.NotchWidth != nil {
+		m["notch_width"] = *p.NotchWidth
+	}
+	if p.AutoNotch != nil {
+		m["auto_notch"] = p.AutoNotch
+	}
+	if p.Antenna != nil {
+		m["antenna"] = p.Antenna
+	}
+	if p.RXAntenna != nil {
+		m["rx_antenna"] = p.RXAntenna
+	}
 	return m
 }

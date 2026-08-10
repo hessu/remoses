@@ -2373,6 +2373,113 @@ The hint is appended to the radio's own error rather than replacing it.
 
 ---
 
+## 11.8 Noise processing, notches and the antenna
+
+The noise blanker, the noise reducer, the two notch filters and — where a radio
+has a live one — the antenna selector. `backend.NoiseController` carries the first
+four; `backend.AntennaSelector` is separate because no Icom implements it.
+
+### Counts, not switches
+
+`noise_blanker` and `noise_reduction` are 0-or-select rather than booleans,
+because a Kenwood has **two of each and they are not two strengths of one**. NR1
+is a noise reducer; NR2 is SPAC, whose level parameter is a *following speed* the
+reference gives as 2 ms to 20 ms. Publishing them as one switch would flatten two
+algorithms into a checkbox.
+
+That radio can also run both blankers at once and answers `NB3` for it. That is a
+combination, not a third blanker, so it is remembered but not published — the same
+rule the IC-9700's preamp gets, and for the same reason: calling it "3" would
+tell a client it is more blanking than 2.
+
+`nr_level` therefore has **no single scale**. The percentage is written against
+NR1's 01-10 or NR2's 00-09 depending on which is running, from the last reading.
+
+### Levels are refused while their circuit is off
+
+"When NB is set to OFF, an error occurs." "When the Noise Reduction setting is
+OFF, an error occurs." So `NL` and `RL` are asked for only once the radio has
+reported the circuit on — on the first slow poll, before anything is known,
+neither is asked and the next tick picks them up.
+
+The ordering in `applyNoise` follows from the same fact: each switch is written
+before its level, so a single request can turn a blanker on and set its threshold
+without the second half failing.
+
+### Two notches, one filter
+
+`notch` and `auto_notch` are separate fields because on Icom and Yaesu they are
+separate commands. But **most of these radios can only run one**, and they enforce
+it in three different ways:
+
+- **Kenwood** is honest about it: `NT` is one selector — off, auto, manual.
+- **Icom** is not. `16 41` and `16 48` are independent commands and no reference
+  mentions them interacting, but an IC-7610 switches one off whenever the other
+  goes on. Verified in both directions on the radio.
+- **Yaesu** has `BP` and `BC` with no documented interaction and no radio on the
+  bench to say otherwise, so remoses does not claim exclusivity there.
+
+`Caps.NotchExclusive` carries it, and the session refuses a request setting both.
+Before that check, such a request returned 200 having applied whichever the
+ordering wrote last — one notch, and no hint that the other had evaporated.
+
+Turning one off where the pair is a single selector needs care in the other
+direction too: with a Kenwood in auto, "switch the manual notch off" is *already
+true*, so sending `NT0` would switch the automatic notch off as well — cancelling
+a control the caller never mentioned. `SetNotch(false)` writes only when the
+manual notch is the one running.
+
+### A set that is ignored rather than refused
+
+A TS-590S in CW **ignores** a request for the automatic notch: `NT10` draws no
+error and a read still answers `NT20`. The reason is sound — the automatic notch
+hunts for tones, and in CW the tone is the wanted signal — but the silence is the
+problem. Nothing in the exchange says the request did not happen.
+
+`setNotchSel` therefore verifies its own read-back and returns `ErrUnsupported`
+naming what the radio stayed on, plus the reason where the mode makes it known.
+This is the third member of a family this document keeps returning to: a command
+that succeeds and means something else, a value written but never read back, and
+now a value written and quietly discarded.
+
+### One refusal must not starve a tier
+
+Found on an IC-9700 in FM, and it was not a bug in any of the above.
+
+That radio rejects `16 57` — the notch width — in FM, which is correct: FM has no
+use for a DSP notch. `readAll` stopped the whole tier at the first failure, so
+everything queued **behind** it was skipped on every slow tick. The automatic
+notch sat two places back and was therefore never read at all, on a radio that
+reports it perfectly well in every other mode. The field simply never appeared.
+
+`readAll` now distinguishes two events that were being treated alike:
+
+- **A rejection** (`ErrRejected`) — the radio is alive and said no. Carry on; the
+  first refusal is kept and returned once the run finishes, so the session still
+  sees that something was refused.
+- **A transport failure** — the link is gone. Stop, because the remaining reads
+  would each wait out their own timeout before anybody noticed.
+
+This is a general fix rather than a noise one. Any optional read placed before
+another was exposed to it; the notch width was simply the first command
+unsupported-in-a-mode to land in the middle of a queue rather than at its end.
+
+### Why no Icom has an antenna selector
+
+Kenwood's `AN` and Yaesu's `AN` are live selectors, and remoses offers them where
+the parameter layout has been transcribed — the TS-590's three parameters and the
+FTdx101's socket count. The TS-890S's `AN` takes four parameters that have not
+been read, and the TS-990S has no `AN` row at all.
+
+Icom has no such command. On an IC-7610 the antenna is a **per-band memory**:
+`1A 05 02 76` through `02 87`, one entry per band range, each carrying the socket
+and the receive-antenna flag. Switching antenna there means writing a stored
+setting for the band you happen to be on, which is a different act from throwing
+a switch, and remoses does not write band memories. `caps.antennas` is 0 and the
+request is refused.
+
+---
+
 ## 12. Safety interlocks
 
 This API keys a transmitter over a network, so interlocks are part of the design rather than
