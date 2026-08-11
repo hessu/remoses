@@ -191,15 +191,23 @@ to work a band that is sitting on the sub receiver. See
 offered on the IC-9700 alone, because that is the radio whose reference has been
 read for the command and the one that needs it.
 
-**One state to be aware of, which remoses cannot currently see.** Touching the
-sub frequency field on the radio's own display *selects* that side, and the
-operating commands follow it: `state.frequency` and `state.mode` then report the
-sub receiver. But `25`/`26` keep addressing Main, so `state.vfo_a` and
-`state.vfo_b` go on describing the other receiver. The two halves of the state
-disagree about which receiver they are talking about, and nothing remoses reads
-today says so — `07 D2` would report it and is not polled. Verified on the radio
-by touching the display and watching `frequency` jump to 144.174 while the VFO
-pair stayed on 70 cm. Exchanging is unaffected: it leaves the focus where it is.
+**Watch `state.selected_band`, because it says what the rest is describing.**
+Touching the sub frequency field on the radio's own display *selects* that side,
+and the operating commands follow it: `state.frequency` and `state.mode` then
+report the sub receiver. But `25`/`26` keep addressing Main, so `state.vfo_a`
+and `state.vfo_b` go on describing the other one. With `selected_band: "sub"`
+the two halves of the state are two different receivers — legitimately, and now
+labelled. `remoses-cli` marks the frequency line `SUB`.
+
+remoses reads `07 D2` and never writes it. Selecting a receiver for the operator
+is not something it will do behind them; where a band has to be *reached*, that
+is what the exchange is for.
+
+**The label can trail the frequency by one poll**, about half a second. The
+frequency arrives by Transceive broadcast the instant the selection moves, and
+the selection only when the next poll asks — so there is a brief window where
+the two disagree. Polling cannot close it; the radio broadcasts the new
+frequency but never the fact that the band changed under it.
 
 Other Icoms very likely have `25` and `26` too. They stay off until each radio's
 own reference has been read, which is the rule the rest of this page follows.

@@ -111,14 +111,28 @@ The exchange also made the two-receiver structure visible: after swapping,
 432.500. Each receiver has its own pair, and remoses's A and B are whichever
 receiver is on Main.
 
-**One thing that is still not right, found while settling that design.**
-Touching the sub frequency field on the radio's own display selects that side,
-and the operating commands follow it — `state.frequency` reports the sub
-receiver — while `25`/`26` keep addressing Main, so `state.vfo_a` and
-`state.vfo_b` describe the other one. The published state then disagrees with
-itself about which receiver it is describing, from one touch of the screen and
-with remoses having done nothing. `07 D2` reports which band is selected and is
-not polled. Recorded rather than fixed.
+**And a second finding, from settling that design, which is now also fixed.**
+Touching the sub frequency field on the radio's display selects that side, and
+the operating commands follow it — `state.frequency` reports the sub receiver —
+while `25`/`26` keep addressing Main, so `state.vfo_a` and `state.vfo_b`
+describe the other one. The published state disagreed with itself about which
+receiver it was describing, from one touch of the screen, with remoses having
+done nothing and nothing it read saying so.
+
+`state.selected_band` now carries it, from `07 D2`, read and never written.
+
+Two things that took hardware to get right. **The transceive stream does not
+carry the selection** — the obvious first guess, and a capture of the touch
+disproved it: selecting a band broadcasts the ordinary frequency and mode pair,
+the new operating frequency with no band tag, which is exactly why
+`state.frequency` had always followed correctly while nothing knew why.
+
+And **the read belongs on the fast tier**, which is not where a value only a
+finger can change looks like it belongs. On the slow tier the label trailed the
+frequency by up to five seconds, and both directions of that were watched on the
+radio — a 2 m frequency marked "main", then a 70 cm one marked "sub" — before it
+moved. A window of about half a second remains and cannot be closed by polling,
+because the frequency is pushed and the selection is asked for.
 
 **Three things the radio does that no manual here mentions**, all found in that
 session:
@@ -201,7 +215,7 @@ a live CW transmission inside a character.
 CW pacing was measured at **61 ms of drift over 18.3 seconds** on a rig whose
 buffer cannot be queried, so the timing is dead reckoning.
 
-## Fifteen bugs no amount of reading the reference would have found
+## Sixteen bugs no amount of reading the reference would have found
 
 Values written but never read back, so they reported a stale figure for ever;
 setters that quietly changed a neighbouring setting, because on CI-V several
@@ -214,11 +228,12 @@ nothing whatsoever; a VFO selection accepted as a success by a radio that cannot
 address a VFO at all; a data-mode flag carried forward into modes that have no
 data spelling, which left one radio with no way out of its packet mode; a
 display drawing `power  0 %` for a radio with no power command, which reads as a
-fault rather than as a silence; and a request naming one receiver that was
-applied to another, because the check that a VFO is addressable is not the same
-question as whether it is the VFO that was asked for.
+fault rather than as a silence; a request naming one receiver that was applied
+to another, because the check that a VFO is addressable is not the same question
+as whether it is the VFO that was asked for; and a state whose halves described
+two different receivers with nothing published that said which was which.
 
-All fifteen are fixed, with the measurements and reasoning in
+All sixteen are fixed, with the measurements and reasoning in
 [DESIGN.md](DESIGN.md) §5.4, §5.7, §6 and §11.2.
 
 **Two of them were the same bug found twice**, a day apart, on radios at
@@ -252,11 +267,9 @@ Kenwood backend had no notion of break-in at all.
   would send the unkey over is the one that vanished. Only the radio's own
   time-out ends that, so set one.
 - **A few known rough edges are recorded rather than fixed**, including the CW
-  queue position reported after a `replace`, the lock lease not being extended
-  by a long transmission, and an IC-9700 whose published state splits across two
-  receivers when the operator selects the sub band at the radio. They are in
-  [DESIGN.md](DESIGN.md) and on the [Icom page](icom.md); none of them keys a
-  transmitter.
+  queue position reported after a `replace` and the lock lease not being
+  extended by a long transmission. They are in [DESIGN.md](DESIGN.md); none of
+  them keys a transmitter.
 - Expect to find protocol bugs. The per-model differences are collected in
   [DESIGN.md](DESIGN.md) §5.2–§5.7, which is the place to look first.
 

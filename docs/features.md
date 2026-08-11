@@ -70,6 +70,34 @@ answering and a client holding state should replace it rather than merge.
 Note that the *other* receiver has its own VFO A and B, and after an exchange
 `state.vfo_a` and `state.vfo_b` are that pair rather than the one they were.
 
+## Which receiver you are looking at
+
+`state.selected_band` reads `main` or `sub` on a two-receiver radio that reports
+it, and it is worth reading because **it says which receiver the operating
+fields describe**.
+
+On an IC-9700 the operator can select either side at the radio — touching a
+frequency field on the display is enough — and `state.frequency` and
+`state.mode` follow that selection. `state.vfo_a` and `state.vfo_b` do not: they
+are the *main* receiver's pair either way, because that radio's per-VFO commands
+only address Main. So with `selected_band: "sub"` the two halves of the state
+are describing two different receivers, which is correct and would be baffling
+unlabelled.
+
+The sub receiver has its own VFO A and B too. They are perfectly usable at the
+radio, and remoses cannot reach them — the same limitation
+`caps.sub_receiver_readable` reports. An exchange swaps both pairs along with
+everything else.
+
+**remoses never sets the selection**, only reads it. Moving which receiver an
+operator is looking at is not something a daemon should do behind them; where a
+band has to be reached, `exchange_bands` is the answer.
+
+The field is absent on a radio with one receiver, or with two that cannot be
+asked. It can also trail the frequency by one poll on a radio that pushes
+frequency changes, since the push carries the new number but not the fact that
+the receiver changed under it.
+
 ## PTT and the transmit meters
 
 `{"ptt": true}` keys the radio, where the radio has a command for it. A few do
