@@ -74,6 +74,9 @@ type simRig struct {
 	// only a radio can show — so it records that the frame was accepted, which
 	// is the part the backend can be held to.
 	bandExchanges int
+	// selectedBand answers 07 D2: 00 main, 01 sub. Main by default, which is
+	// where a radio nobody has touched sits.
+	selectedBand byte
 
 	// breakIn defaults to 00, BK-IN off — which is the state that silently
 	// swallows a CW message, and so the one worth defaulting to in tests.
@@ -317,6 +320,14 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 		// 07 B0 exchanges the main and sub receivers. See bandExchanges.
 		case len(body) == 1 && body[0] == subExchangeBands:
 			s.bandExchanges++
+			return ok, nil
+		// 07 D2 reads which receiver is selected, and 07 D2 xx sets it. remoses
+		// only ever reads; the set is here so a test can put the rig on the sub
+		// band the way an operator's finger would.
+		case len(body) == 1 && body[0] == subBandSelected:
+			return [][]byte{fromRig(cmdVFO, subBandSelected, s.selectedBand)}, nil
+		case len(body) == 2 && body[0] == subBandSelected:
+			s.selectedBand = body[1]
 			return ok, nil
 		case len(body) == 1 && body[0] == subDualWatch:
 			return [][]byte{fromRig(cmdVFO, subDualWatch, s.dualWatch)}, nil

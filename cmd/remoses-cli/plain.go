@@ -136,6 +136,12 @@ func statusFields(v *view) string {
 	if m := st.ALC; m != nil {
 		fmt.Fprintf(&b, " alc_raw=%d alc_scale=%d", m.Raw, m.Scale)
 	}
+	// Which receiver the fields above are describing, where the radio says. On
+	// an IC-9700 with the sub band selected, freq= and mode= are that
+	// receiver's while vfo_a= and vfo_b= are the main one's.
+	if st.SelectedBand != "" {
+		fmt.Fprintf(&b, " band=%s", st.SelectedBand)
+	}
 	if st.Tuner != "" {
 		fmt.Fprintf(&b, " tuner=%s", st.Tuner)
 	}

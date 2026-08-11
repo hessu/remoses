@@ -155,6 +155,29 @@ func TestPlainOmitsFieldsTheRadioCannotReport(t *testing.T) {
 	}
 }
 
+// The frequency line has to say when it is describing the *other* receiver.
+// On an IC-9700 with the sub band selected, the frequency and mode are that
+// receiver's while the VFO pair below is the main one's, and an operator
+// reading "144.300" with no marker has no way to know which is which.
+//
+// Only for sub: "MAIN" on every line of every radio would be noise.
+func TestFrameMarksTheSubReceiver(t *testing.T) {
+	v := newTestView()
+	st := sampleState()
+
+	st.SelectedBand = radio.BandMain
+	v.setState(st)
+	if got := joined(v, 80); strings.Contains(got, "SUB") {
+		t.Errorf("main is marked; only the sub case is worth interrupting for:\n%s", got)
+	}
+
+	st.SelectedBand = radio.BandSub
+	v.setState(st)
+	if got := joined(v, 80); !strings.Contains(got, "SUB") {
+		t.Errorf("the sub receiver is not marked:\n%s", got)
+	}
+}
+
 func TestFrameShowsWhyTheRadioWentAway(t *testing.T) {
 	v := newTestView()
 	v.applyConn(false, "port closed")

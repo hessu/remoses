@@ -36,6 +36,11 @@ const (
 	KeyVFOMode   backend.Key = "26"
 	KeySplit     backend.Key = "0F"
 	KeyDualWatch backend.Key = "07/C2"
+	// KeyBandSelected is 07 D2: which receiver the operator has selected. Its
+	// own key rather than sharing 07's, because 07 C2 is a different reading
+	// and answering one with the other would publish a dual-watch flag as a
+	// band selection.
+	KeyBandSelected backend.Key = "07/D2"
 	// KeySubSMeter is a 15 02 answer that arrived behind a 29 prefix. It needs
 	// its own key because it is a different reading from the main receiver's
 	// meter and must not satisfy a pending read of it.
@@ -121,13 +126,27 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 		return u, nil
 
 	case cmdVFO:
-		// Only 07 C2 says anything; the rest of command 07 is selection and
-		// band exchange, which are actions rather than readings.
-		if r.model.DualWatch && len(body) >= 2 && body[0] == subDualWatch {
+		// Two of command 07's sub-commands are readings; the rest — selection
+		// and the band exchange — are actions with nothing to report.
+		switch {
+		case r.model.DualWatch && len(body) >= 2 && body[0] == subDualWatch:
 			u.Key = KeyDualWatch
 			on := body[1] != 0x00
 			u.Patch.DualWatch = &on
 			r.dualWatch.Store(on)
+		case r.model.BandSelectRead && len(body) >= 2 && body[0] == subBandSelected:
+			u.Key = KeyBandSelected
+			// 00 main, 01 sub. Anything else is a byte this table does not
+			// know, and publishing a guess about which receiver the operator
+			// is on would be worse than publishing nothing.
+			switch body[1] {
+			case bandMain:
+				b := radio.BandMain
+				u.Patch.SelectedBand = &b
+			case bandSub:
+				b := radio.BandSub
+				u.Patch.SelectedBand = &b
+			}
 		}
 		return u, nil
 

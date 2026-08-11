@@ -159,6 +159,9 @@ func changedFields(p radio.Patch, st radio.State) map[string]any {
 	if p.SubSMeter != nil {
 		m["sub_s_meter"] = *p.SubSMeter
 	}
+	if p.SelectedBand != nil {
+		m["selected_band"] = *p.SelectedBand
+	}
 	if p.BreakIn != nil {
 		m["break_in"] = *p.BreakIn
 	}

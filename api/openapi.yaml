@@ -581,6 +581,28 @@ components:
             `dual_watch` is true: with it off that receiver is not running and
             remoses stops polling it rather than leaving a stale reading that
             would look live.
+        selected_band:
+          type: string
+          enum: [main, sub]
+          description: |
+            Which of a two-receiver radio's receivers the operator has selected,
+            and therefore **which receiver the operating fields describe**.
+
+            It matters on an IC-9700. There `frequency` and `mode` follow the
+            selection, while `vfo_a` and `vfo_b` are the *main* receiver's pair
+            whichever is selected, because that radio's per-VFO commands are
+            documented "(Only MAIN band)". So with `"sub"` here, the two halves
+            of this object describe two different receivers, and nothing else
+            says so. Touching the sub frequency field on the radio's own screen
+            is enough to get there.
+
+            The sub receiver has its own VFO A and B, usable at the radio;
+            remoses cannot reach them, which is what `caps.sub_receiver_readable`
+            reports. `exchange_bands` swaps the two receivers along with their
+            VFO pairs, and leaves the selection where it was.
+
+            Absent on a radio with one receiver, or with two that cannot be
+            asked which is selected. remoses never *sets* it.
 
         power_meter:
           allOf: [{ $ref: "#/components/schemas/Meter" }]

@@ -135,9 +135,16 @@ func layout(v *view, width int) []string {
 		// xterm as it is in a modern terminal.
 		ptt = "PTT   >> TX <<"
 	}
-	out = append(out,
-		row(fmt.Sprintf("  %s MHz    %s", formatFreq(st.Frequency), formatMode(st)), ptt, width),
-		"")
+	// The frequency line says which receiver it is describing, but only where
+	// the radio reports it and only when it is the sub one. "MAIN" on every
+	// line of every single-receiver radio would be noise; SUB is the case worth
+	// interrupting somebody for, because the VFO pair below is then the *other*
+	// receiver's. See radio.State.SelectedBand.
+	freq := fmt.Sprintf("  %s MHz    %s", formatFreq(st.Frequency), formatMode(st))
+	if st.SelectedBand == radio.BandSub {
+		freq += "    SUB"
+	}
+	out = append(out, row(freq, ptt, width), "")
 
 	out = append(out, meterLines(v)...)
 	out = append(out, "")

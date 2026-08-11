@@ -483,6 +483,20 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		if r.model.Tuner && r.Tuner() == radio.TunerTuning {
 			reqs = append(reqs, request{KeyTuner, r.frame(cmdTransceiver, subTuner)})
 		}
+		// Which receiver is selected. It changes rarely — somebody has to touch
+		// the radio — so the slow tier is where it looks like it belongs, and
+		// that was tried and is wrong. This decides what the *fast* fields
+		// above are describing: the operating frequency follows the selection
+		// immediately, by transceive broadcast as well as by this poll, while
+		// 25 and 26 stay on the main band. A selection five seconds behind the
+		// frequency it labels is worse than no label at all, and both directions
+		// of that were watched happening on an IC-9700 — a 2 m frequency marked
+		// "main", then a 70 cm one marked "sub" — before this moved tier.
+		//
+		// One more transaction a tick, on the one radio here that needs it.
+		if r.model.BandSelectRead {
+			reqs = append(reqs, request{KeyBandSelected, r.frame(cmdVFO, subBandSelected)})
+		}
 		// The second receiver's meter belongs in the fast tier for the same
 		// reason the first one does — it is a signal level, and a client draws
 		// it as a live bar — but only while dual watch is actually running.

@@ -283,6 +283,22 @@ type Model struct {
 	// from VFOModeSelect because the IC-7610 has the latter and not the former:
 	// its two VFOs are fixed receivers with no A/B switch between them.
 	VFOSelect bool
+	// BandSelectRead marks 07 D2, which reports which of the two receivers the
+	// operator has selected.
+	//
+	// Worth reading on the IC-9700 because the answer changes what the rest of
+	// the state means. Its operating-frequency commands follow the selection
+	// while 25 and 26 stay on the main band, so with the sub band selected
+	// State.Frequency and State.VFOA describe different receivers — and nothing
+	// else remoses reads says which way round it is. Touching the sub frequency
+	// field on the radio's screen is enough to get there, so this is not an
+	// exotic case.
+	//
+	// Read only. 07 D0, 07 D1 and 07 D2 can all *set* the selection, and
+	// remoses sends none of them: moving which receiver an operator is looking
+	// at is not something a daemon should do behind them, and the exchange
+	// covers the case where a band has to be reached. See BandExchange.
+	BandSelectRead bool
 	// BandExchange marks 07 B0, which swaps the main and sub receivers.
 	//
 	// Only the IC-9700 has it here, and only because its reference was read for
@@ -629,6 +645,9 @@ var models = map[string]Model{
 		// 07 B0, and this is the radio that needs it: it will not put Main on a
 		// band Sub is using, and nothing addresses Sub. See Model.BandExchange.
 		m.BandExchange = true
+		// 07 D2, so that a client can tell which receiver State.Frequency is
+		// describing. On this radio the two halves of the state can disagree.
+		m.BandSelectRead = true
 		m.BreakIn = BreakInSemiFull
 		m.PowerSwitch = true // 18 00 / 18 01, same footnote as the IC-7610's
 		// Its PO meter reaches 100% at 213, not the 255 of the IC-7610.

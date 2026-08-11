@@ -321,6 +321,18 @@ func (b BreakIn) Transmits() bool {
 	return b == BreakInSemi || b == BreakInFull || b == BreakInOn
 }
 
+// Band names one of a two-receiver radio's two receivers.
+//
+// "Band" rather than "receiver" because that is what the radios call them —
+// Icom's MAIN and SUB bands — and an operator reading a client will recognise
+// the word off the front panel.
+type Band string
+
+const (
+	BandMain Band = "main"
+	BandSub  Band = "sub"
+)
+
 // Tuner is the state of a radio's internal antenna tuner.
 type Tuner string
 
@@ -607,6 +619,25 @@ type State struct {
 	DualWatch bool  `json:"dual_watch"`
 	SubSMeter Meter `json:"sub_s_meter"`
 
+	// SelectedBand says which of a two-receiver radio's receivers the operator
+	// has selected, and it exists because the answer changes what the rest of
+	// this struct is describing.
+	//
+	// On an IC-9700 the operating fields — Frequency, Mode — follow the
+	// selection, while VFOA and VFOB are the *main* receiver's pair whichever
+	// is selected, because that radio's per-VFO commands are documented "(Only
+	// MAIN band)". So with "sub" here, the two halves describe two different
+	// receivers, and nothing else in the state says so. Touching the sub
+	// frequency field on the radio's own screen is enough to get there.
+	//
+	// The sub receiver has its own VFO A and B, usable and exchangeable at the
+	// radio; remoses cannot reach them, which is the same limitation
+	// Caps.SubReceiverReadable reports. Exchanging the two receivers swaps
+	// their VFO pairs along with everything else.
+	//
+	// Empty where the radio has one receiver, or has two and cannot be asked.
+	SelectedBand Band `json:"selected_band,omitempty"`
+
 	// BreakIn decides whether CW sent from here reaches the air at all. Empty
 	// on a radio remoses cannot ask.
 	BreakIn BreakIn `json:"break_in,omitempty"`
@@ -684,13 +715,14 @@ type Patch struct {
 	// filter together and command 25 answers a frequency, so a decoder always
 	// has a whole VFO's worth or none of it, and finer granularity would only
 	// invite half-applied updates.
-	VFO       *VFO
-	VFOA      *VFOState
-	VFOB      *VFOState
-	Split     *bool
-	DualWatch *bool
-	SubSMeter *Meter
-	BreakIn   *BreakIn
+	VFO          *VFO
+	VFOA         *VFOState
+	VFOB         *VFOState
+	Split        *bool
+	DualWatch    *bool
+	SubSMeter    *Meter
+	SelectedBand *Band
+	BreakIn      *BreakIn
 }
 
 // Empty reports whether the patch carries no fields at all.
@@ -710,7 +742,7 @@ func (p Patch) Empty() bool {
 		p.AutoNotch == nil && p.Antenna == nil && p.RXAntenna == nil &&
 		p.VFO == nil && p.VFOA == nil && p.VFOB == nil &&
 		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil &&
-		p.BreakIn == nil
+		p.SelectedBand == nil && p.BreakIn == nil
 }
 
 // Apply returns s updated with every field the patch sets. It does not touch
@@ -853,6 +885,9 @@ func (s State) Apply(p Patch) State {
 	}
 	if p.SubSMeter != nil {
 		s.SubSMeter = *p.SubSMeter
+	}
+	if p.SelectedBand != nil {
+		s.SelectedBand = *p.SelectedBand
 	}
 	if p.BreakIn != nil {
 		s.BreakIn = *p.BreakIn
@@ -1040,6 +1075,11 @@ func (s State) Diff(next State) Patch {
 	// WebSocket layer's min_interval rather than suppressed here.
 	if s.SubSMeter != next.SubSMeter {
 		p.SubSMeter = &next.SubSMeter
+	}
+	// Worth a delta of its own: it changes what Frequency and Mode are talking
+	// about, so a client that missed it would misattribute every field above.
+	if s.SelectedBand != next.SelectedBand {
+		p.SelectedBand = &next.SelectedBand
 	}
 	if s.BreakIn != next.BreakIn {
 		p.BreakIn = &next.BreakIn

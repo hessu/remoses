@@ -426,6 +426,96 @@ func TestExchangeBandsRefusedWhereUnread(t *testing.T) {
 	}
 }
 
+// TestBandSelectionIsReadNeverWritten covers the field that says what the rest
+// of the state is describing.
+//
+// On an IC-9700 the operating-frequency commands follow the selected band while
+// 25 and 26 stay on Main, so with the sub band selected State.Frequency and
+// State.VFOA are two different receivers. 07 D2 is the only thing that says
+// which way round it is — and it is read, never written, because moving the
+// receiver an operator is looking at is not a daemon's decision.
+func TestBandSelectionIsReadNeverWritten(t *testing.T) {
+	s := newSim(t)
+	s.backend = ic9700(t)
+	s.selectedBand = 0x01 // as if a finger had touched the sub field
+	ctx := context.Background()
+
+	// The FAST tier, not the slow one. The operating frequency follows the
+	// selection immediately, so a label five seconds behind it is wrong about
+	// the very field it qualifies — which was watched happening before this
+	// moved tier.
+	if err := s.backend.Poll(ctx, s, backend.PollFast); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	var asked bool
+	for _, req := range s.log {
+		if cmd, body := req[4], req[5:len(req)-1]; cmd == cmdVFO &&
+			len(body) == 1 && body[0] == subBandSelected {
+			asked = true
+		}
+	}
+	if !asked {
+		t.Error("the fast poll never asked 07 D2; nothing else reports the selection")
+	}
+
+	// And the answer decodes to the band it names, both ways round.
+	for _, tc := range []struct {
+		byteVal byte
+		want    radio.Band
+	}{{bandMain, radio.BandMain}, {bandSub, radio.BandSub}} {
+		u, err := s.backend.Decode(fromRig(cmdVFO, subBandSelected, tc.byteVal))
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if u.Key != KeyBandSelected {
+			t.Errorf("07 D2 %02X decoded under key %q, want %q", tc.byteVal, u.Key, KeyBandSelected)
+		}
+		if u.Patch.SelectedBand == nil || *u.Patch.SelectedBand != tc.want {
+			t.Errorf("07 D2 %02X gave %v, want %s", tc.byteVal, u.Patch.SelectedBand, tc.want)
+		}
+	}
+
+	// A byte the table does not know publishes nothing rather than a guess
+	// about which receiver somebody is listening to.
+	if u, _ := s.backend.Decode(fromRig(cmdVFO, subBandSelected, 0x07)); u.Patch.SelectedBand != nil {
+		t.Errorf("an unknown band byte published %v", *u.Patch.SelectedBand)
+	}
+
+	// Nothing in a poll may move the selection: not 07 D0, not 07 D1, and not
+	// the two-byte set form of 07 D2.
+	for _, req := range s.log {
+		cmd, body := req[4], req[5:len(req)-1]
+		if cmd != cmdVFO {
+			continue
+		}
+		if len(body) == 1 && (body[0] == subSelectMain || body[0] == subSelectSub) {
+			t.Fatalf("sent 07 %02X: remoses must not change which band is selected", body[0])
+		}
+		if len(body) == 2 && body[0] == subBandSelected {
+			t.Fatalf("sent 07 D2 %02X: the selection is read only", body[1])
+		}
+	}
+}
+
+// A radio whose reference has not been read for 07 D2 must not be asked, or it
+// would answer NG on every slow tick.
+func TestBandSelectionNotReadWhereUnknown(t *testing.T) {
+	s := newSim(t)
+	s.backend = testRig(t) // an IC-7610
+	ctx := context.Background()
+	for _, tier := range []backend.PollTier{backend.PollFast, backend.PollSlow} {
+		if err := s.backend.Poll(ctx, s, tier); err != nil {
+			t.Fatalf("Poll: %v", err)
+		}
+	}
+	for _, req := range s.log {
+		if cmd, body := req[4], req[5:len(req)-1]; cmd == cmdVFO &&
+			len(body) >= 1 && body[0] == subBandSelected {
+			t.Fatal("asked for 07 D2 on a model with no profile entry for it")
+		}
+	}
+}
+
 // TestSelectVFOModeIsTheWayOutOfMemory covers the only part of memory mode
 // remoses implements. A rig on a memory channel answers 25 and 26 with NG, so
 // its per-VFO readings go stale with nothing else in the API able to move them.
