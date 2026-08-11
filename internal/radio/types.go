@@ -1247,6 +1247,28 @@ func (c Caps) SupportsMode(m Mode) bool {
 	return false
 }
 
+// SupportsVFO reports whether v is a VFO this radio can be told to address.
+//
+// VFOCurrent is always allowed and is deliberately not in the list: it means
+// "whichever VFO the radio is on", which every radio has, and it is the zero
+// value a request that names no VFO arrives with.
+//
+// Everything else has to be advertised. An IC-9700 has a second receiver and no
+// way to address it — its Caps.VFOs is current, A and B — and asking it for
+// "sub" used to reach the wire as a write to VFO B of the *main* band, which is
+// a different receiver from the one that was asked for.
+func (c Caps) SupportsVFO(v VFO) bool {
+	if v == VFOCurrent {
+		return true
+	}
+	for _, x := range c.VFOs {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 // AttenuatorControl reports whether this radio has an attenuator remoses can
 // work at all.
 func (c Caps) AttenuatorControl() bool { return len(c.AttenuatorDB) > 0 }

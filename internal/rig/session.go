@@ -1376,9 +1376,21 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	// because it is not a field that gets applied — it selects what the other
 	// fields address — so a request carrying nothing else looks empty and would
 	// be answered 200 by a radio that cannot reach that VFO at all. An FT-857D
-	// found it: its only VFO command is a blind toggle, Caps advertises
+	// found that half: its only VFO command is a blind toggle, Caps advertises
 	// "current" alone, and {"vfo": "B"} came back OK having done nothing.
-	if req.namesAVFO() && s.dualVFO() == nil {
+	//
+	// Two conditions, because they are different questions. Caps answers "does
+	// this radio have such a VFO", and an IC-9700 is why it has to be asked: it
+	// does implement the dual-VFO commands, so testing only for those passed,
+	// and "sub" then went out as a write to VFO B of the *main* band — a 200,
+	// and a different receiver moved from the one the client named. That radio
+	// has a second receiver with its own A and B, and nothing addresses either.
+	//
+	// The interface answers "can this backend reach a named VFO at all", which
+	// is what the FT-857D case needs and is not implied by the first: a profile
+	// that advertised a VFO its backend cannot address would otherwise send a
+	// request somewhere unpredictable rather than refusing it.
+	if !s.Caps().SupportsVFO(req.VFO) || (req.namesAVFO() && s.dualVFO() == nil) {
 		return s.State(), fmt.Errorf("radio %s: addressing VFO %s: %w", s.id, req.VFO, ErrUnsupported)
 	}
 	if req.Empty() {

@@ -382,6 +382,10 @@ func newFakeRig() *fakeRig {
 
 func (r *fakeRig) Caps() radio.Caps { return r.caps }
 
+// base lets newHarnessRig find the *fakeRig inside a backend that wraps one,
+// so harness.rig keeps working for a test that supplies its own.
+func (r *fakeRig) base() *fakeRig { return r }
+
 func (r *fakeRig) record(s string) {
 	r.mu.Lock()
 	r.sets = append(r.sets, s)

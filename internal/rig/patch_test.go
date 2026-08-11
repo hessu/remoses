@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/rig/backend"
 )
 
 // Two bugs an FT-857D found on the air, both in ApplyPatch and neither specific
@@ -45,6 +46,72 @@ func TestPatchNamedVFORefusedWhenNothingElseIsSet(t *testing.T) {
 	t.Run("current is still an empty request", func(t *testing.T) {
 		if _, err := h.s.ApplyPatch(context.Background(), PatchRequest{VFO: radio.VFOCurrent}); err != nil {
 			t.Fatalf("ApplyPatch{VFO: current} err = %v, want nil", err)
+		}
+	})
+}
+
+// dualRig is a radio that really can address a VFO by name — which is the case
+// the check above is not enough for on its own. It advertises current, A and B,
+// exactly as an IC-9700 does.
+type dualRig struct {
+	*fakeRig
+	addressed []radio.VFO // every VFO that reached a dual-VFO command
+}
+
+func newDualRig() *dualRig {
+	r := &dualRig{fakeRig: newFakeRig()}
+	r.caps.VFOs = []radio.VFO{radio.VFOCurrent, radio.VFOA, radio.VFOB}
+	return r
+}
+
+func (r *dualRig) ReadVFOs(context.Context, backend.Conn) error { return nil }
+func (r *dualRig) SetSplit(context.Context, backend.Conn, bool) error {
+	return nil
+}
+func (r *dualRig) SetDualWatch(context.Context, backend.Conn, bool) error { return nil }
+
+func (r *dualRig) SetVFOFrequency(_ context.Context, _ backend.Conn, vfo radio.VFO, _ uint64) error {
+	r.addressed = append(r.addressed, vfo)
+	return nil
+}
+
+func (r *dualRig) SetVFOMode(_ context.Context, _ backend.Conn, vfo radio.VFO, _ radio.Mode, _ bool, _ int) error {
+	r.addressed = append(r.addressed, vfo)
+	return nil
+}
+
+// A VFO the radio does not advertise must be refused even where the backend has
+// the commands to address one — which is the half an IC-9700 found. That radio
+// has a second receiver with its own VFO A and B, `25`/`26` reach neither, and
+// Caps.VFOs says so by listing only current, A and B. Asking it for "sub" was
+// accepted and applied to VFO B of the *main* band: a 200, and a different
+// receiver moved from the one the client named.
+func TestPatchVFONotInCapsIsRefusedEvenWhenAddressable(t *testing.T) {
+	r := newDualRig()
+	h := newHarnessRig(t, r, nil)
+	ctx := context.Background()
+	hz := uint64(432500000)
+
+	for _, vfo := range []radio.VFO{radio.VFOSub, radio.VFOMain} {
+		t.Run(vfo.String(), func(t *testing.T) {
+			_, err := h.s.ApplyPatch(ctx, PatchRequest{VFO: vfo, Frequency: &hz})
+			if !errors.Is(err, ErrUnsupported) {
+				t.Fatalf("ApplyPatch{VFO: %s} err = %v, want ErrUnsupported", vfo, err)
+			}
+		})
+	}
+	if len(r.addressed) != 0 {
+		t.Errorf("an unadvertised VFO reached the radio: %v", r.addressed)
+	}
+
+	// And the ones it does advertise still work.
+	t.Run("B is advertised and goes through", func(t *testing.T) {
+		h.start(t)
+		if _, err := h.s.ApplyPatch(ctx, PatchRequest{VFO: radio.VFOB, Frequency: &hz}); err != nil {
+			t.Fatalf("ApplyPatch{VFO: B} err = %v, want nil", err)
+		}
+		if len(r.addressed) != 1 || r.addressed[0] != radio.VFOB {
+			t.Errorf("addressed = %v, want [B]", r.addressed)
 		}
 	})
 }

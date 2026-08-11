@@ -11,6 +11,7 @@ import (
 
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/rig/backend"
 	"github.com/hessu/remoses/internal/transport"
 )
 
@@ -30,9 +31,16 @@ type harness struct {
 // keeping the fast timings the rest of the file depends on.
 func newHarness(t *testing.T, mutate func(*config.Radio), opts ...Option) *harness {
 	t.Helper()
+	return newHarnessRig(t, newFakeRig(), mutate, opts...)
+}
+
+// newHarnessRig is newHarness with the backend supplied, for the tests that
+// need one the plain fake is not — a rig that implements backend.DualVFO, say.
+// It must embed *fakeRig, because harness.rig is what the assertions reach for.
+func newHarnessRig(t *testing.T, r backend.Rig, mutate func(*config.Radio), opts ...Option) *harness {
+	t.Helper()
 	dev := newFakeDevice()
 	dl := newFakeDialer(dev)
-	r := newFakeRig()
 
 	rc := config.Radio{
 		ID:      "testrig",
@@ -58,7 +66,11 @@ func newHarness(t *testing.T, mutate func(*config.Radio), opts ...Option) *harne
 	s.backoffMin = 2 * time.Millisecond
 	s.backoffMax = 10 * time.Millisecond
 
-	return &harness{s: s, rig: r, dev: dev, dl: dl}
+	fake, ok := r.(interface{ base() *fakeRig })
+	if !ok {
+		t.Fatalf("newHarnessRig: %T does not expose a *fakeRig", r)
+	}
+	return &harness{s: s, rig: fake.base(), dev: dev, dl: dl}
 }
 
 // start brings the session up and waits until the radio is usable.
