@@ -1113,6 +1113,13 @@ func (s *Session) vfoModeSelector() backend.VFOModeSelector {
 	return v
 }
 
+// bandExchanger reports the backend's band-exchange interface, or nil where the
+// radio cannot swap its two receivers.
+func (s *Session) bandExchanger() backend.BandExchanger {
+	b, _ := s.rig.(backend.BandExchanger)
+	return b
+}
+
 // SelectVFOMode returns the radio to VFO operation, out of memory mode.
 //
 // Deliberately not gated on requireConnected before validating, like the other
@@ -1268,6 +1275,15 @@ type PatchRequest struct {
 	// radio it just read it from.
 	TunerTune *bool
 
+	// ExchangeBands swaps the two receivers, so that the band the sub receiver
+	// was holding becomes the one everything else operates. Write only, and
+	// true only, like VFOMode and TunerTune.
+	//
+	// An action rather than a state for the usual reason — there is nothing to
+	// read back that says "exchanged" — and one a client has to ask for
+	// deliberately, because it moves both of somebody's receivers at once.
+	ExchangeBands *bool
+
 	// The receive front end. They belong in a patch rather than in setters of
 	// their own because an operator works them together — preamp off, pad in,
 	// RF gain back — and one request that either applies all of it or none of
@@ -1298,7 +1314,7 @@ func (r PatchRequest) Empty() bool {
 	return r.Mode == nil && r.DataMode == nil && r.Frequency == nil &&
 		r.FilterSlot == nil && r.FilterWidthHz == nil && r.Power == nil && r.PTT == nil &&
 		r.Split == nil && r.DualWatch == nil && r.VFOMode == nil && r.BreakIn == nil &&
-		r.Tuner == nil && r.TunerTune == nil &&
+		r.Tuner == nil && r.TunerTune == nil && r.ExchangeBands == nil &&
 		r.Preamp == nil && r.AttenuatorDB == nil && r.RFGain == nil &&
 		r.AGC == nil && r.IPPlus == nil && r.DigiSel == nil && r.DigiSelShift == nil &&
 		!r.noiseRequested() && r.Antenna == nil && r.RXAntenna == nil
@@ -1468,6 +1484,17 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 			return s.State(), fmt.Errorf("radio %s: leaving memory mode: %w", s.id, ErrUnsupported)
 		}
 	}
+	if req.ExchangeBands != nil {
+		if !*req.ExchangeBands {
+			return s.State(), fmt.Errorf("radio %s: exchange_bands can only be set true; "+
+				"it swaps the two receivers and there is nothing false would swap back: %w",
+				s.id, ErrUnsupported)
+		}
+		if !caps.BandExchange || s.bandExchanger() == nil {
+			return s.State(), fmt.Errorf("radio %s: exchanging the main and sub receivers: %w",
+				s.id, ErrUnsupported)
+		}
+	}
 	// The rest of the dual-VFO controls, validated here with everything else so
 	// that they are refused before anything reaches the wire. The VFO name
 	// itself is checked at the top of this function, ahead of the
@@ -1508,12 +1535,24 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	// path went on refusing to send.
 	slow := req.Power != nil || req.FilterSlot != nil || req.FilterWidthHz != nil ||
 		req.Split != nil || req.DualWatch != nil || req.namesAVFO() ||
-		req.VFOMode != nil || req.BreakIn != nil ||
+		req.VFOMode != nil || req.BreakIn != nil || req.ExchangeBands != nil ||
 		req.Tuner != nil || req.TunerTune != nil ||
 		req.frontEndRequested() || req.noiseRequested() ||
 		req.Antenna != nil || req.RXAntenna != nil
 
-	// First of everything: a radio on a memory channel refuses several of the
+	// Before everything, because it changes what "the radio" is: after an
+	// exchange the receiver every command below addresses is on a different
+	// band, with a different frequency, mode and pair of VFOs. So a request
+	// that says "bring the other band over and tune it" — which is the whole
+	// reason an operator reaches for this — works in one call, and in the only
+	// order that can mean anything.
+	if req.ExchangeBands != nil {
+		if err := s.bandExchanger().ExchangeBands(ctx, s); err != nil {
+			return s.State(), err
+		}
+	}
+
+	// Then memory mode: a radio on a memory channel refuses several of the
 	// commands below, so a request that says "get back on a VFO and tune there"
 	// has to do those in that order to mean anything.
 	if req.VFOMode != nil {

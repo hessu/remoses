@@ -217,6 +217,16 @@ type statePatchBody struct {
 	// two. An action rather than a state, and a separate field from Tuner so
 	// that a client echoing back a state it just read can never key the radio.
 	TunerTune *bool `json:"tuner_tune"`
+
+	// ExchangeBands true swaps the radio's two receivers, so the band the sub
+	// receiver was holding becomes the one everything else operates. An action,
+	// true only, gated by caps.band_exchange.
+	//
+	// It is the only way to reach a band sitting on the sub receiver of an
+	// IC-9700, which refuses to put its main receiver on a band the sub one is
+	// using. Every field in the response changes at once, because they now
+	// describe a different band.
+	ExchangeBands *bool `json:"exchange_bands"`
 }
 
 // toRequest converts the body into the session's patch request.
@@ -244,6 +254,7 @@ func (b statePatchBody) toRequest() (rig.PatchRequest, error) {
 		BreakIn:       b.BreakIn,
 		Tuner:         b.Tuner,
 		TunerTune:     b.TunerTune,
+		ExchangeBands: b.ExchangeBands,
 		Preamp:        b.Preamp,
 		AttenuatorDB:  b.AttenuatorDB,
 		RFGain:        b.RFGain,
@@ -305,6 +316,7 @@ func (b statePatchBody) onlyPowerSwitch() bool {
 		b.PassbandHz == nil && b.FilterSlot == nil && b.PowerW == nil && b.PowerPct == nil &&
 		b.PTT == nil && b.Split == nil && b.DualWatch == nil && b.VFOMode == nil &&
 		b.BreakIn == nil && b.Tuner == nil && b.TunerTune == nil &&
+		b.ExchangeBands == nil &&
 		b.Preamp == nil && b.AttenuatorDB == nil && b.RFGain == nil && b.AGC == nil &&
 		b.IPPlus == nil && b.DigiSel == nil && b.DigiSelShift == nil &&
 		b.NoiseBlanker == nil && b.NBLevel == nil && b.NoiseReduction == nil &&
@@ -378,6 +390,12 @@ func (b statePatchBody) auditAttrs() []any {
 	// field.
 	if b.TunerTune != nil {
 		attrs = append(attrs, "tuner_tune", *b.TunerTune)
+	}
+	// Audited because it moves both of somebody's receivers at once, and
+	// because the state before and after share no field an operator could use
+	// to reconstruct what happened from the surrounding lines.
+	if b.ExchangeBands != nil {
+		attrs = append(attrs, "exchange_bands", *b.ExchangeBands)
 	}
 	return attrs
 }

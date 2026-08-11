@@ -52,16 +52,24 @@ func TestPatchNamedVFORefusedWhenNothingElseIsSet(t *testing.T) {
 
 // dualRig is a radio that really can address a VFO by name — which is the case
 // the check above is not enough for on its own. It advertises current, A and B,
-// exactly as an IC-9700 does.
+// exactly as an IC-9700 does, and can exchange its two receivers.
 type dualRig struct {
 	*fakeRig
 	addressed []radio.VFO // every VFO that reached a dual-VFO command
+	exchanges int
 }
 
 func newDualRig() *dualRig {
 	r := &dualRig{fakeRig: newFakeRig()}
 	r.caps.VFOs = []radio.VFO{radio.VFOCurrent, radio.VFOA, radio.VFOB}
+	r.caps.BandExchange = true
 	return r
+}
+
+func (r *dualRig) ExchangeBands(context.Context, backend.Conn) error {
+	r.exchanges++
+	r.record("exchange_bands")
+	return nil
 }
 
 func (r *dualRig) ReadVFOs(context.Context, backend.Conn) error { return nil }
@@ -112,6 +120,58 @@ func TestPatchVFONotInCapsIsRefusedEvenWhenAddressable(t *testing.T) {
 		}
 		if len(r.addressed) != 1 || r.addressed[0] != radio.VFOB {
 			t.Errorf("addressed = %v, want [B]", r.addressed)
+		}
+	})
+}
+
+// Exchanging the two receivers is what reaches a band an IC-9700 will not put
+// its main receiver on while the sub one is there. It is an action: true only,
+// gated on the capability, and applied before everything else in the request —
+// because after it, every other field in that request is about a different
+// band.
+func TestPatchExchangeBands(t *testing.T) {
+	ctx := context.Background()
+	yes, no := true, false
+
+	t.Run("refused where the radio has no such command", func(t *testing.T) {
+		h := newHarness(t, nil) // the plain fake: no BandExchange
+		_, err := h.s.ApplyPatch(ctx, PatchRequest{ExchangeBands: &yes})
+		if !errors.Is(err, ErrUnsupported) {
+			t.Fatalf("err = %v, want ErrUnsupported", err)
+		}
+	})
+
+	t.Run("false is refused, since there is nothing to swap back", func(t *testing.T) {
+		r := newDualRig()
+		h := newHarnessRig(t, r, nil)
+		_, err := h.s.ApplyPatch(ctx, PatchRequest{ExchangeBands: &no})
+		if !errors.Is(err, ErrUnsupported) {
+			t.Fatalf("err = %v, want ErrUnsupported", err)
+		}
+		if r.exchanges != 0 {
+			t.Error("a false request still exchanged the receivers")
+		}
+	})
+
+	t.Run("applied before the rest of the request", func(t *testing.T) {
+		r := newDualRig()
+		h := newHarnessRig(t, r, nil).start(t)
+		hz, mode := uint64(144300000), radio.ModeUSB
+
+		// "Bring the other band over and tune it", which is the whole reason an
+		// operator reaches for this. The exchange has to happen first or the
+		// frequency lands on the band being swapped away.
+		if _, err := h.s.ApplyPatch(ctx, PatchRequest{
+			ExchangeBands: &yes, Frequency: &hz, Mode: &mode,
+		}); err != nil {
+			t.Fatalf("ApplyPatch: %v", err)
+		}
+		if r.exchanges != 1 {
+			t.Fatalf("exchanges = %d, want 1", r.exchanges)
+		}
+		log := r.setLog()
+		if len(log) == 0 || log[0] != "exchange_bands" {
+			t.Fatalf("set log = %v, want the exchange first", log)
 		}
 	})
 }

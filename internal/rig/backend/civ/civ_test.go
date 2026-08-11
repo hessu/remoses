@@ -69,6 +69,11 @@ type simRig struct {
 	// did something. remoses models no memory mode beyond leaving it.
 	memoryMode  bool
 	selectedVFO byte
+	// bandExchanges counts accepted 07 B0 frames. This simulator has no second
+	// receiver for one to swap — what an exchange does to a radio is something
+	// only a radio can show — so it records that the frame was accepted, which
+	// is the part the backend can be held to.
+	bandExchanges int
 
 	// breakIn defaults to 00, BK-IN off — which is the state that silently
 	// swallows a CW message, and so the one worth defaulting to in tests.
@@ -308,6 +313,10 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 		case len(body) == 1 && body[0] <= 0x01:
 			s.memoryMode = false
 			s.selectedVFO = body[0]
+			return ok, nil
+		// 07 B0 exchanges the main and sub receivers. See bandExchanges.
+		case len(body) == 1 && body[0] == subExchangeBands:
+			s.bandExchanges++
 			return ok, nil
 		case len(body) == 1 && body[0] == subDualWatch:
 			return [][]byte{fromRig(cmdVFO, subDualWatch, s.dualWatch)}, nil

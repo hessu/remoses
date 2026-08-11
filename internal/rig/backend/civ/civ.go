@@ -311,6 +311,9 @@ func (r *Rig) Caps() radio.Caps {
 		SubReceiverReadable: r.model.DualWatch,
 		Split:               r.model.Split,
 		DualWatch:           r.model.DualWatch,
+		// 07 B0, which is the only route to a band sitting on the sub receiver
+		// of a radio that will not let the main one join it there.
+		BandExchange: r.model.BandExchange,
 		// Command 26 carries mode, data mode and filter per VFO, so on those
 		// radios all three are per-VFO rather than properties of the set.
 		PerVFOMode:     r.model.DualVFO,

@@ -157,6 +157,29 @@ func (r *Rig) SelectVFOMode(ctx context.Context, c backend.Conn, vfo radio.VFO) 
 	return r.set(ctx, c, "VFO select", r.frame(cmdVFO, sub))
 }
 
+// ExchangeBands swaps the main and sub receivers with 07 B0.
+//
+// One frame, no parameters, and it moves both receivers at once — which is why
+// it is an explicit action a client has to ask for rather than anything remoses
+// does on its own initiative. The session re-reads everything afterwards; see
+// backend.BandExchanger for why that is not optional.
+//
+// Note what this deliberately is not. 07 D0, 07 D1 and 07 D2 select which band
+// is *focused*, and on an IC-9700 that genuinely does move the operating
+// commands: select the sub band and 03 and 04 report it. remoses does not use
+// them, because that radio's 25 and 26 are documented "(Only MAIN band)" and go
+// on addressing Main — so with the sub band selected, State.Frequency and
+// State.VFOA describe different receivers. Verified on the radio, by touching
+// the sub field on its display and watching the two disagree. Exchanging avoids
+// the whole problem: the focus stays where it was and every command follows.
+func (r *Rig) ExchangeBands(ctx context.Context, c backend.Conn) error {
+	if !r.model.BandExchange {
+		return fmt.Errorf("civ: %s has no command to exchange its main and sub "+
+			"receivers (07 B0): %w", r.model.Label, backend.ErrUnsupported)
+	}
+	return r.set(ctx, c, "exchange bands", r.frame(cmdVFO, subExchangeBands))
+}
+
 // requireDualVFO reports why this radio cannot address a VFO by name, or nil.
 func (r *Rig) requireDualVFO() error {
 	if !r.model.DualVFO {

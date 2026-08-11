@@ -283,6 +283,18 @@ type Model struct {
 	// from VFOModeSelect because the IC-7610 has the latter and not the former:
 	// its two VFOs are fixed receivers with no A/B switch between them.
 	VFOSelect bool
+	// BandExchange marks 07 B0, which swaps the main and sub receivers.
+	//
+	// Only the IC-9700 has it here, and only because its reference was read for
+	// it. It is also the only radio here that *needs* it: it refuses to put the
+	// main receiver on a band the sub receiver is using, so a band left on the
+	// sub side cannot be worked from the network at all until the two swap.
+	//
+	// The rest of the family very likely has 07 B0 too. It stays off under the
+	// same rule as everything else in this table — and the cost of being wrong
+	// is higher than usual here, because this command moves both receivers at
+	// once on a radio somebody may be listening to.
+	BandExchange bool
 
 	// BreakIn is how command 16 47, the CW break-in setting, is spelled on this
 	// radio. See BreakInStyle.
@@ -614,6 +626,9 @@ var models = map[string]Model{
 		// its sub band is not the IC-7610's dual watch in any case.
 		m.VFOModeSelect = true
 		m.VFOSelect = true // 07 00 and 07 01 select VFO A and VFO B
+		// 07 B0, and this is the radio that needs it: it will not put Main on a
+		// band Sub is using, and nothing addresses Sub. See Model.BandExchange.
+		m.BandExchange = true
 		m.BreakIn = BreakInSemiFull
 		m.PowerSwitch = true // 18 00 / 18 01, same footnote as the IC-7610's
 		// Its PO meter reaches 100% at 213, not the 255 of the IC-7610.

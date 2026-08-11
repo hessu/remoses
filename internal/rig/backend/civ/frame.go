@@ -88,12 +88,13 @@ const (
 	subNotchFreq = 0x0D // 14 0D, 0000-0255
 	subNBLevel   = 0x12 // 14 12, 0000-0255
 
-	subDualWatchOff = 0xC0 // 07 C0
-	subDualWatchOn  = 0xC1 // 07 C1
-	subDualWatch    = 0xC2 // 07 C2, read/set, 00 off 01 on
-	subSelectMain   = 0xD0 // 07 D0
-	subSelectSub    = 0xD1 // 07 D1
-	subBandSelected = 0xD2 // 07 D2, read which band is selected
+	subDualWatchOff  = 0xC0 // 07 C0
+	subDualWatchOn   = 0xC1 // 07 C1
+	subDualWatch     = 0xC2 // 07 C2, read/set, 00 off 01 on
+	subExchangeBands = 0xB0 // 07 B0, exchange the main and sub bands
+	subSelectMain    = 0xD0 // 07 D0
+	subSelectSub     = 0xD1 // 07 D1
+	subBandSelected  = 0xD2 // 07 D2, read/set which band is selected: 00/01
 
 	// The band selector carried by 25, 26 and the 29 prefix. remoses addresses
 	// these as VFO A and VFO B, which is how the radio's operator thinks of

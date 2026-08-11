@@ -1192,6 +1192,16 @@ type Caps struct {
 	// separate because a radio could in principle have the second receiver
 	// wired to something remoses cannot switch.
 	DualWatch bool `json:"dual_watch"`
+	// BandExchange reports that the two receivers' contents can be swapped, so
+	// that what the sub receiver was holding becomes the one remoses operates.
+	//
+	// It exists for a problem an IC-9700 has and its owner cannot work around
+	// remotely: that radio refuses to put its main receiver on a band its sub
+	// receiver is using, and nothing in the protocol addresses the sub. An
+	// operator who left 2 m on the sub band therefore cannot reach 2 m at all
+	// from the network — the frequency set is simply rejected — until the two
+	// are exchanged. See State.ExchangeBands for why it is an action.
+	BandExchange bool `json:"band_exchange"`
 	// PerVFOMode reports that each VFO carries its own mode, data-mode flag and
 	// filter, rather than only its own frequency. True on the IC-7610, whose
 	// command 26 addresses all three per VFO. Where it is false a client should

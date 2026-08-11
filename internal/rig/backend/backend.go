@@ -203,6 +203,31 @@ type VFOModeSelector interface {
 	SelectVFOMode(ctx context.Context, c Conn, vfo radio.VFO) error
 }
 
+// BandExchanger is implemented by a backend that can swap the contents of a
+// radio's two receivers, so that what the sub receiver was holding becomes the
+// one everything else here operates.
+//
+// Separate from DualVFO, which addresses the two VFOs *within* the receiver
+// remoses operates. This is one level up: it moves which band that receiver is
+// on. A radio can have either without the other.
+//
+// It exists because an IC-9700 has a band its owner cannot reach remotely at
+// all — see Caps.BandExchange — and it is an exchange rather than a "select the
+// sub band" for a reason that radio makes concrete. Selecting the sub band
+// does work there: the operating-frequency commands follow the selection, as
+// touching the display's sub field shows. But that radio's per-VFO commands are
+// documented "(Only MAIN band)" and keep addressing Main, so with the sub band
+// selected State.Frequency describes one receiver while State.VFOA and VFOB
+// describe the other. Exchanging leaves the selection on Main, and every
+// command remoses uses then describes the same receiver.
+type BandExchanger interface {
+	// ExchangeBands swaps the two receivers. Everything the session knows about
+	// the radio is stale afterwards — frequency, mode, both filters and both
+	// VFOs are all a different band's — so the caller re-reads in full rather
+	// than patching what it thinks changed.
+	ExchangeBands(ctx context.Context, c Conn) error
+}
+
 // FrontEndController is implemented by a backend that can work the receive
 // front end: the preamplifier, the attenuator, the RF gain and the AGC.
 //

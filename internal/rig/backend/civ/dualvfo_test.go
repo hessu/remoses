@@ -382,6 +382,50 @@ func TestIC9700SubReceiverIsNotRead(t *testing.T) {
 	}
 }
 
+// TestExchangeBandsSendsB0 covers the one route to a band an IC-9700 owner
+// cannot otherwise reach from the network: that radio refuses to put its main
+// receiver on a band the sub receiver is using, and nothing addresses the sub.
+func TestExchangeBandsSendsB0(t *testing.T) {
+	s := newSim(t)
+	s.backend = ic9700(t)
+
+	if !s.backend.Caps().BandExchange {
+		t.Fatal("caps deny the band exchange; the IC-9700 has 07 B0")
+	}
+	if err := s.backend.ExchangeBands(context.Background(), s); err != nil {
+		t.Fatalf("ExchangeBands: %v", err)
+	}
+
+	sent := s.log[len(s.log)-1]
+	cmd, body := sent[4], sent[5:len(sent)-1]
+	if cmd != cmdVFO || len(body) != 1 || body[0] != subExchangeBands {
+		t.Fatalf("sent %02X % X, want 07 B0", cmd, body)
+	}
+	if s.bandExchanges != 1 {
+		t.Errorf("the rig accepted %d exchanges, want 1", s.bandExchanges)
+	}
+}
+
+// The exchange must not be offered where the reference has not been read for
+// it. Every other Icom here is in that position, and this command moves both
+// receivers at once on a radio somebody may be listening to.
+func TestExchangeBandsRefusedWhereUnread(t *testing.T) {
+	s := newSim(t)
+	s.backend = testRig(t) // an IC-7610, whose table has not been read for 07 B0
+
+	if s.backend.Caps().BandExchange {
+		t.Fatal("caps advertise a band exchange on a model with no profile entry for one")
+	}
+	before := len(s.log)
+	err := s.backend.ExchangeBands(context.Background(), s)
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+	if len(s.log) != before {
+		t.Errorf("an unsupported exchange still put %d frame(s) on the wire", len(s.log)-before)
+	}
+}
+
 // TestSelectVFOModeIsTheWayOutOfMemory covers the only part of memory mode
 // remoses implements. A rig on a memory channel answers 25 and 26 with NG, so
 // its per-VFO readings go stale with nothing else in the API able to move them.

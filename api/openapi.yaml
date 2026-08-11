@@ -1056,6 +1056,29 @@ components:
             select which VFO, where the radio has such a command. Applied before
             everything else, since a rig on a memory channel refuses much of the
             rest.
+        exchange_bands:
+          type: boolean
+          description: |
+            `true` swaps the radio's two receivers, so the band the sub receiver
+            was holding becomes the one everything else operates. Needs
+            `caps.band_exchange`; 422 otherwise, and `false` is a 422 because
+            there is nothing it could swap back.
+
+            This exists for a band an operator otherwise cannot reach at all. An
+            IC-9700 refuses to put its main receiver on a band its sub receiver
+            is using, and no command addresses the sub — so 2 m left on the sub
+            side is simply unreachable from the network until the two exchange.
+
+            **Every field in the response changes at once**, because they all
+            describe a different band afterwards: frequency, mode, both filters
+            and both VFOs. remoses re-reads the radio in full before answering,
+            so the response is the new band rather than the old one, and a
+            client holding state should replace it rather than merge.
+
+            Applied before everything else in the same request, so
+            `{"exchange_bands": true, "frequency": 144300000}` brings the band
+            over and then tunes it — which is the reason an operator reaches for
+            this in the first place.
 
     Caps:
       type: object
@@ -1104,6 +1127,13 @@ components:
         dual_watch:
           type: boolean
           description: Receiving on both VFOs at once can be switched.
+        band_exchange:
+          type: boolean
+          description: |
+            The two receivers' contents can be swapped, with
+            `{"exchange_bands": true}`. True on an IC-9700, where it is the only
+            route to a band left on the sub receiver: that radio refuses to put
+            its main receiver on a band the sub one is using.
         per_vfo_mode:
           type: boolean
           description: |
