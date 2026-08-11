@@ -23,10 +23,11 @@ locally generated on a second serial port, and there was not one to use.
 
 It does not mean each radio re-ran the whole daemon. The parts that are not
 radio-specific — locking, the WebSocket, the safety interlocks, reconnect — were
-exercised once, on the IC-7610, and are shared code; the IC-9700 and the TS-590S
-confirmed the protocol surface and CW, not those again. The FT-857D did re-run
-reconnect and the interlocks, because its CAT set has no keyer to spend the
-session on and because it fails in a way the Icoms do not.
+exercised once, on the IC-7610, and are shared code; the TS-590S confirmed the
+protocol surface and CW, not those again. The FT-857D did re-run reconnect and
+the interlocks, because its CAT set has no keyer to spend the session on and
+because it fails in a way the Icoms do not. The IC-9700 re-ran reconnect too, as
+a side effect of switching it off and waking it again.
 
 ## The four
 
@@ -58,6 +59,78 @@ keyed and **heard on the air**.
 Not a re-run of the whole daemon — locking, the WebSocket and the interlocks are
 shared code already exercised on the IC-7610 — but everything CI-V-specific to
 that radio.
+
+**A later session finished the job**, over the radio's own USB, and it is now
+the most completely exercised radio here after the IC-7610. What that session
+added:
+
+- **The power switch, end to end.** Switched off over CAT, correctly reported as
+  `standby: true` on a link that stayed up, a command meanwhile answered 503
+  naming the remedy, and then **woken over the bus with nobody at the radio** —
+  152 `FE` dummy bytes and `18 01`, `FB` back, a few seconds of booting, and the
+  session back on the frequency it was left on. **Its USB survives standby**,
+  which is the thing that decides whether remote waking is possible at all: the
+  CP2102N inside the radio stays enumerated with the rig switched off, so the
+  wake has somewhere to go. That is not true of every radio and cannot be
+  assumed from this one.
+- **The whole receive front end**: the preamplifier, the 10 dB pad, RF gain, all
+  three AGC speeds and IP+, with a second preamplifier stage, a 20 dB pad and
+  DIGI-SEL correctly refused as things this radio does not have.
+- **The whole noise and notch group**: blanker and level, reducer and level, the
+  manual notch with its position and all three widths, the automatic notch, the
+  exclusivity between the two enforced in both directions, and a request for
+  both at once refused.
+- **The transmit meters under real RF.** Forward power 48/213, SWR 1.11:1 and
+  ALC to 119/120 on 70 cm at 10 % — and absent, not zero, the moment the
+  transmission ended.
+- **CW both ways, both heard on the air.** The rig's own CAT keyer, and then
+  locally generated Morse **keying DTR on the radio's second USB serial port** —
+  the first time `serial_key` has run against anything but an IC-7610, and the
+  first time it has keyed a port the radio itself provides.
+- **Transceive push updates**, 377 of them in twenty seconds, tracking the VFO
+  knob in 10 Hz steps between polls.
+- Every mode again including **DD**, which needs 1.2 GHz; the filter slots with
+  their per-slot widths; transmit power in percent, with watts correctly refused
+  on a radio that has no watt scale.
+
+Two gaps in that session, both about the station rather than the software: **2 m
+could not be tuned at all**, because the sub receiver was sitting on it (see
+below), and **nothing was transmitted on 23 cm**, because there is no antenna
+for it. Tuning to 1.2 GHz and setting DD there was exercised; keying it was not.
+
+**Three things the radio does that no manual here mentions**, all found in that
+session:
+
+- **The AGC is pinned to FAST in FM** — not unsettable there, which is what
+  remoses had recorded from the first session. `fast` is accepted and takes
+  effect; `mid` and `slow` draw an NG, and leaving FM restores the speed the
+  previous mode had. The earlier reading is what any sequence that never happens
+  to ask for `fast` will produce. It matters because a guard on the mode would
+  refuse the one speed that works — and remoses does not have one, which is the
+  only reason `fast` in FM works today.
+- **The preamplifier and the 10 dB attenuator are mutually exclusive**, enforced
+  from both sides in silence: setting either one moves the other, and both
+  commands are accepted. A client that writes one and assumes the other held
+  will be wrong.
+- **2 m is refused on the main receiver while the sub receiver is on 2 m.** Main
+  and Sub cannot share a band, so a well-formed `05` for 144 MHz draws an NG
+  while 70 cm and 23 cm go in. Nothing in the refusal says why, and nothing in
+  the protocol reports what band the sub is on — `caps.sub_receiver_readable` is
+  false for the same reason.
+
+It also found **one bug**, the same shape as the one an FT-857D found the day
+before: a VFO named in a request, accepted, and quietly applied to a different
+one. `{"vfo": "sub"}` was applied to VFO B and `{"vfo": "main"}` to VFO A on a
+radio whose `caps.vfos` lists neither — so a client asking to tune the second
+receiver got a 200 and a *main-band* VFO moved under it instead.
+
+The FT-857D's fix was not enough for it. That radio has no dual-VFO commands at
+all, so checking for them caught the case; an IC-9700 *has* them, and the check
+passed on a VFO the radio cannot reach. Both receivers on that radio have their
+own VFO A and B — the front-panel A/B button switches the Main receiver's pair —
+and `25`/`26` reach only Main's, which is exactly what `caps.vfos` says. A named
+VFO is now checked against that list as well, and refused whatever the backend
+could physically address. Fixed and re-verified on the radio.
 
 ### TS-590S
 
@@ -106,7 +179,7 @@ a live CW transmission inside a character.
 CW pacing was measured at **61 ms of drift over 18.3 seconds** on a rig whose
 buffer cannot be queried, so the timing is dead reckoning.
 
-## Fourteen bugs no amount of reading the reference would have found
+## Fifteen bugs no amount of reading the reference would have found
 
 Values written but never read back, so they reported a stale figure for ever;
 setters that quietly changed a neighbouring setting, because on CI-V several
@@ -117,12 +190,20 @@ healthy radio; a `Mode` that could not decode its own output; a serial port
 opened with its control lines already high, which one radio answered by saying
 nothing whatsoever; a VFO selection accepted as a success by a radio that cannot
 address a VFO at all; a data-mode flag carried forward into modes that have no
-data spelling, which left one radio with no way out of its packet mode; and a
+data spelling, which left one radio with no way out of its packet mode; a
 display drawing `power  0 %` for a radio with no power command, which reads as a
-fault rather than as a silence.
+fault rather than as a silence; and a request naming one receiver that was
+applied to another, because the check that a VFO is addressable is not the same
+question as whether it is the VFO that was asked for.
 
-All fourteen are fixed, with the measurements and reasoning in
+All fifteen are fixed, with the measurements and reasoning in
 [DESIGN.md](DESIGN.md) §5.4, §5.7, §6 and §11.2.
+
+**Two of them were the same bug found twice**, a day apart, on radios at
+opposite ends of the range — a VFO named in a request and quietly applied to a
+different one. The first fix was written against a radio with no dual-VFO
+commands and did not cover a radio that has them. That is the argument for
+connecting the next radio rather than reasoning about it.
 
 **The worst of them was invisible from this side: CW accepted, queued, drained
 on schedule — and never transmitted**, because the radio's break-in was off.

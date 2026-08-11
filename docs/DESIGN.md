@@ -2418,15 +2418,20 @@ here can tell, and inventing a parameter to send blind is not how it gets settle
 
 ### Two interlocks in no manual
 
-Verified on an IC-9700: **the AGC cannot be set in FM.** All three speeds go in under USB and
-every one of them draws an NG in FM — while a read still answers `fast`, so the state looks
-perfectly healthy and only the refusal says anything is different.
+Verified on an IC-9700: **the AGC is pinned to FAST in FM.** All three speeds go in under USB.
+In FM `16 12 01` is *accepted* and takes effect, while `02` and `03` both draw an NG — and a read
+answers throughout, so the state looks perfectly healthy and only the refusal says anything is
+different. Leaving FM restores the speed the previous mode had, so the radio keeps this per mode.
 
-Kenwood documents this restriction for its own AGC commands; none of the Icom references here
-mentions it. So on Icom it is reported from what the radio did rather than guarded before the
-write: the command still goes out, and a model that turns out to allow it is not fenced off on
-the strength of one radio. The reason is appended to the rig's own rejection, which otherwise
-says only "command rejected".
+A first pass at this radio recorded it as "the AGC cannot be set in FM", which is what it looks
+like from any sequence that does not happen to ask for FAST. The distinction matters: a guard on
+the mode would refuse the one speed that works.
+
+Which is why it is not a guard. Kenwood documents this restriction for its own AGC commands; none
+of the Icom references here mentions it. So on Icom it is reported from what the radio did rather
+than checked before the write: the command still goes out, a model that turns out to allow more is
+not fenced off on the strength of one radio, and the reason is appended to the rig's own
+rejection, which otherwise says only "command rejected".
 
 The read is left in the poll for the same reason it is safe to: FM answers it. That is the
 difference from Kenwood, where the equivalent read draws an audible error tone at the radio and

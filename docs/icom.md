@@ -99,7 +99,7 @@ expect the traffic.
 | IC-905 | `ic-905` | 6-byte frequency field on the 10 GHz band | — |
 | IC-910H | `ic-910h` | Own mode-code table; no CAT CW buffer; break-in is off/on only | — |
 | IC-9100 | `ic-9100` | | — |
-| IC-9700 | `ic-9700` | Main's two VFOs and split; sub band present but not readable; CW break-in | **yes** |
+| IC-9700 | `ic-9700` | Main's two VFOs and split; sub band present but not readable; no tuner; power switch, front end and CW both ways exercised on the air | **yes** |
 | other Icom | `generic` | Requires an explicit `civ.rig_address` | — |
 
 ## What your radio can and cannot do
@@ -168,10 +168,22 @@ other, because nothing in that radio's protocol reports which letter is which.
 On an IC-7610 it reads `named` and the labels are stable.
 
 **The IC-9700's sub band is deliberately left alone.** The radio has one and it
-receives independently, but no command addresses it — the only route is "select
-the sub band", which would move the operator's focus and fight whoever is
-holding the dial. So `caps.sub_receiver` is true, `caps.sub_receiver_readable`
-is false, and remoses never switches bands to read a meter.
+receives independently — with **its own VFO A and B**, as Main has; the
+front-panel A/B button switches Main's pair. But no command addresses the sub
+receiver: the only route is "select the sub band", which would move the
+operator's focus and fight whoever is holding the dial. So `caps.sub_receiver`
+is true, `caps.sub_receiver_readable` is false, and remoses never switches bands
+to read a meter.
+
+The A and B in `caps.vfos` are therefore **Main's two**, and a request naming
+`sub` is refused rather than quietly landing on one of them — which is what it
+used to do, and is the bug that radio found.
+
+**It also will not put Main on a band the sub receiver is using.** With the sub
+on 2 m, a perfectly well-formed frequency set for 144 MHz draws a rejection
+while 70 cm and 23 cm are accepted. Nothing in the refusal says why, and nothing
+in the protocol reports which band the sub is on, so remoses can only pass the
+radio's "no" back.
 
 Other Icoms very likely have `25` and `26` too. They stay off until each radio's
 own reference has been read, which is the rule the rest of this page follows.
@@ -222,11 +234,24 @@ sets a different speed and looks like a success.
   the 422 and does not switch the preselector off to make the request succeed.
   The radio enforces it from the other side too: switching DIGI-SEL in while a
   preamplifier is selected switches that preamplifier out.
-- **An IC-9700 cannot set the AGC in FM.** All three speeds go in under USB and
-  every one draws a rejection in FM, while a read still answers `fast` — so the
-  state looks healthy and only the refusal says otherwise. remoses adds the
-  reason and still sends the command, rather than fencing off a mode on the
-  strength of one radio.
+- **An IC-9700 pins the AGC to fast in FM.** All three speeds go in under USB;
+  in FM `fast` is *accepted* and takes effect while `mid` and `slow` are
+  refused, and a read answers throughout — so the state looks healthy and only
+  the refusal says otherwise. Leaving FM restores the speed the previous mode
+  had. remoses adds the reason and still sends the command, rather than fencing
+  off a mode on the strength of one radio, which is exactly why the one speed
+  that works is not refused along with the two that do not.
+- **An IC-9700's preamplifier and 10 dB attenuator are mutually exclusive**, and
+  the radio enforces it from both sides without saying so: switching the pad in
+  switches the preamplifier out, switching the pad out puts it back, and
+  switching the preamplifier in takes the pad out. Both commands are accepted —
+  it is the *other* control that moves — so a client that writes one and assumes
+  the other held its value will be wrong. remoses re-reads both after any
+  front-end write.
+- **An IC-9700 refuses 2 m on the main receiver while its sub receiver is on
+  2 m.** Main and Sub cannot share a band, so a perfectly well-formed `05` for
+  144 MHz draws an NG while 70 cm and 23 cm are accepted. Nothing in the frame
+  or the refusal says which band the sub is on.
 - **The two notches silently switch each other off.** Separate commands on an
   Icom, with nothing in either reference about the interaction. Verified in both
   directions.

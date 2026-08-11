@@ -157,14 +157,18 @@ func (r *Rig) SetAGC(ctx context.Context, c backend.Conn, v radio.AGC) error {
 	err := r.set(ctx, c, "AGC", r.frame(cmdFunc, subAGC, code))
 	if err != nil && radio.Mode(r.mode.Load()) == radio.ModeFM {
 		// Refused, and there is a known reason it is refused in this mode: the
-		// AGC is fixed in FM. Verified on an IC-9700, which sets all three
-		// speeds in USB and answers NG to every one of them in FM — while still
-		// ANSWERING a read with "fast", so nothing but the refusal says so.
+		// AGC is fixed in FM. Verified on an IC-9700, which pins it to FAST
+		// there — 16 12 01 is ACCEPTED and takes effect, while 02 and 03 both
+		// draw an NG. A read answers throughout, so nothing but the refusal
+		// says anything is different, and leaving FM restores the speed the
+		// previous mode had.
 		//
-		// Kenwood documents the same restriction for its own AGC commands and
-		// this backend's Icom references do not, which is why it is reported
-		// from what the radio did rather than guarded before the write: on a
-		// model that turns out to allow it, the command still goes out.
+		// That is why this is a message appended to the radio's own refusal
+		// rather than a guard before the write. Fencing FM off would refuse the
+		// one speed that works, and Kenwood documents the same restriction for
+		// its own AGC commands while none of this backend's Icom references
+		// mentions it — so on a model that turns out to allow more, the command
+		// still goes out and the radio decides.
 		return fmt.Errorf("%w (the AGC is fixed in FM on this radio; "+
 			"it can be set in the other modes)", err)
 	}
