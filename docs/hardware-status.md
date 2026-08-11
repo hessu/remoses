@@ -183,7 +183,7 @@ Later still, its **receive front end**: preamplifier, attenuator, RF gain and
 all three AGC states, then the **noise blanker, noise reduction, both notches
 and the antenna selector**.
 
-It found six bugs in the process: one that stopped it connecting at all, the
+It found bugs in the process: one that stopped it connecting at all, the
 break-in gap again, two in the tuner command, one that made switching the AGC
 off a trip with no way back, and one where a request the radio silently ignored
 was reported as a success.
@@ -215,7 +215,7 @@ a live CW transmission inside a character.
 CW pacing was measured at **61 ms of drift over 18.3 seconds** on a rig whose
 buffer cannot be queried, so the timing is dead reckoning.
 
-## Sixteen bugs no amount of reading the reference would have found
+## Bugs no amount of reading the reference would have found
 
 Values written but never read back, so they reported a stale figure for ever;
 setters that quietly changed a neighbouring setting, because on CI-V several
@@ -233,7 +233,7 @@ to another, because the check that a VFO is addressable is not the same question
 as whether it is the VFO that was asked for; and a state whose halves described
 two different receivers with nothing published that said which was which.
 
-All sixteen are fixed, with the measurements and reasoning in
+All of them are fixed, with the measurements and reasoning in
 [DESIGN.md](DESIGN.md) §5.4, §5.7, §6 and §11.2.
 
 **Two of them were the same bug found twice**, a day apart, on radios at

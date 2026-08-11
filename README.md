@@ -23,9 +23,9 @@ Everything else was transcribed from the manufacturers' own reference
 documentation and is exercised against simulated rigs in the test suite. That
 proves the code matches what the manual says. It does not prove the manual is
 right, or that a particular radio behaves the way its documentation claims.
-Between them the four found **sixteen bugs no amount of reading the reference
-would have** — including CW that was accepted, queued, drained on schedule and
-never transmitted, which only an operator listening could have caught.
+Between them they turned up **bugs no amount of reading the reference would
+have** — including CW that was accepted, queued, drained on schedule and never
+transmitted, which only an operator listening could have caught.
 
 **[docs/hardware-status.md](docs/hardware-status.md)** — what was exercised on
 each radio, what the bugs were, and what this still does not tell you. Read it

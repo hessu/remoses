@@ -185,8 +185,8 @@ Everything below is for somebody reading the code or debugging a frame.
 
 ## Facts that came from the radio, not the manual
 
-A TS-590S found six bugs on its first session. Three of them were things the
-radio does that its reference does not describe:
+A TS-590S found a batch of bugs on its first session. These were the ones that
+are things the radio does and its reference does not describe:
 
 - **Switching the AGC off is a one-way trip unless you know the trick.** With
   the AGC off, `GC1` and `GC2` are *both* refused and the radio stays off. A
