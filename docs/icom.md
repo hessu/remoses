@@ -185,6 +185,22 @@ while 70 cm and 23 cm are accepted. Nothing in the refusal says why, and nothing
 in the protocol reports which band the sub is on, so remoses can only pass the
 radio's "no" back.
 
+**Which is what `{"exchange_bands": true}` is for** — `07 B0`, and the only way
+to work a band that is sitting on the sub receiver. See
+[exchanging the two receivers](features.md#exchanging-the-two-receivers). It is
+offered on the IC-9700 alone, because that is the radio whose reference has been
+read for the command and the one that needs it.
+
+**One state to be aware of, which remoses cannot currently see.** Touching the
+sub frequency field on the radio's own display *selects* that side, and the
+operating commands follow it: `state.frequency` and `state.mode` then report the
+sub receiver. But `25`/`26` keep addressing Main, so `state.vfo_a` and
+`state.vfo_b` go on describing the other receiver. The two halves of the state
+disagree about which receiver they are talking about, and nothing remoses reads
+today says so — `07 D2` would report it and is not polled. Verified on the radio
+by touching the display and watching `frequency` jump to 144.174 while the VFO
+pair stayed on 70 cm. Exchanging is unaffected: it leaves the focus where it is.
+
 Other Icoms very likely have `25` and `26` too. They stay off until each radio's
 own reference has been read, which is the rule the rest of this page follows.
 

@@ -44,6 +44,32 @@ which, and remoses will not guess.
 operator stuck on a memory channel actually needs; a rig left there refuses the
 per-VFO commands and its readings go stale.
 
+## Exchanging the two receivers
+
+`{"exchange_bands": true}`, gated by `caps.band_exchange`, swaps a radio's two
+receivers so that the band the sub one was holding becomes the band everything
+else operates.
+
+**It exists for a band you otherwise cannot reach at all.** An IC-9700 refuses
+to put its main receiver on a band its sub receiver is using — leave 2 m on the
+sub side and a frequency set for 144 MHz is simply rejected — and no command
+addresses the sub receiver. Exchanging is the only route in.
+
+Like `vfo_mode` and `tuner_tune` it is an **action**: true only, with nothing to
+read back, so `false` is a 422. And it is **applied before everything else in
+the same request**, so this works in one call:
+
+```json
+{"exchange_bands": true, "frequency": 144300000, "mode": "USB"}
+```
+
+**Every field changes at once.** Frequency, mode, both filters and both VFOs now
+describe a different band, so remoses re-reads the radio in full before
+answering and a client holding state should replace it rather than merge.
+
+Note that the *other* receiver has its own VFO A and B, and after an exchange
+`state.vfo_a` and `state.vfo_b` are that pair rather than the one they were.
+
 ## PTT and the transmit meters
 
 `{"ptt": true}` keys the radio, where the radio has a command for it. A few do

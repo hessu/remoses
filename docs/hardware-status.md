@@ -93,10 +93,32 @@ added:
   their per-slot widths; transmit power in percent, with watts correctly refused
   on a radio that has no watt scale.
 
-Two gaps in that session, both about the station rather than the software: **2 m
-could not be tuned at all**, because the sub receiver was sitting on it (see
-below), and **nothing was transmitted on 23 cm**, because there is no antenna
-for it. Tuning to 1.2 GHz and setting DD there was exercised; keying it was not.
+One gap in that session: **nothing was transmitted on 23 cm**, because there is
+no antenna for it. Tuning to 1.2 GHz and setting DD there was exercised; keying
+it was not.
+
+**2 m could not be tuned either — and that turned into a feature.** The sub
+receiver was sitting on 2 m, and the radio will not put Main on a band Sub is
+using, so the band was unreachable from the network with nothing in the API able
+to move it. `{"exchange_bands": true}` (`07 B0`) is the fix, and it was written,
+tested and verified in the same session: 2 m refused, exchanged, 144.300 tuned,
+exchanged back, 70 cm restored. The combined form —
+`{"exchange_bands": true, "frequency": 144300000}` — brings the band over and
+tunes it in one call.
+
+The exchange also made the two-receiver structure visible: after swapping,
+`vfo_a` and `vfo_b` read 144.174 and 144.173 where they had read 433.950 and
+432.500. Each receiver has its own pair, and remoses's A and B are whichever
+receiver is on Main.
+
+**One thing that is still not right, found while settling that design.**
+Touching the sub frequency field on the radio's own display selects that side,
+and the operating commands follow it — `state.frequency` reports the sub
+receiver — while `25`/`26` keep addressing Main, so `state.vfo_a` and
+`state.vfo_b` describe the other one. The published state then disagrees with
+itself about which receiver it is describing, from one touch of the screen and
+with remoses having done nothing. `07 D2` reports which band is selected and is
+not polled. Recorded rather than fixed.
 
 **Three things the radio does that no manual here mentions**, all found in that
 session:
@@ -230,9 +252,11 @@ Kenwood backend had no notion of break-in at all.
   would send the unkey over is the one that vanished. Only the radio's own
   time-out ends that, so set one.
 - **A few known rough edges are recorded rather than fixed**, including the CW
-  queue position reported after a `replace` and the lock lease not being
-  extended by a long transmission. They are in [DESIGN.md](DESIGN.md); none of
-  them keys a transmitter.
+  queue position reported after a `replace`, the lock lease not being extended
+  by a long transmission, and an IC-9700 whose published state splits across two
+  receivers when the operator selects the sub band at the radio. They are in
+  [DESIGN.md](DESIGN.md) and on the [Icom page](icom.md); none of them keys a
+  transmitter.
 - Expect to find protocol bugs. The per-model differences are collected in
   [DESIGN.md](DESIGN.md) §5.2–§5.7, which is the place to look first.
 
