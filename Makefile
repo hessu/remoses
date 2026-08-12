@@ -9,6 +9,10 @@ CLI_BIN    := remoses-cli
 CLI_CMD    := ./cmd/remoses-cli
 BUILD_DIR  := build
 DIST_DIR   := dist
+# Archives are staged somewhere the cross binaries are not, because one of them
+# is called `remoses` and so is the directory an archive unpacks to. Staging in
+# place deleted the daemon and shipped archives with only the CLI in them.
+STAGE_DIR  := dist/.stage
 
 # name:package pairs, so the build and cross targets iterate rather than
 # repeating themselves once per binary.
@@ -18,13 +22,32 @@ VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo d
 GOFLAGS    ?=
 LDFLAGS    := -s -w -X main.version=$(VERSION)
 
-# The release targets are the platforms remoses is meant to run on: a Pi at the
-# radio site, a Linux or Windows shack PC, a Mac. CGO is off everywhere — the
-# whole point of the dependency choices is a single static binary per platform.
-PLATFORMS := linux/amd64 linux/arm64 linux/arm darwin/amd64 darwin/arm64 windows/amd64
+# The release targets, as os/arch[/goarm]: the platforms remoses is meant to run
+# on — a Pi at the radio site, a Linux or Windows shack PC, a Mac. CGO is off
+# everywhere, which is the whole point of the dependency choices: one static
+# binary per platform, nothing to install beside it.
+#
+# Both 32-bit ARM entries are Raspberry Pi, and they are not interchangeable:
+#
+#   armv6   Pi 1, Pi Zero and Zero W
+#   armv7   Pi 2, and any later Pi running a 32-bit Raspberry Pi OS
+#   arm64   Pi 3, 4, 5 and Zero 2 W on a 64-bit Raspberry Pi OS
+#
+# GOARM is written down rather than left to the toolchain because its default
+# has changed between Go releases, and a v7 binary does not run on a Pi Zero —
+# it dies with an illegal instruction, which is a miserable thing to debug at a
+# remote site.
+PLATFORMS := \
+	linux/amd64 \
+	linux/arm64 \
+	linux/arm/7 \
+	linux/arm/6 \
+	darwin/amd64 \
+	darwin/arm64 \
+	windows/amd64
 
 .PHONY: all build test race cover vet fmt fmt-check lint check run config-check \
-        cross clean tidy help
+        cross release clean tidy help
 
 all: build ## Build the binaries
 
@@ -65,17 +88,57 @@ config-check: build ## Validate remoses.example.yaml
 cross: ## Build release binaries for every target platform into dist/
 	@mkdir -p $(DIST_DIR)
 	@for p in $(PLATFORMS); do \
-		os=$${p%/*}; arch=$${p#*/}; \
+		os=$$(echo $$p | cut -d/ -f1); \
+		arch=$$(echo $$p | cut -d/ -f2); \
+		goarm=$$(echo $$p | cut -d/ -f3 -s); \
+		label=$$os-$$arch; \
+		if [ -n "$$goarm" ]; then label=$$os-armv$$goarm; fi; \
 		ext=''; [ "$$os" = windows ] && ext='.exe'; \
-		echo "  $$os/$$arch"; \
+		echo "  $$label"; \
 		for t in $(TARGETS); do \
 			name=$${t%:*}; pkg=$${t#*:}; \
-			out=$(DIST_DIR)/$$name-$(VERSION)-$$os-$$arch$$ext; \
-			GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 \
+			out=$(DIST_DIR)/$$name-$(VERSION)-$$label$$ext; \
+			GOOS=$$os GOARCH=$$arch GOARM=$$goarm CGO_ENABLED=0 \
 				go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $$out $$pkg || exit 1; \
 		done; \
 	done
 	@echo "release binaries in $(DIST_DIR)/"
+
+# release packages what cross built: one archive per platform carrying both
+# binaries, the licence, the user guide and the annotated example configuration.
+#
+# An archive rather than a bare binary because of who downloads this. Somebody
+# putting remoses on a Pi needs remoses.example.yaml to get anywhere at all, and
+# a tarball preserves the executable bit that a browser download does not.
+release: cross ## Package dist/ into per-platform archives with checksums
+	@rm -f $(DIST_DIR)/SHA256SUMS
+	@rm -rf $(STAGE_DIR)
+	@for p in $(PLATFORMS); do \
+		os=$$(echo $$p | cut -d/ -f1); \
+		arch=$$(echo $$p | cut -d/ -f2); \
+		goarm=$$(echo $$p | cut -d/ -f3 -s); \
+		label=$$os-$$arch; \
+		if [ -n "$$goarm" ]; then label=$$os-armv$$goarm; fi; \
+		ext=''; [ "$$os" = windows ] && ext='.exe'; \
+		dir=remoses-$(VERSION)-$$label; \
+		stage=$(STAGE_DIR)/$$dir; \
+		mkdir -p $$stage; \
+		for t in $(TARGETS); do \
+			name=$${t%:*}; \
+			cp $(DIST_DIR)/$$name-$(VERSION)-$$label$$ext $$stage/$$name$$ext || exit 1; \
+		done; \
+		cp LICENSE README.md remoses.example.yaml $$stage/ || exit 1; \
+		mkdir -p $$stage/docs && cp docs/*.md $$stage/docs/ || exit 1; \
+		if [ "$$os" = windows ]; then \
+			(cd $(STAGE_DIR) && zip -qr $(CURDIR)/$(DIST_DIR)/$$dir.zip $$dir) || exit 1; \
+		else \
+			tar -czf $(DIST_DIR)/$$dir.tar.gz -C $(STAGE_DIR) $$dir || exit 1; \
+		fi; \
+		echo "  packaged $$dir"; \
+	done
+	@rm -rf $(STAGE_DIR)
+	@cd $(DIST_DIR) && (shasum -a 256 *.tar.gz *.zip 2>/dev/null || sha256sum *.tar.gz *.zip) > SHA256SUMS
+	@echo "release archives in $(DIST_DIR)/"
 
 tidy: ## go mod tidy
 	go mod tidy

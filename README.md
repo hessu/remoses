@@ -157,17 +157,41 @@ dial/backoff/reconnect path:
   ser2net or a hardware terminal server;
 - **`rigctld`** over TCP.
 
+## Downloads
+
+Every tagged release carries prebuilt archives, published automatically from
+the tag. Each contains both binaries, the example configuration, the user guide
+and the licence; `SHA256SUMS` beside them covers the lot.
+
+| Archive | For |
+|---|---|
+| `linux-amd64` | An ordinary Linux PC or server. |
+| `linux-arm64` | Raspberry Pi 3, 4, 5 or Zero 2 W on **64-bit** Raspberry Pi OS. |
+| `linux-armv7` | Raspberry Pi 2, or a 3/4/5 running a **32-bit** OS. |
+| `linux-armv6` | Raspberry Pi 1, Zero and Zero W. |
+| `windows-amd64` | A Windows shack PC. |
+| `darwin-arm64`, `darwin-amd64` | Apple silicon and Intel Macs. |
+
+**The two 32-bit Pi builds are not interchangeable.** An armv7 binary on a Pi
+Zero dies with an illegal instruction, which is a miserable thing to diagnose at
+a remote site. If you are unsure, `uname -m` reports `aarch64` for 64-bit,
+`armv7l` for a Pi 2 and up on a 32-bit OS, and `armv6l` for a Pi 1 or Zero.
+
+Nothing needs installing beside the binary: one static executable per command,
+no cgo, no runtime.
+
 ## Building
 
 ```sh
 make          # build remoses and remoses-cli into build/
 make test     # go test -race ./...
 make check    # fmt-check + vet + test, the pre-commit target
-make cross    # release binaries for linux, darwin and windows into dist/
+make cross    # cross-compiled binaries into dist/
+make release  # ...packaged into per-platform archives with checksums
 ```
 
-Single static binary per command, no cgo. Cross-compiles to linux/amd64,
-linux/arm64, linux/arm, darwin/amd64, darwin/arm64 and windows/amd64.
+`make release` is exactly what the tag build runs, so a release can be
+reproduced on a laptop, and the platform list lives in the Makefile alone.
 
 ## Getting started
 

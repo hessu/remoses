@@ -1,0 +1,73 @@
+# Release builds: cross-compile every supported platform and publish them.
+#
+# Triggered by pushing a version tag. The binaries are built for a Pi at the
+# radio site, a Linux or Windows shack PC and a Mac — all from one runner,
+# because Go cross-compiles and CGO is off everywhere, so a matrix of runners
+# would buy nothing but minutes.
+#
+# The platform list lives in the Makefile and only there. This calls `make
+# release`, so a platform is added in one place and `make release` on a laptop
+# produces what the tag produces.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # For checking the packaging without cutting a release. It uploads the
+  # archives as workflow artifacts and publishes nothing.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The version is stamped from `git describe --tags`, so the tags have
+          # to be here. A shallow clone silently produces binaries that report
+          # a commit hash instead of the release they are.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Nothing gets published that has not passed the same checks a pull
+      # request has to. A release is the worst place to find out.
+      - name: gofmt, vet and the race tests
+        run: make check
+
+      - name: Cross-compile and package
+        run: make release
+
+      - name: What was built
+        run: |
+          ls -l dist/*.tar.gz dist/*.zip
+          cat dist/SHA256SUMS
+
+      # Always, so a workflow_dispatch run leaves something to inspect.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remoses-release
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+      # Only a tag becomes a release. `gh` is preinstalled on the runner and
+      # authenticated by GITHUB_TOKEN, which keeps a third-party action out of
+      # the one workflow that signs the artifacts people download.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS
