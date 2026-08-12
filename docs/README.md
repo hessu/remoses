@@ -4,6 +4,8 @@ Start here if you are setting remoses up in front of a radio.
 
 ## Setting up
 
+- **[Installing](install.md)** — the one-line installers for Linux, Raspberry
+  Pi, macOS and Windows, running it as a service, and doing it by hand.
 - **[Configuration](configuration.md)** — the configuration file end to end:
   the server, users and passwords, how a radio's port is described, poll rates,
   band and power limits, and the dead-man timer.

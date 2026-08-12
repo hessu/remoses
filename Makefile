@@ -44,7 +44,8 @@ PLATFORMS := \
 	linux/arm/6 \
 	darwin/amd64 \
 	darwin/arm64 \
-	windows/amd64
+	windows/amd64 \
+	windows/arm64
 
 .PHONY: all build test race cover vet fmt fmt-check lint check run config-check \
         cross release clean tidy help

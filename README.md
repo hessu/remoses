@@ -157,6 +157,38 @@ dial/backoff/reconnect path:
   ser2net or a hardware terminal server;
 - **`rigctld`** over TCP.
 
+## Installing
+
+**Linux, Raspberry Pi and macOS:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/hessu/remoses/main/install.sh | sh
+```
+
+**Windows**, in PowerShell — `irm` and `iex` are built in, nothing to install
+first:
+
+```powershell
+irm https://raw.githubusercontent.com/hessu/remoses/main/install.ps1 | iex
+```
+
+Both work out which build your machine needs, **verify the download against the
+release's `SHA256SUMS`**, and install two binaries. The Windows one installs
+per-user and needs no administrator. Neither leaves anything running.
+
+To read the script before running it, which is the right instinct:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/hessu/remoses/main/install.sh
+less install.sh && sh install.sh
+```
+
+Add `--systemd` on Linux to also create a service that starts at boot — a
+`remoses` user in the `dialout` group, a configuration in `/etc/remoses`, and a
+unit that is installed but **not started**, because the example configuration
+still has example passwords in it. See [docs/install.md](docs/install.md) for
+the options, and for doing it by hand instead.
+
 ## Downloads
 
 Every tagged release carries prebuilt archives, published automatically from
@@ -170,6 +202,7 @@ and the licence; `SHA256SUMS` beside them covers the lot.
 | `linux-armv7` | Raspberry Pi 2, or a 3/4/5 running a **32-bit** OS. |
 | `linux-armv6` | Raspberry Pi 1, Zero and Zero W. |
 | `windows-amd64` | A Windows shack PC. |
+| `windows-arm64` | Windows on ARM. |
 | `darwin-arm64`, `darwin-amd64` | Apple silicon and Intel Macs. |
 
 **The two 32-bit Pi builds are not interchangeable.** An armv7 binary on a Pi
