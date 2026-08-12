@@ -12,6 +12,26 @@ import (
 	"github.com/hessu/remoses/internal/transport"
 )
 
+// warnUnenforceableLimits says so when a configured power limit cannot bind.
+//
+// `limits.max_power_w` needs a full-scale wattage to clamp against, and a radio
+// that reports power as an uncalibrated fraction has none — so the limit is
+// silently no limit at all, on the one setting an operator writes down
+// specifically to be safe. Being quiet about that is the worst of the options.
+//
+// It is checked here rather than at startup because the radios this catches are
+// exactly the ones whose capabilities are not known until they answer: a
+// rigctld rig takes its power scale from Hamlib at connect. See
+// backend.CapsAtConnect.
+func (s *Session) warnUnenforceableLimits() {
+	caps := s.Caps()
+	if s.cfg.Limits.MaxPowerW > 0 && caps.MaxPowerW <= 0 {
+		s.log.Warn("limits.max_power_w cannot be enforced on this radio and is being ignored; "+
+			"it reports power on a relative scale with no watt meaning, so use limits.max_power_pct instead",
+			"max_power_w", s.cfg.Limits.MaxPowerW)
+	}
+}
+
 // supervise keeps the radio connected. USB serial is a supervised resource, not
 // a handle you open once: the cable gets pulled, the rig gets switched off, and
 // on Linux and macOS the device path is not even stable across a replug.
@@ -147,6 +167,7 @@ func (s *Session) runConnection(ctx context.Context) (connected bool, err error)
 	s.connected.Store(true)
 	s.apply(radio.Patch{Connected: ptrTo(true)}, EventConn, "")
 	s.log.Info("radio connected", "target", s.dialer.Describe(), "backend", s.backend)
+	s.warnUnenforceableLimits()
 
 	pollCtx, stopPoll := context.WithCancel(ctx)
 	defer stopPoll()
