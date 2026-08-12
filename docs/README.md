@@ -12,6 +12,9 @@ Start here if you are setting remoses up in front of a radio.
   transmit meters, CW, break-in, the antenna tuner, the receive front end, and
   switching the radio itself off and on.
 - **[remoses-cli](remoses-cli.md)** — the read-only terminal monitor.
+- **[remoses test-run](test-run.md)** — exercise everything your radio can do
+  and write a report. **If your radio is not in the tested list, this is the
+  most useful thing you can do with it.**
 
 ## Your radio
 

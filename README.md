@@ -33,6 +33,41 @@ before pointing remoses at a transmitter.
 
 Do not leave it running an unattended station yet.
 
+### If you have one of the untested radios
+
+`remoses test-run` exercises everything your radio says it can do, puts the
+radio back as it found it, and writes a report to send back. A minute of your
+time is worth more to this project than any amount of re-reading the
+manufacturer's reference.
+
+```sh
+remoses test-run                                   # receive only; never keys the radio
+remoses test-run -tx-freq 28030000                 # ...and test transmitting there
+remoses test-run -tx-freq 28030000 -tx-power-pct 25 -cw-text "TEST DE N0CALL"
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-config PATH` | `remoses.yaml` | Which configuration file to read. |
+| `-radio ID` | the only one | Which configured radio to test. Required if the file has more than one. |
+| `-tx-freq HZ` | *none* | **The transmit switch.** Without it the run never keys the radio. With it, the run may key the transmitter, check the transmit meters, send a short CW message and run one antenna-tuner cycle. Pick a frequency you are licensed and equipped to use. |
+| `-tx-power-pct N` | `10` | Power for the transmit tests, percent. |
+| `-cw-text TEXT` | `TEST TEST DE REMOSES` | What the CW test sends. **Put your own callsign here** — `N0CALL` in these examples is a placeholder, not something to transmit. |
+| `-test-power-switch` | off | Also switch the radio off over CAT and wake it again. Off by default: whether a wake works is a wiring question, and a radio that will not wake needs somebody standing at it. |
+| `-notes TEXT` | *none* | Free text about your station, copied into the report header. |
+| `-out PATH` | `remoses-selftest-<radio>-<time>.jsonl` | Where to write the report. |
+| `-log-level LEVEL` | `info` | Terminal chatter. The CAT trace goes in the report regardless. |
+
+The report is JSON Lines — a header with your radio's capabilities, one line per
+step with the request, the read-back and **the CAT frames that went over the
+wire**, and a summary. A few tens of kilobytes, with nothing secret in it.
+
+**Send it to <remoses-logs@he.fi>**, and say whether the CW was audible if you
+ran the transmit tests — that is the one thing the file cannot record.
+
+**[docs/test-run.md](docs/test-run.md)** has the detail, including how to read a
+report and what it deliberately does not cover.
+
 ## Supported radios
 
 **Tested** marks radios confirmed against real hardware: every CAT feature
