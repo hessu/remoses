@@ -47,12 +47,21 @@ import (
 var version = "dev"
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "passwd" {
-		if err := passwd(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "remoses passwd:", err)
-			os.Exit(1)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "passwd":
+			if err := passwd(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "remoses passwd:", err)
+				os.Exit(1)
+			}
+			return
+		case "test-run":
+			if err := testRun(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "remoses test-run:", err)
+				os.Exit(1)
+			}
+			return
 		}
-		return
 	}
 
 	var (
@@ -87,6 +96,7 @@ func usage() {
 usage:
   remoses [flags]
   remoses passwd [-cost N] [username]
+  remoses test-run [-radio ID] [-tx-freq HZ]   exercise a radio and write a report
 
 flags:
 `, version)
@@ -225,33 +235,45 @@ func buildSessions(cfg *config.Config, log *slog.Logger) ([]*rig.Session, []inte
 		closers  []interface{ Close() error }
 	)
 	for i := range cfg.Radios {
-		rc := cfg.Radios[i]
-
-		b, err := backend.New(&rc)
+		s, c, err := buildSession(cfg.Radios[i], log)
 		if err != nil {
-			return nil, closers, fmt.Errorf("radio %q: %w", rc.ID, err)
+			return nil, closers, err
 		}
-		dialer, err := dialerFor(rc)
-		if err != nil {
-			return nil, closers, fmt.Errorf("radio %q: %w", rc.ID, err)
-		}
-		s, err := rig.NewSession(rc, b, dialer, rig.WithLogger(log))
-		if err != nil {
-			return nil, closers, fmt.Errorf("radio %q: %w", rc.ID, err)
-		}
-
-		if rc.CW.Enabled {
-			c, err := attachCW(s, b, rc, log)
-			if err != nil {
-				return nil, closers, fmt.Errorf("radio %q cw: %w", rc.ID, err)
-			}
-			if c != nil {
-				closers = append(closers, c)
-			}
+		if c != nil {
+			closers = append(closers, c)
 		}
 		sessions = append(sessions, s)
 	}
 	return sessions, closers, nil
+}
+
+// buildSession wires one radio: backend, transport and CW sender.
+//
+// Split out of buildSessions so that `remoses test-run` builds its session the
+// same way the daemon does. That is the whole point of it being shared — a
+// self-test that assembled the radio differently from the program it is
+// testing would be checking something nobody runs.
+func buildSession(rc config.Radio, log *slog.Logger) (*rig.Session, interface{ Close() error }, error) {
+	b, err := backend.New(&rc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("radio %q: %w", rc.ID, err)
+	}
+	dialer, err := dialerFor(rc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("radio %q: %w", rc.ID, err)
+	}
+	s, err := rig.NewSession(rc, b, dialer, rig.WithLogger(log))
+	if err != nil {
+		return nil, nil, fmt.Errorf("radio %q: %w", rc.ID, err)
+	}
+	if !rc.CW.Enabled {
+		return s, nil, nil
+	}
+	c, err := attachCW(s, b, rc, log)
+	if err != nil {
+		return nil, nil, fmt.Errorf("radio %q cw: %w", rc.ID, err)
+	}
+	return s, c, nil
 }
 
 // dialerFor picks the transport a radio needs.
