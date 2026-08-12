@@ -205,6 +205,54 @@ dropping PTT.
 Its CW could not be tried: this radio has no CAT keyer at all, and the
 `serial_key` path needs a second serial port that was not there.
 
+### IC-7610 behind Hamlib rigctld
+
+The same radio as the first entry, reached the other way: a Hamlib 4.7 daemon on
+the shack LAN, `backend: rigctld`, over TCP. **The first test of that backend
+against anything but its own unit tests**, and the point of it is the path
+rather than the radio — remoses's own view of an IC-7610 is already known, so
+anything that differs here is Hamlib or this backend.
+
+Frequency across three bands, every one of the ten modes Hamlib lists for it
+with `DV` correctly refused as one it does not, the filter width, transmit power
+in percent, PTT with the transmit meters appearing only while keyed, and **CW
+heard on the air at 28.030 MHz** through Hamlib's own keyer at 25% and at full
+power — the queue draining in 20-character chunks, and an abort clearing it
+mid-message and dropping PTT within a second.
+
+**`swr_ratio` really does arrive calibrated**, which this project had claimed
+for a long time without having checked. A continuous 1.03, 1.04, 1.07 at low
+power and 1.29, 1.36 at full, where the same radio on its native backend answers
+from a four-point table and stops extrapolating past the top one.
+
+Everything this backend does not implement was refused cleanly and named: the
+receive front end, the noise and notch group, the tuner, split, the second VFO,
+the power switch, filter slots, and power in watts. On an IC-7610 that is most
+of the radio, which is the argument for the native backend where one exists.
+
+**It found two bugs in the first minute, both from the same root**: this backend
+learns what the rig can do at connect, and remoses assumed a backend could
+answer that before dialling.
+
+- **`cw.method: cat` was refused for every rigctld radio.** The daemon checked
+  the CW capability at startup, before the first connection, where this
+  backend's capabilities are an honest placeholder saying "none". The rig had a
+  keyer and said so a second later. All of `morse.go` was unreachable by
+  configuration.
+- **`limits.max_power_w` was silently no limit at all.** Hamlib reports power as
+  a fraction with no watt meaning here, and a watt limit needs a full-scale
+  wattage to clamp against, so it could never bind — on the one setting an
+  operator writes down specifically to be safe. It now warns at connect and
+  names `max_power_pct`.
+
+**One thing that cannot be fixed from here.** Hamlib answers reads from its own
+cache — 1000 ms on this daemon — and remoses reads back after a write faster
+than that, so the reply to a write can carry the value from before it. Set AM
+and the response holds the previous mode's filter width; the next poll agrees
+with the radio. remoses could tell the daemon to stop caching, but `rigctld`
+serves every client from one rig instance and that is not this process's to
+change.
+
 ## The interlocks were fired for real
 
 Not against fakes: band limits refusing an out-of-band tune, power clamping, the
@@ -251,11 +299,16 @@ Kenwood backend had no notion of break-in at all.
 
 ## What this still does not tell you
 
-- **What has been verified is two Icoms, a Kenwood and a Yaesu**, named above.
-  Treat every other model as "implemented from documentation, awaiting
-  confirmation". The **ASCII** Yaesu profiles — a different protocol from the
-  FT-857D that was tested — the remaining Icom profiles and the other Kenwood
-  profiles have never seen a radio, and neither has the rigctld backend.
+- **What has been verified is two Icoms, a Kenwood and a Yaesu**, named above,
+  plus one of those Icoms through Hamlib. Treat every other model as
+  "implemented from documentation, awaiting confirmation". The **ASCII** Yaesu
+  profiles — a different protocol from the FT-857D that was tested — the
+  remaining Icom profiles and the other Kenwood profiles have never seen a
+  radio.
+- **The rigctld backend has met one Hamlib backend, not Hamlib.** What it can do
+  for a given rig is whatever that rig's Hamlib backend implements, and the one
+  radio tried through it was an IC-7610 — which is also the radio remoses knows
+  best natively, so it was the easiest possible case.
 - **CW has never been sent by a Yaesu of any kind.** Every Yaesu keys a control
   line rather than using a CAT keyer, and that path is confirmed on an IC-7610
   and is not Yaesu-specific — but no Yaesu has run it.

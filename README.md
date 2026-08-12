@@ -106,6 +106,11 @@ Any rig [Hamlib](https://hamlib.github.io/) supports, by talking to a `rigctld`
 process over TCP. remoses speaks the protocol in pure Go and can launch and
 supervise the daemon itself, so there is no cgo and no LGPL linking.
 
+Exercised against a Hamlib 4.7 daemon with an IC-7610 behind it, CW on the air
+included. It implements a subset — frequency, mode, filter width, power, PTT,
+the transmit meters and CW — and refuses the rest whatever Hamlib reports, so
+prefer a native backend where your radio has one.
+
 ## Connections
 
 A radio can be reached three ways, all sharing the same supervised
