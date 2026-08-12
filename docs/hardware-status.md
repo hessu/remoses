@@ -1,15 +1,14 @@
 # Hardware status
 
-**Four radios out of the thirty-seven remoses supports have ever been connected
-— but all four have been put through everything they can do.**
+**Only a handful of the radios remoses supports have ever been connected — but
+every one of those has been put through everything it can do.**
 
 Every protocol detail in this project was transcribed from the manufacturers'
 own CI-V and CAT reference documentation and is exercised against simulated rigs
 in the test suite. That proves the code matches what the manual says. It does
 not prove the manual is right, that the transcription is right, or that a
 particular radio behaves the way its documentation claims — which is why the
-four radios that have been on the wire matter more than the thirty-three that
-have not.
+radios that have been on the wire matter more than the ones that have not.
 
 ## What "tested" means in the model tables
 
@@ -29,7 +28,7 @@ the interlocks, because its CAT set has no keyer to spend the session on and
 because it fails in a way the Icoms do not. The IC-9700 re-ran reconnect too, as
 a side effect of switching it off and waking it again.
 
-## The four
+## The radios that have been connected
 
 ### IC-7610
 
@@ -248,15 +247,15 @@ Only an operator listening could have caught it — and it happened again, on th
 TS-590S, after it had already been found and fixed on the IC-9700, because the
 Kenwood backend had no notion of break-in at all.
 
-**Expect the other thirty-three models to be hiding something similar.**
+**Expect the untested models to be hiding something similar.**
 
 ## What this still does not tell you
 
-- **Four radios have been verified**, two Icoms, a Kenwood and a Yaesu. Treat
-  every other model as "implemented from documentation, awaiting confirmation".
-  The twelve **ASCII** Yaesu profiles — a different protocol from the FT-857D
-  that was tested — the remaining fourteen Icom profiles and the other four
-  Kenwood profiles have never seen a radio, and neither has the rigctld backend.
+- **What has been verified is two Icoms, a Kenwood and a Yaesu**, named above.
+  Treat every other model as "implemented from documentation, awaiting
+  confirmation". The **ASCII** Yaesu profiles — a different protocol from the
+  FT-857D that was tested — the remaining Icom profiles and the other Kenwood
+  profiles have never seen a radio, and neither has the rigctld backend.
 - **CW has never been sent by a Yaesu of any kind.** Every Yaesu keys a control
   line rather than using a CAT keyer, and that path is confirmed on an IC-7610
   and is not Yaesu-specific — but no Yaesu has run it.

@@ -16,8 +16,8 @@ Scope for v1 is control only. Audio is a separate concern.
 
 ## Status
 
-**Experimental. Four radios out of the thirty-seven below have ever been
-connected — but all four have been put through everything they can do.**
+**Experimental. Only a handful of the radios below have ever been connected —
+but every one of those has been put through everything it can do.**
 
 Everything else was transcribed from the manufacturers' own reference
 documentation and is exercised against simulated rigs in the test suite. That

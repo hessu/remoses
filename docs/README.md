@@ -27,9 +27,9 @@ radios and what the models differ in, and keeps the protocol detail for the end.
 ## Before you trust it
 
 - **[Hardware status](hardware-status.md)** — which radios have actually been
-  connected, what was exercised on each, and the bugs they found. Four of the
-  thirty-seven models have been on a wire; everything else is implemented from
-  the manufacturer's documentation and has never met a radio.
+  connected, what was exercised on each, and the bugs they found. Only a handful
+  have been on a wire; everything else is implemented from the manufacturer's
+  documentation and has never met a radio.
 
 ## Reference
 

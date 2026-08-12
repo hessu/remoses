@@ -1,9 +1,9 @@
 # Kenwood radios — the `kenwood` backend
 
-Five profiles plus a generic one, from the TS-480 to the TS-990S.
+The TS-480 to the TS-990S, plus a generic profile.
 
-A **TS-590S** has been verified on the air. The other four profiles are
-implemented from Kenwood's own documentation and have never met a radio. See
+A **TS-590S** has been verified on the air. The other profiles are implemented
+from Kenwood's own documentation and have never met a radio. See
 [hardware status](hardware-status.md).
 
 The same ASCII dialect is spoken by several Elecraft and modern Yaesu radios,

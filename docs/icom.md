@@ -1,11 +1,10 @@
 # Icom radios — the `civ` backend
 
-Sixteen models over CI-V, from the IC-703 to the IC-9700, plus a generic
-profile.
+The IC-703 to the IC-9700 over CI-V, plus a generic profile.
 
 An **IC-7610** and an **IC-9700** have been verified on the air; the other
-fifteen profiles are implemented from Icom's own documentation and have never
-met a radio. See [hardware status](hardware-status.md).
+profiles are implemented from Icom's own documentation and have never met a
+radio. See [hardware status](hardware-status.md).
 
 ## Configuring one
 

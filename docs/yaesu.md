@@ -13,7 +13,7 @@ speaks from `yaesu.model`, so you never have to know which generation it belongs
 to — but you do have to name it.
 
 An **FT-857D** has been verified on the air, which is the binary protocol. None
-of the twelve ASCII profiles has ever met a radio. See
+of the ASCII profiles has ever met a radio. See
 [hardware status](hardware-status.md).
 
 ## Naming the model is not optional
