@@ -62,6 +62,31 @@ func TestCapsBeforeInit(t *testing.T) {
 	}
 }
 
+// The placeholder above is honest but says CWNone, and the daemon's startup
+// check read that as "this radio cannot send Morse" — refusing cw.method: cat
+// for every rigctld radio, including the ones whose Hamlib backend has a keyer.
+// Found the first time this backend met a real rigctld.
+//
+// CapsKnown is how a caller tells "cannot" from "not yet".
+func TestCapsKnownSaysWhenCapsAreRealYet(t *testing.T) {
+	g := newRig(t)
+	var _ backend.CapsAtConnect = g
+
+	if g.CapsKnown() {
+		t.Fatal("CapsKnown is true before Init; Caps describes nothing yet")
+	}
+	if err := g.Init(context.Background(), newTestConn(t, g, initAnswers())); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if !g.CapsKnown() {
+		t.Error("CapsKnown is false after Init")
+	}
+	if got := g.Caps().CWMethod; got != radio.CWViaCAT {
+		t.Errorf("CWMethod = %q after Init on a rig whose dump_caps can send Morse, want %q",
+			got, radio.CWViaCAT)
+	}
+}
+
 func TestInit(t *testing.T) {
 	g := newRig(t)
 	c := newTestConn(t, g, initAnswers())

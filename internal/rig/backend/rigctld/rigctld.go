@@ -205,6 +205,16 @@ func (g *Rig) Caps() radio.Caps {
 	return radio.Caps{VFOs: []radio.VFO{radio.VFOCurrent}, CWMethod: radio.CWNone}
 }
 
+// CapsKnown implements backend.CapsAtConnect: it reports whether Init has run
+// and Caps therefore describes the radio rather than the empty placeholder
+// above.
+//
+// The placeholder says CWNone, which is honest — nothing is known — and was
+// read as "this radio cannot send Morse" by the daemon's startup check, so
+// `cw.method: cat` was refused for every rigctld radio however capable. That is
+// what this exists to prevent.
+func (g *Rig) CapsKnown() bool { return g.caps.Load() != nil }
+
 // Init interrogates the daemon and publishes Caps.
 //
 // \dump_state is the link check as well as the capability source. It is

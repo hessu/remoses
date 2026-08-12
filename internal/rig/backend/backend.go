@@ -203,6 +203,28 @@ type VFOModeSelector interface {
 	SelectVFOMode(ctx context.Context, c Conn, vfo radio.VFO) error
 }
 
+// CapsAtConnect is implemented by a backend that cannot describe the radio
+// until it has talked to it.
+//
+// Every native backend here builds Caps from a model profile, so it can answer
+// before anything is plugged in. rigctld cannot: what the rig can do comes from
+// the daemon's own \dump_state and \dump_caps at connect, and until then Caps
+// describes nothing.
+//
+// That matters because the daemon validates some configuration against Caps at
+// startup, and a capability that is merely *not yet known* must not be read as
+// one the radio does not have. It cost the rigctld backend its CW support:
+// `cw.method: cat` was refused for every rigctld radio, including the ones
+// whose Hamlib backend reports a keyer, because the check ran before the first
+// dial. Where this reports false the check is deferred and the backend enforces
+// the capability when the command is actually issued — which it must do anyway,
+// since Go interfaces are satisfied statically and a type cannot gain or lose
+// MorseSender at run time.
+type CapsAtConnect interface {
+	// CapsKnown reports whether Caps() describes the radio yet.
+	CapsKnown() bool
+}
+
 // BandExchanger is implemented by a backend that can swap the contents of a
 // radio's two receivers, so that what the sub receiver was holding becomes the
 // one everything else here operates.

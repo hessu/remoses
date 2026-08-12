@@ -306,9 +306,17 @@ func attachCW(s *rig.Session, b backend.Rig, rc config.Radio, log *slog.Logger) 
 		// lacks the command — the IC-718 has no CI-V CW buffer at all — so the
 		// type assertion would succeed and every message would draw a rejection
 		// that looks, to the operator, like it was sent.
-		if m := b.Caps().CWMethod; m != radio.CWViaCAT {
-			return nil, fmt.Errorf("this radio has no CAT CW buffer (backend %q reports cw_method %q); "+
-				"use cw.method: serial_key to key a control line instead", rc.Backend, m)
+		//
+		// Unless the backend cannot answer yet. rigctld learns what the rig can
+		// do from the daemon at connect, and asking before the first dial got
+		// "no keyer" for every rigctld radio — refusing at startup a
+		// configuration that would have worked. See backend.CapsAtConnect;
+		// the backend enforces this itself when the command is issued.
+		if late, ok := b.(backend.CapsAtConnect); !ok || late.CapsKnown() {
+			if m := b.Caps().CWMethod; m != radio.CWViaCAT {
+				return nil, fmt.Errorf("this radio has no CAT CW buffer (backend %q reports cw_method %q); "+
+					"use cw.method: serial_key to key a control line instead", rc.Backend, m)
+			}
 		}
 		ms, ok := b.(backend.MorseSender)
 		if !ok {
