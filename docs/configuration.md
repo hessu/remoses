@@ -40,7 +40,7 @@ auth:
   bcrypt_cost: 8
   cache_ttl: 60s
   users:
-    - username: oh7lzb
+    - username: n0call
       password_bcrypt: "$2a$08$..."
 ```
 

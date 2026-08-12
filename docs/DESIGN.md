@@ -192,7 +192,7 @@ auth:
   bcrypt_cost: 8              # low by choice; 4..31, bcrypt default is 10
   cache_ttl: 60s              # verified-credential cache, keeps polling cheap
   users:
-    - username: oh7lzb
+    - username: n0call
       password_bcrypt: "$2a$08$..."     # generate with: remoses passwd
     - username: guest
       password_bcrypt: "$2a$08$..."

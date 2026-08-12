@@ -1389,8 +1389,13 @@ components:
       properties:
         text:
           type: string
-          description: Canonical form; `^AR` style prosigns.
-          example: CQ TEST DE OH2XYZ ^AR
+          description: |
+            Canonical form; `^AR` style prosigns.
+
+            The example callsign is the reserved placeholder `N0CALL` on
+            purpose: an example that carries a real one gets copied and
+            transmitted, and then identifies the wrong station.
+          example: CQ TEST DE N0CALL ^AR
         wpm: { type: integer }
         mode:
           type: string

@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	testUser = "oh7lzb"
+	testUser = "n0call"
 	testPass = "hunter2"
 )
 
