@@ -65,29 +65,39 @@ type deltaMsg struct {
 // went empty" and "queue went busy again" are different facts, not two
 // versions of one.
 type cwMsg struct {
-	Type   string `json:"type"`
-	Radio  string `json:"radio"`
-	Busy   bool   `json:"busy"`
-	Queued int    `json:"queued"`
-	WPM    int    `json:"wpm"`
+	Type   string    `json:"type"`
+	Radio  string    `json:"radio"`
+	Seq    uint64    `json:"seq"`
+	TS     time.Time `json:"ts"`
+	Busy   bool      `json:"busy"`
+	Queued int       `json:"queued"`
+	WPM    int       `json:"wpm"`
 }
 
 // connMsg reports a connection transition. Error carries the reason the port
 // went away, which is the one thing an operator at the other end of the link
 // cannot see for themselves.
 type connMsg struct {
-	Type      string `json:"type"`
-	Radio     string `json:"radio"`
-	Connected bool   `json:"connected"`
-	Error     string `json:"error,omitempty"`
+	Type      string    `json:"type"`
+	Radio     string    `json:"radio"`
+	Seq       uint64    `json:"seq"`
+	TS        time.Time `json:"ts"`
+	Connected bool      `json:"connected"`
+	Error     string    `json:"error,omitempty"`
 }
 
 // resyncMsg says "your view of this radio has a hole in it; refetch". It is
 // the alternative to either wedging on a slow client or dropping its
 // connection, both of which are worse.
+//
+// Seq is the last version this connection was actually sent, so it says where
+// the hole starts rather than where it ends: what comes after it is unknown
+// until the client refetches, which is the whole message.
 type resyncMsg struct {
-	Type  string `json:"type"`
-	Radio string `json:"radio"`
+	Type  string    `json:"type"`
+	Radio string    `json:"radio"`
+	Seq   uint64    `json:"seq"`
+	TS    time.Time `json:"ts"`
 }
 
 // clientMsg is the whole client-to-server vocabulary. Unknown fields are

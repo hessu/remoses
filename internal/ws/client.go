@@ -21,9 +21,16 @@ import (
 // queue is bounded and per client: carrying a full radio.State per entry would
 // multiply the memory held on behalf of clients that are not reading, which are
 // precisely the ones not worth spending memory on.
+//
+// seq and at are carried for the same reason the state lane carries them: every
+// frame about a radio says which version of that radio it describes, so a client
+// can place a queue event in the stream without correlating it against a state
+// message that may be rate limited into the next second.
 type discreteEvent struct {
 	kind    rig.EventKind
 	radioID string
+	seq     uint64
+	at      time.Time
 	cw      radio.CWStatus
 	up      bool
 	err     string
@@ -34,6 +41,8 @@ func (d discreteEvent) message() any {
 		return cwMsg{
 			Type:   typeCW,
 			Radio:  d.radioID,
+			Seq:    d.seq,
+			TS:     d.at.UTC(),
 			Busy:   d.cw.Busy,
 			Queued: d.cw.Queued,
 			WPM:    d.cw.WPM,
@@ -42,6 +51,8 @@ func (d discreteEvent) message() any {
 	return connMsg{
 		Type:      typeConn,
 		Radio:     d.radioID,
+		Seq:       d.seq,
+		TS:        d.at.UTC(),
 		Connected: d.up,
 		Error:     d.err,
 	}
@@ -187,12 +198,16 @@ func (c *client) enqueue(ev rig.Event) {
 		c.pushDiscreteLocked(discreteEvent{
 			kind:    rig.EventCW,
 			radioID: ev.RadioID,
+			seq:     ev.Seq,
+			at:      ev.At,
 			cw:      ev.State.CW,
 		})
 	case rig.EventConn:
 		c.pushDiscreteLocked(discreteEvent{
 			kind:    rig.EventConn,
 			radioID: ev.RadioID,
+			seq:     ev.Seq,
+			at:      ev.At,
 			up:      ev.State.Connected,
 			err:     ev.Err,
 		})
@@ -337,7 +352,15 @@ func (c *client) drain(now time.Time) (out []any, next time.Time) {
 				}
 				continue
 			}
-			out = append(out, resyncMsg{Type: typeResync, Radio: id})
+			out = append(out, resyncMsg{
+				Type:  typeResync,
+				Radio: id,
+				// The last version this connection got, which is the edge of
+				// the hole: everything after it is what the client has to
+				// refetch to find out about.
+				Seq: c.lastSeq[id],
+				TS:  now.UTC(),
+			})
 			delete(c.resync, id)
 			c.nextResync[id] = now.Add(c.minInterval)
 		}

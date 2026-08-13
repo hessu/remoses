@@ -534,6 +534,15 @@ func TestConnEventsAreDiscrete(t *testing.T) {
 	if str(down, "error") == "" {
 		t.Error("conn frame carried no reason for the disconnect")
 	}
+	// A discrete event says which version of the radio it describes, like every
+	// other frame. Without it a client would have to guess whether the conn
+	// event it just read is older or newer than the state it is holding.
+	if num(t, down, "seq") <= 0 {
+		t.Errorf("conn.seq = %v, want the session's sequence number", down["seq"])
+	}
+	if str(down, "ts") == "" {
+		t.Error("conn frame carried no timestamp")
+	}
 
 	up := readUntil(t, c, "a conn frame reporting the reconnect", func(m map[string]any) bool {
 		return str(m, "type") == "conn" && m["connected"] == true
@@ -575,6 +584,12 @@ func TestCWEventsAreDiscrete(t *testing.T) {
 	}
 	if num(t, m, "wpm") != 28 {
 		t.Errorf("cw.wpm = %v, want 28", m["wpm"])
+	}
+	if num(t, m, "seq") <= 0 {
+		t.Errorf("cw.seq = %v, want the session's sequence number", m["seq"])
+	}
+	if str(m, "ts") == "" {
+		t.Error("cw frame carried no timestamp")
 	}
 }
 
