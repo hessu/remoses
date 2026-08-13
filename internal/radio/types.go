@@ -922,15 +922,36 @@ func (s State) Apply(p Patch) State {
 	return s
 }
 
+// Equal compares two meter readings by value.
+//
+// It exists because == does not, and the difference is not academic: Meter
+// carries an optional S, and a backend fills that in from a fresh allocation on
+// every poll — rigctld computes an S-unit figure per read. Comparing the
+// structs therefore compares the POINTER, so two identical readings half a
+// second apart answer "different", and Diff publishes a delta for a meter that
+// has not moved. A radio on a quiet band did exactly that, twice a second, to
+// every connected client.
+func (m Meter) Equal(other Meter) bool {
+	return m.Raw == other.Raw && m.Scale == other.Scale && sameRatio(m.S, other.S)
+}
+
+// Equal compares two power readings by value, for the same reason: Watts is a
+// pointer, and Kenwood and Yaesu allocate one per read.
+func (p Power) Equal(other Power) bool {
+	return p.Pct == other.Pct && p.Native == other.Native &&
+		sameRatio(p.Watts, other.Watts)
+}
+
 // sameMeter compares two optional meter readings, nil included.
 func sameMeter(a, b *Meter) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return *a == *b
+	return a.Equal(*b)
 }
 
-// sameRatio is the same for the derived SWR figure.
+// sameRatio compares two optional floats by value, nil included. Used for the
+// derived SWR figure and for the optional halves of Meter and Power.
 func sameRatio(a, b *float64) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -967,13 +988,13 @@ func (s State) Diff(next State) Patch {
 	if s.FilterSlot != next.FilterSlot {
 		p.FilterSlot = &next.FilterSlot
 	}
-	if s.Power != next.Power {
+	if !s.Power.Equal(next.Power) {
 		p.Power = &next.Power
 	}
 	if s.PTT != next.PTT {
 		p.PTT = &next.PTT
 	}
-	if s.SMeter != next.SMeter {
+	if !s.SMeter.Equal(next.SMeter) {
 		p.SMeter = &next.SMeter
 	}
 	// The transmit meters are pointers, so a delta has to compare what they
@@ -1073,7 +1094,7 @@ func (s State) Diff(next State) Patch {
 	// The sub meter moves constantly while dual watch is on, exactly as the
 	// main one does, so it is diffed like a meter and coalesced by the
 	// WebSocket layer's min_interval rather than suppressed here.
-	if s.SubSMeter != next.SubSMeter {
+	if !s.SubSMeter.Equal(next.SubSMeter) {
 		p.SubSMeter = &next.SubSMeter
 	}
 	// Worth a delta of its own: it changes what Frequency and Mode are talking

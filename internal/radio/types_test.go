@@ -111,6 +111,86 @@ func TestDualVFOPatchRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDiffComparesReadingsRatherThanAddresses is the bug a live radio found.
+//
+// Meter carries an optional S and Power an optional Watts, and a backend fills
+// those in fresh on every poll: rigctld allocates an S for the calibrated
+// S-unit figure, Kenwood and Yaesu allocate a Watts. Comparing the structs with
+// == compares those POINTERS, so two identical readings taken half a second
+// apart answered "changed" — and a radio sitting on a dead quiet band published
+// an s_meter delta to every connected client twice a second, for ever.
+//
+// Nothing in the fakes caught it because a fake that returns a constant returns
+// the same value from the same allocation, and on the air a moving meter hides
+// it: the deltas are real then. It takes a real backend and a still radio.
+func TestDiffComparesReadingsRatherThanAddresses(t *testing.T) {
+	sUnits, watts := 5.5, 40.0
+	st := State{
+		Frequency: 28030000,
+		SMeter:    Meter{Raw: 78, Scale: 255, S: &sUnits},
+		SubSMeter: Meter{Raw: 12, Scale: 255, S: &sUnits},
+		Power:     Power{Pct: 40, Native: 102, Watts: &watts},
+	}
+
+	// The same readings, as the next poll would build them: equal values in
+	// freshly allocated pointers.
+	sAgain, wattsAgain := 5.5, 40.0
+	next := st
+	next.SMeter = Meter{Raw: 78, Scale: 255, S: &sAgain}
+	next.SubSMeter = Meter{Raw: 12, Scale: 255, S: &sAgain}
+	next.Power = Power{Pct: 40, Native: 102, Watts: &wattsAgain}
+
+	if d := st.Diff(next); !d.Empty() {
+		t.Errorf("Diff reported a change between two identical readings: %+v", d)
+	}
+
+	// And a reading that really moved is still a change, including one where
+	// only the calibrated figure differs.
+	moved := next
+	movedS := 7.0
+	moved.SMeter = Meter{Raw: 78, Scale: 255, S: &movedS}
+	if d := st.Diff(moved); d.SMeter == nil {
+		t.Error("Diff missed a change to the calibrated S reading")
+	}
+
+	louder := next
+	louder.SMeter = Meter{Raw: 120, Scale: 255, S: &sAgain}
+	if d := st.Diff(louder); d.SMeter == nil {
+		t.Error("Diff missed a change to the raw meter reading")
+	}
+
+	turnedDown := next
+	half := 20.0
+	turnedDown.Power = Power{Pct: 20, Native: 51, Watts: &half}
+	if d := st.Diff(turnedDown); d.Power == nil {
+		t.Error("Diff missed a power change")
+	}
+
+	// The optional halves, either way round: a meter that gains a calibration
+	// and one that loses it have both changed.
+	gained, lost := next, next
+	gained.SMeter = Meter{Raw: 78, Scale: 255, S: &sAgain}
+	lost.SMeter = Meter{Raw: 78, Scale: 255}
+	if d := lost.Diff(gained); d.SMeter == nil {
+		t.Error("Diff missed a meter that gained a calibrated reading")
+	}
+	if d := gained.Diff(lost); d.SMeter == nil {
+		t.Error("Diff missed a meter that lost its calibrated reading")
+	}
+}
+
+// The transmit meters are pointers to the same type, and they are compared by
+// their own helper. It has the same trap in it.
+func TestTransmitMeterDiffComparesReadings(t *testing.T) {
+	a, b := 1.5, 1.5
+	st := State{PTT: true, SWR: &Meter{Raw: 30, Scale: 100, S: &a}}
+	next := State{PTT: true, SWR: &Meter{Raw: 30, Scale: 100, S: &b}}
+
+	if d := st.Diff(next); d.SWR != nil {
+		t.Errorf("Diff reported a change between two identical SWR readings: %+v", *d.SWR)
+	}
+}
+
 // TestEmptyKnowsTheDualVFOFields guards the trap in Patch.Empty: a field added
 // to the struct and forgotten here makes the session drop the update silently,
 // because applyUpdate returns early on an empty patch.
