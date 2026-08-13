@@ -664,10 +664,11 @@ func (k *Rig) writeFrequency(ctx context.Context, c backend.Conn, cmd string, ke
 	if err != nil {
 		return err
 	}
-	if err := send(ctx, c, cmd+digits+";"); err != nil {
-		return err
-	}
-	_, err = do(ctx, c, cmd+";", key)
+	// setThenRead rather than send-then-do, for the error message. A frequency
+	// the radio will not tune is refused with a bare "?" that arrives while the
+	// read-back is outstanding, and a TS-590SG field report duly recorded
+	// `FA;: rejected "FA;"` — blaming a plain read for a rejected set.
+	_, err = setThenRead(ctx, c, cmd+digits+";", cmd+";", key)
 	return err
 }
 

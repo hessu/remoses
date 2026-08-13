@@ -42,6 +42,49 @@ func (r *Runner) sequence(ctx context.Context) error {
 	return nil
 }
 
+// inMode runs a group of steps with the radio in a mode that actually offers
+// the control, and puts the mode back afterwards.
+//
+// Several controls exist only in some modes, and testing them anywhere else
+// produces a finding about the test rather than about the radio. A TS-590SG
+// showed both halves of that: break-in is set with VX there, which addresses
+// VOX unless the rig is in CW, and FW is not the filter-width command in SSB at
+// all — the SSB passband is shaped with SH and SL. Run in the operator's USB,
+// those are six refusals that say nothing; run in CW they are six real results.
+//
+// It reports the switch as its own step, so a reader can see why the radio was
+// moved and can tell a control that is missing from one that was asked for in
+// the wrong place.
+func (r *Runner) inMode(ctx context.Context, group string, want radio.Mode, fn func()) {
+	if !r.caps.SupportsMode(want) {
+		// Nothing to switch to. Run where we are and let the results say so.
+		fn()
+		return
+	}
+	before := r.s.State().Mode
+	if before == want {
+		fn()
+		return
+	}
+	no := false
+	m := want
+	r.do(group, "into-"+want.String(), fmt.Sprintf(`{"mode":%q}`, want),
+		func() (Verdict, string, string, string, error) {
+			st, err := r.patch(ctx, rig.PatchRequest{Mode: &m, DataMode: &no})
+			if err != nil {
+				return Info, want.String(), "refused",
+					"could not switch modes, so the steps below ran in " + before.String(), err
+			}
+			return Pass, want.String(), st.Mode.String(),
+				"this control is mode-dependent on some radios, so it is exercised here", nil
+		})
+
+	fn()
+
+	back := before
+	_, _ = r.patch(ctx, rig.PatchRequest{Mode: &back, DataMode: &r.initial.DataMode})
+}
+
 // setAndVerify is the shape of nearly every step: write a value, read the state
 // back, and say whether the radio actually moved.
 //
@@ -216,16 +259,20 @@ func (r *Runner) modes(ctx context.Context) error {
 
 func (r *Runner) filters(ctx context.Context) error {
 	if r.caps.FilterWidth {
-		before := r.s.State().PassbandHz
-		for _, hz := range candidateWidths(before) {
-			w := hz
-			r.setAndVerify(ctx, "filter", fmt.Sprintf("width-%d", w),
-				fmt.Sprintf(`{"passband_hz":%d}`, w),
-				rig.PatchRequest{FilterWidthHz: &w},
-				fmt.Sprintf("%d", r.s.State().PassbandHz),
-				func(s radio.State) string { return fmt.Sprintf("%d", s.PassbandHz) },
-				fmt.Sprintf("%d", w))
-		}
+		// In CW, where a filter width is both most meaningful and most widely
+		// implemented. A TS-590 has no FW command in SSB at all.
+		r.inMode(ctx, "filter", radio.ModeCW, func() {
+			before := r.s.State().PassbandHz
+			for _, hz := range candidateWidths(before) {
+				w := hz
+				r.setAndVerify(ctx, "filter", fmt.Sprintf("width-%d", w),
+					fmt.Sprintf(`{"passband_hz":%d}`, w),
+					rig.PatchRequest{FilterWidthHz: &w},
+					fmt.Sprintf("%d", r.s.State().PassbandHz),
+					func(s radio.State) string { return fmt.Sprintf("%d", s.PassbandHz) },
+					fmt.Sprintf("%d", w))
+			}
+		})
 	} else {
 		r.skip("filter", "width", "no filter-width command")
 	}
@@ -514,13 +561,19 @@ func (r *Runner) breakIn(ctx context.Context) error {
 		r.skip("break-in", "all", "no break-in command")
 		return nil
 	}
-	for _, v := range []radio.BreakIn{radio.BreakInOff, radio.BreakInSemi, radio.BreakInFull} {
-		b := v
-		r.setAndVerify(ctx, "break-in", string(b), fmt.Sprintf(`{"break_in":%q}`, b),
-			rig.PatchRequest{BreakIn: &b},
-			string(r.s.State().BreakIn), func(s radio.State) string { return string(s.BreakIn) },
-			string(b))
-	}
+	// In CW, always. Break-in is a CW control by definition, and on a TS-590 it
+	// is not merely meaningless elsewhere — the command that carries it, VX,
+	// addresses VOX in every other mode, which is why remoses refuses to touch
+	// it outside CW rather than switching somebody's voice VOX on behind them.
+	r.inMode(ctx, "break-in", radio.ModeCW, func() {
+		for _, v := range []radio.BreakIn{radio.BreakInOff, radio.BreakInSemi, radio.BreakInFull} {
+			b := v
+			r.setAndVerify(ctx, "break-in", string(b), fmt.Sprintf(`{"break_in":%q}`, b),
+				rig.PatchRequest{BreakIn: &b},
+				string(r.s.State().BreakIn), func(s radio.State) string { return string(s.BreakIn) },
+				string(b))
+		}
+	})
 	return nil
 }
 
