@@ -140,10 +140,31 @@ func (k *Rig) SetNoiseReduction(ctx context.Context, c backend.Conn, level int) 
 		return fmt.Errorf("kenwood: the %s has noise reducers 0 to %d, not %d: %w",
 			k.profile.Label, k.profile.NoiseReduction, level, backend.ErrUnsupported)
 	}
-	if err := send(ctx, c, fmt.Sprintf("NR%d;", level)); err != nil {
-		return err
+
+	// Read first, and send nothing if the radio is already there. The same
+	// shape SetTuner uses, where this family is documented to refuse "a set
+	// that changes nothing".
+	//
+	// What is known here is thinner than that, and worth stating exactly. One
+	// TS-590SG field run saw a "?" arrive while the read-back after NR0; was
+	// outstanding, on a reducer that was already off; two later runs from the
+	// same starting state sent the same NR0; and were fine. So this is not an
+	// established refusal — it is one rejection whose real culprit is not
+	// certain, because a refused set on this family is answered late enough to
+	// land on the next command. See setThenRead.
+	//
+	// The guard stays anyway: not writing a value the radio already holds is
+	// right regardless of what that "?" was, it costs one read that the
+	// read-back below was going to spend anyway, and it makes the operation
+	// idempotent — which is what the failed run actually needed, since the
+	// restore that could not put the reducer back was itself a no-op set.
+	if u, err := do(ctx, c, reqNR, keyNR); err == nil {
+		if u.Patch.NoiseReduction != nil && *u.Patch.NoiseReduction == level {
+			return nil
+		}
 	}
-	_, err := do(ctx, c, reqNR, keyNR)
+
+	_, err := setThenRead(ctx, c, fmt.Sprintf("NR%d;", level), reqNR, keyNR)
 	return err
 }
 

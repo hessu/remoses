@@ -817,6 +817,53 @@ func send(ctx context.Context, c backend.Conn, req string) error {
 	return nil
 }
 
+// setThenRead writes a command the rig does not answer and reads the value
+// back, which is how a setter here finds out what actually happened.
+//
+// It exists for the error message. A rejection on this family is a bare "?"
+// that names nothing, and a rejected *set* is not answered until the next
+// command is already outstanding — so it surfaces on the read-back, and a naive
+// report blames the read. A TS-590SG in the field produced exactly that:
+//
+//	to-rig   NR0;
+//	to-rig   NR;
+//	from-rig ?
+//
+// reported as "NR; was rejected", when NR; is a plain read that had been
+// answering all session and what the radio actually refused was the NR0;
+// before it. That message sent its first reader looking in the wrong place.
+func setThenRead(ctx context.Context, c backend.Conn, set, read string, want backend.Key) (backend.Update, error) {
+	if err := send(ctx, c, set); err != nil {
+		return backend.Update{}, err
+	}
+	keys := append([]backend.Key{want}, errorKeys...)
+	u, err := c.Do(ctx, []byte(read), keys...)
+	if err != nil {
+		return u, fmt.Errorf("kenwood: %s: %w", read, err)
+	}
+	if !u.OK {
+		return u, rejectionAfterSet(set, read, u)
+	}
+	return u, nil
+}
+
+// rejectionAfterSet names both commands, and says which one to suspect.
+//
+// It does not claim to know: a read really can be refused in its own right —
+// this family refuses a level while its circuit is off, and refuses the
+// automatic notch outside SSB and AM. But a set is the likelier of the two, and
+// a message that says so with both commands in it is what turns the next field
+// report into a five-minute diagnosis instead of an hour's.
+func rejectionAfterSet(set, read string, u backend.Update) error {
+	if u.Key == keyErrSyntax {
+		return fmt.Errorf("kenwood: rig rejected %s, or the %s that read it back "+
+			"(?;: bad syntax, or refused in the rig's current state). A refused set is "+
+			"answered late enough to land on the read after it, so suspect %s first",
+			set, read, set)
+	}
+	return rejection(set+" (read back with "+read+")", u)
+}
+
 // rejection turns one of the rig's three error answers into something an
 // operator can act on. They are otherwise anonymous — none of them names the
 // command that provoked it.

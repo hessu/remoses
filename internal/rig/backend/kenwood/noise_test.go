@@ -8,6 +8,65 @@ import (
 	"github.com/hessu/remoses/internal/radio"
 )
 
+// A TS-590SG refuses NR0; when the reducer is already off, which a field report
+// caught the hard way: the run could not put the reducer back, and a radio that
+// started with noise reduction off was handed back with it on.
+//
+// The radio is right to be odd here and remoses is wrong to have argued with
+// it. SetTuner has guarded against the same "a set that changes nothing is
+// refused" behaviour on this family since it was found there; this is the same
+// guard on the same radio.
+func TestSetNoiseReductionSendsNothingWhenAlreadyThere(t *testing.T) {
+	k := newModelRig(t, "ts590sg")
+	answers := answersFor(k.profile)
+	answers[reqNR] = "NR0" // the reducer is already off
+	c := newTestConn(t, k, answers)
+
+	if err := k.SetNoiseReduction(context.Background(), c, 0); err != nil {
+		t.Fatalf("SetNoiseReduction(0) on an already-off reducer: %v", err)
+	}
+	// One read to find out, and no set at all.
+	c.wantSent(t, reqNR)
+}
+
+func TestSetNoiseReductionStillWritesWhenItChanges(t *testing.T) {
+	k := newModelRig(t, "ts590sg")
+	answers := answersFor(k.profile)
+	answers[reqNR] = "NR0"
+	c := newTestConn(t, k, answers)
+
+	if err := k.SetNoiseReduction(context.Background(), c, 2); err != nil {
+		t.Fatalf("SetNoiseReduction(2): %v", err)
+	}
+	// Read, set, read back — the guard must not cost the read-back that
+	// reports what the radio actually did.
+	c.wantSent(t, reqNR, "NR2;", reqNR)
+}
+
+// A rejected set is answered late enough to arrive while the read-back is
+// outstanding, so the "?" lands on the read. The message has to name both and
+// point at the set, because the first reader of that field report went looking
+// at a plain NR; read that had been answering all session.
+func TestRejectedSetNamesTheSetAndNotTheReadBack(t *testing.T) {
+	k := newModelRig(t, "ts590sg")
+	answers := answersFor(k.profile)
+	c := newTestConn(t, k, answers)
+	// The rig answers the rejection rather than a value, which is what the
+	// read-back after a refused set actually sees.
+	c.answers[reqNR] = "?"
+
+	err := k.SetNoiseReduction(context.Background(), c, 2)
+	if err == nil {
+		t.Fatal("a rejected set reported success")
+	}
+	msg := err.Error()
+	for _, want := range []string{"NR2;", reqNR, "suspect NR2; first"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error does not mention %q: %s", want, msg)
+		}
+	}
+}
+
 // TestNRLevelScaleFollowsTheReducer is the one number in this file that means
 // two different things.
 //
