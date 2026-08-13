@@ -305,12 +305,22 @@ func (s *Session) SetCWSender(snd cw.Sender) {
 // publishCaps stores the capabilities clients see: what the backend says about
 // the radio, corrected by what the installed CW sender says about keying.
 //
-// The correction is needed because those two can disagree, and did. A backend
-// reports the radio's own keyer — civ says cw_method: cat, because an IC-7610
-// has a CAT buffer — but cw.method: serial_key on that same radio installs a
-// local keyer that drives a DTR line and never sends command 17. Publishing the
-// backend's answer told clients the radio keyed over CAT, and handed them the
-// rig keyer's charset and speed range for a keyer that was not in use.
+// The correction is needed because those two can disagree, and did — in both
+// directions.
+//
+// A backend reports the radio's own keyer: civ says cw_method: cat, because an
+// IC-7610 has a CAT buffer. With cw.method: serial_key on that same radio the
+// installed keyer drives a DTR line and never sends command 17, so publishing
+// the backend's answer told clients the radio keyed over CAT and handed them
+// the rig keyer's charset and speed range for a keyer that was not in use.
+//
+// The other direction is a radio with cw.enabled off, where no sender is
+// installed at all. The backend still answers for the rig — it is describing
+// hardware, and the hardware has a keyer — so caps advertised cw_method: cat, a
+// charset and a speed range, and every POST /cw answered 422. A client that
+// reads capabilities to decide what to draw got a CW box that could not send.
+// Found on an IC-7610 through rigctld, whose Hamlib backend reports a keyer for
+// a configuration that had not asked for one.
 //
 // It must be called wherever caps are stored, not once at startup: every
 // reconnect re-reads them from the backend (a backend may learn more from the
@@ -324,6 +334,12 @@ func (s *Session) publishCaps() {
 		if lo, hi, ok := snd.WPMRange(); ok {
 			caps.CWMinWPM, caps.CWMaxWPM = lo, hi
 		}
+	} else {
+		// Nothing here can key, whatever the rig is capable of. cw_method
+		// "none" is what the API has for saying so.
+		caps.CWMethod = radio.CWNone
+		caps.CWCharset = ""
+		caps.CWMinWPM, caps.CWMaxWPM = 0, 0
 	}
 	s.caps.Store(&caps)
 }

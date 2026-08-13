@@ -552,12 +552,6 @@ func TestStateSnapshotIsACopy(t *testing.T) {
 func TestCapsFollowTheInstalledCWSender(t *testing.T) {
 	h := startedHarness(t, nil)
 
-	// The backend's own answer, before any sender is installed.
-	if got := h.s.Caps().CWMethod; got != h.rig.caps.CWMethod {
-		t.Fatalf("caps report %q before a sender is installed, want the backend's %q",
-			got, h.rig.caps.CWMethod)
-	}
-
 	sender := newFakeSerialCW()
 	h.s.SetCWSender(sender)
 
@@ -600,17 +594,50 @@ func TestCapsSurviveAReconnect(t *testing.T) {
 // package's local clamp is 5-60.
 func TestCatSenderLeavesTheRigsSpeedRangeAlone(t *testing.T) {
 	h := startedHarness(t, nil)
-	before := h.s.Caps()
+	backend := h.rig.caps
 
 	h.s.SetCWSender(newFakeCW()) // the CAT shape
 
 	after := h.s.Caps()
-	if after.CWMinWPM != before.CWMinWPM || after.CWMaxWPM != before.CWMaxWPM {
-		t.Errorf("wpm range moved from %d-%d to %d-%d; a CAT sender has nothing "+
-			"better to say than the model profile",
-			before.CWMinWPM, before.CWMaxWPM, after.CWMinWPM, after.CWMaxWPM)
+	if after.CWMinWPM != backend.CWMinWPM || after.CWMaxWPM != backend.CWMaxWPM {
+		t.Errorf("wpm range = %d-%d, want the model profile's %d-%d; a CAT sender "+
+			"has nothing better to say than the rig's own keyer",
+			after.CWMinWPM, after.CWMaxWPM, backend.CWMinWPM, backend.CWMaxWPM)
 	}
 	if after.CWMethod != radio.CWViaCAT {
 		t.Errorf("cw_method = %q, want cat", after.CWMethod)
+	}
+}
+
+// TestCapsSayNoneWithNoSenderInstalled is the bug an IC-7610 through rigctld
+// exposed, with cw.enabled off in the configuration.
+//
+// The backend answers for the RADIO, and the radio has a keyer, so caps
+// advertised cw_method: cat with a charset and a speed range while POST /cw
+// answered 422 for every message. A client reads capabilities to decide what to
+// draw; this one drew a CW box that could not send.
+func TestCapsSayNoneWithNoSenderInstalled(t *testing.T) {
+	h := startedHarness(t, nil)
+
+	// The fake backend reports a rig that can key over CAT, as an Icom does.
+	if h.rig.caps.CWMethod != radio.CWViaCAT {
+		t.Fatalf("this test needs a backend that reports a keyer, got %q", h.rig.caps.CWMethod)
+	}
+
+	caps := h.s.Caps()
+	if caps.CWMethod != radio.CWNone {
+		t.Errorf("cw_method = %q with no sender installed, want %q: nothing here can key",
+			caps.CWMethod, radio.CWNone)
+	}
+	if caps.CWCharset != "" || caps.CWMinWPM != 0 || caps.CWMaxWPM != 0 {
+		t.Errorf("caps carry a charset %q and a range %d-%d for a keyer that does not exist",
+			caps.CWCharset, caps.CWMinWPM, caps.CWMaxWPM)
+	}
+
+	// And installing one puts the rig's own answer back, so this correction
+	// cannot swallow a working configuration.
+	h.s.SetCWSender(newFakeCW())
+	if got := h.s.Caps().CWMethod; got != radio.CWViaCAT {
+		t.Errorf("cw_method = %q after installing a CAT sender, want cat", got)
 	}
 }
