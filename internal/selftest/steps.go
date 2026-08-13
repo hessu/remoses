@@ -167,7 +167,13 @@ func (r *Runner) frequency(ctx context.Context) error {
 		case err == nil:
 			return Fail, "a refusal", quoteHz(st.Frequency),
 				"1 Hz was accepted; no radio here tunes it, so nothing checked the range", nil
-		case errors.Is(err, rig.ErrUnsupported), errors.Is(err, rig.ErrOutOfBand):
+		// A refusal by the radio itself counts. remoses declining a request it
+		// knows is impossible and the rig declining one it will not tune are
+		// the same correct answer, and scoring the second as a finding puts a
+		// line in the report that a reader has to rule out by hand — which a
+		// TS-590SG report duly did, three times over.
+		case errors.Is(err, rig.ErrUnsupported), errors.Is(err, rig.ErrOutOfBand),
+			errors.Is(err, rig.ErrNAK):
 			return Refused, "a refusal", "refused", "", nil
 		default:
 			return Info, "a refusal", "refused", "", err
