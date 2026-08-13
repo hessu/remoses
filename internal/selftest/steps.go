@@ -145,11 +145,37 @@ func (r *Runner) modes(ctx context.Context) error {
 	for _, m := range r.caps.Modes {
 		mode := m
 		no := false
-		r.setAndVerify(ctx, "mode", string(m), fmt.Sprintf(`{"mode":%q}`, m),
+		// .String(), not string(): radio.Mode is a uint8, so a plain conversion
+		// yields the rune with that code point. It was one, and every mode step
+		// in every report so far is named with a control character because of
+		// it — the verdicts were right, since both sides of the comparison were
+		// equally wrong, and the file was unreadable, which for a file whose
+		// entire job is to be read by somebody else is the same as broken.
+		r.setAndVerify(ctx, "mode", m.String(), fmt.Sprintf(`{"mode":%q}`, m),
 			rig.PatchRequest{Mode: &mode, DataMode: &no},
-			string(r.s.State().Mode),
-			func(s radio.State) string { return string(s.Mode) },
-			string(m))
+			r.s.State().Mode.String(),
+			func(s radio.State) string { return s.Mode.String() },
+			m.String())
+	}
+
+	// Back to the mode the radio was found in, before anything else runs.
+	//
+	// Several controls exist only in some modes, and the sweep above ends on
+	// whichever mode happens to be last in Caps — FSK-R on a Kenwood. A field
+	// report from a TS-590SG spent its whole second half in FSK-R because of
+	// that, so break-in was refused three times (it is a CW-only command there)
+	// and the automatic notch once (SSB and AM only), producing four findings
+	// about the test rather than about the radio. The operator's own mode is
+	// the least surprising place to do the rest of the work.
+	restoreMode := r.initial.Mode
+	restoreData := r.initial.DataMode
+	if restoreMode != radio.ModeUnknown {
+		r.setAndVerify(ctx, "mode", "back-to-as-found",
+			fmt.Sprintf(`{"mode":%q,"data_mode":%v}`, restoreMode, restoreData),
+			rig.PatchRequest{Mode: &restoreMode, DataMode: &restoreData},
+			r.s.State().Mode.String(),
+			func(s radio.State) string { return s.Mode.String() },
+			restoreMode.String())
 	}
 
 	// Data mode, which no capability reports: the only way to find out is to
@@ -169,8 +195,11 @@ func (r *Runner) modes(ctx context.Context) error {
 			return Fail, "data mode on", "off",
 				"the request was accepted and the flag did not move", nil
 		})
-	no := false
-	_, _ = r.patch(ctx, rig.PatchRequest{Mode: &cur, DataMode: &no})
+	// And back to the operator's own data-mode flag rather than to false: the
+	// radio in that field report was found in USB-DATA on 10.136, which is
+	// somebody sitting on FT8, and leaving it in plain USB for the rest of the
+	// run is not the same radio.
+	_, _ = r.patch(ctx, rig.PatchRequest{Mode: &cur, DataMode: &restoreData})
 
 	// A mode the radio does not have. remoses must refuse it rather than send
 	// a code from another radio's table.
@@ -178,7 +207,7 @@ func (r *Runner) modes(ctx context.Context) error {
 		if r.caps.SupportsMode(m) {
 			continue
 		}
-		r.expectRefused(ctx, "mode", "unsupported-"+string(m), fmt.Sprintf(`{"mode":%q}`, m),
+		r.expectRefused(ctx, "mode", "unsupported-"+m.String(), fmt.Sprintf(`{"mode":%q}`, m),
 			rig.PatchRequest{Mode: &m})
 		break
 	}
