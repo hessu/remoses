@@ -23,6 +23,19 @@ output-options:
   # exactly the half of the contract this was done for.
   skip-prune: true
 
+  # A field the document marks nullable generates nullable.Nullable[T], which
+  # holds three states where a pointer holds two: absent, null, and a value.
+  #
+  # The stream needs all three. A delta names the fields that changed, and a
+  # transmit meter sent as an explicit null means the reading has GONE AWAY —
+  # the transmission ended — where the same field simply absent means it did
+  # not change. Generated as *Meter with omitempty those two arrive
+  # indistinguishable, so a client written against this document could not
+  # implement what the document says, and the symptom is the one StateDelta's
+  # description exists to prevent: the last transmission's SWR sitting on a
+  # display for ever.
+  nullable-type: true
+
   # remoses-cli is a monitor, and "it cannot change a radio" is a property of
   # the code rather than a promise in a comment. Listing the two read
   # operations is what keeps it one: there is no generated PatchState for

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/hessu/remoses/internal/wire"
 )
@@ -296,8 +297,10 @@ func TestApplyDelta(t *testing.T) {
 // The previous snapshot is what a renderer diffs against, so applying a delta
 // must not reach back through the pointers it shares with it.
 func TestApplyDeltaDoesNotMutateThePreviousSnapshot(t *testing.T) {
-	swr := wire.Meter{Raw: 3, Scale: 100}
-	base := wire.State{Frequency: 14025000, SWR: &swr}
+	base := wire.State{
+		Frequency: 14025000,
+		SWR:       nullable.NewNullableWithValue(wire.Meter{Raw: 3, Scale: 100}),
+	}
 
 	ev, _, err := decodeEvent([]byte(`{"type":"delta","radio":"ic7610","seq":2,` +
 		`"changed":{"swr":{"raw":30,"scale":100}}}`))
@@ -309,24 +312,27 @@ func TestApplyDeltaDoesNotMutateThePreviousSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyDelta: %v", err)
 	}
-	if next.SWR.Raw != 30 {
-		t.Errorf("delta not applied: %+v", next.SWR)
+	if m, err := next.SWR.Get(); err != nil || m.Raw != 30 {
+		t.Errorf("delta not applied: %+v (%v)", next.SWR, err)
 	}
-	if base.SWR.Raw != 3 {
-		t.Errorf("previous snapshot was mutated: %+v", base.SWR)
+	if m, err := base.SWR.Get(); err != nil || m.Raw != 3 {
+		t.Errorf("previous snapshot was mutated: %+v (%v)", base.SWR, err)
 	}
 }
 
 // A transmit meter that has gone away is sent as an explicit null, and a delta
-// that named it must clear it. This is the distinction the generated
-// wire.StateDelta cannot carry — every optional field there is a pointer with
-// omitempty, so null and absent both arrive as nil — and the reason ApplyDelta
-// works from the bytes.
+// that names it must clear it. A delta that does not name it must leave it
+// alone. Those are different messages and the wire says so, which is why the
+// four fields it happens to are declared nullable: the generated type holds
+// absent, null and a value apart, and a client that could not tell the first
+// two apart would leave the last transmission's SWR on the display for ever.
 func TestApplyDeltaClearsAMeterSentAsNull(t *testing.T) {
-	swr := wire.Meter{Raw: 30, Scale: 100}
-	ratio := 1.5
-	pwr := wire.Meter{Raw: 200, Scale: 255}
-	base := wire.State{PTT: true, SWR: &swr, SWRRatio: &ratio, PowerMeter: &pwr}
+	base := wire.State{
+		PTT:        true,
+		SWR:        nullable.NewNullableWithValue(wire.Meter{Raw: 30, Scale: 100}),
+		SWRRatio:   nullable.NewNullableWithValue(1.5),
+		PowerMeter: nullable.NewNullableWithValue(wire.Meter{Raw: 200, Scale: 255}),
+	}
 
 	ev, _, err := decodeEvent([]byte(`{"type":"delta","radio":"ic7610","seq":3,` +
 		`"ts":"2026-08-04T20:11:09Z","changed":{"ptt":false,"power_meter":null,` +
@@ -342,9 +348,46 @@ func TestApplyDeltaClearsAMeterSentAsNull(t *testing.T) {
 	if next.PTT {
 		t.Error("ptt not applied")
 	}
-	if next.SWR != nil || next.SWRRatio != nil || next.PowerMeter != nil {
-		t.Errorf("transmit meters survived the end of the transmission: swr=%+v ratio=%v pwr=%+v",
-			next.SWR, next.SWRRatio, next.PowerMeter)
+	// Cleared, and cleared explicitly: the reading is gone rather than
+	// unmentioned, and a client redrawing a meter panel is entitled to know
+	// which of the two it is looking at.
+	for name, got := range map[string]nullable.Nullable[wire.Meter]{
+		"swr": next.SWR, "power_meter": next.PowerMeter, "alc": next.ALC,
+	} {
+		if _, err := got.Get(); err == nil {
+			t.Errorf("%s survived the end of the transmission: %+v", name, got)
+		}
+		if !got.IsNull() {
+			t.Errorf("%s reads as unmentioned, want explicitly cleared", name)
+		}
+	}
+	if _, err := next.SWRRatio.Get(); err == nil || !next.SWRRatio.IsNull() {
+		t.Errorf("swr_ratio = %+v, want explicitly cleared", next.SWRRatio)
+	}
+}
+
+// The other half of the same distinction: a delta that says nothing about a
+// meter must leave the reading in place. Without nullable fields both cases
+// arrive as nil and this is the one that breaks — every delta during a
+// transmission would wipe the meters the previous one had just delivered.
+func TestApplyDeltaLeavesAMeterItDoesNotName(t *testing.T) {
+	base := wire.State{
+		PTT: true,
+		SWR: nullable.NewNullableWithValue(wire.Meter{Raw: 30, Scale: 100}),
+	}
+
+	ev, _, err := decodeEvent([]byte(`{"type":"delta","radio":"ic7610","seq":4,` +
+		`"ts":"2026-08-04T20:11:10Z","changed":{"frequency":14025300}}`))
+	if err != nil {
+		t.Fatalf("decodeEvent: %v", err)
+	}
+
+	next, err := ev.ApplyDelta(base)
+	if err != nil {
+		t.Fatalf("ApplyDelta: %v", err)
+	}
+	if m, err := next.SWR.Get(); err != nil || m.Raw != 30 {
+		t.Errorf("swr = %+v (%v), want the reading the snapshot already had", next.SWR, err)
 	}
 }
 

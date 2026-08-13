@@ -6,13 +6,25 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/oapi-codegen/nullable"
+
 	"github.com/hessu/remoses/internal/wire"
 )
 
-func f64(v float64) *float64 { return &v }
+// f64 and txMeter build the fields the spec declares nullable — the calibrated
+// S figure, the watt reading, the transmit meters. Those carry three states on
+// the wire, so the generated type is a Nullable rather than a pointer; these
+// build the "has a value" one, which is what a fixture almost always wants.
+func f64(v float64) nullable.Nullable[float64] {
+	return nullable.NewNullableWithValue(v)
+}
 
-// ptr is for the optional fields of a generated type, where "the radio cannot
-// report this" is spelled as a nil pointer.
+func txMeter(raw, scale int) nullable.Nullable[wire.Meter] {
+	return nullable.NewNullableWithValue(wire.Meter{Raw: raw, Scale: scale})
+}
+
+// ptr is for the plainly optional fields, where "the radio cannot report this"
+// is spelled as a nil pointer.
 func ptr[T any](v T) *T { return &v }
 
 // sampleState is the DESIGN.md §8 example, so the display is exercised against

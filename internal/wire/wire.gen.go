@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oapi-codegen/nullable"
 	"github.com/oapi-codegen/runtime"
 )
 
@@ -810,9 +811,9 @@ type LockState struct {
 // SM returns 0..30 meter dots, Icom 15 02 returns 0..255. `s` is present
 // only where a per-model calibration table exists.
 type Meter struct {
-	Raw   int      `json:"raw"`
-	S     *float64 `json:"s,omitempty"`
-	Scale int      `json:"scale"`
+	Raw   int                        `json:"raw"`
+	S     nullable.Nullable[float64] `json:"s,omitempty"`
+	Scale int                        `json:"scale"`
 }
 
 // Mode UNKNOWN is reported for a radio that has not connected yet, or whose rig
@@ -856,7 +857,7 @@ type Power struct {
 	Pct float64 `json:"pct"`
 
 	// Watts Absolute watts, null when the rig has no watt-accurate scale.
-	Watts *float64 `json:"watts"`
+	Watts nullable.Nullable[float64] `json:"watts,omitempty"`
 }
 
 // PowerSet Exactly one of watts or pct.
@@ -938,7 +939,7 @@ type State struct {
 	//
 	// Note that full scale is not always the data field's range: an Icom's
 	// ALC runs to 120 of a possible 255, and `scale` carries that.
-	ALC *Meter `json:"alc,omitempty"`
+	ALC nullable.Nullable[Meter] `json:"alc,omitempty"`
 
 	// Antenna Which antenna socket is selected, counting from 1.
 	//
@@ -1101,7 +1102,7 @@ type State struct {
 	// Icom counts 0-255, Kenwood counts meter dots — so compare the two
 	// rather than assuming either. Check `caps.power_meter` before
 	// offering the display at all.
-	PowerMeter *Meter `json:"power_meter,omitempty"`
+	PowerMeter nullable.Nullable[Meter] `json:"power_meter,omitempty"`
 
 	// Preamp The receive preamplifier: 0 for off, 1 to `caps.preamp_levels` for
 	// the amplifiers in the order the radio numbers them. On a set with
@@ -1200,7 +1201,7 @@ type State struct {
 	// On an FT-857 or FT-897 this is one bit rather than a deflection —
 	// `scale` is 1 and `raw` is 0 or 1 — because a high-SWR alarm is all
 	// those radios report. The scale says so; do not assume a range.
-	SWR *Meter `json:"swr,omitempty"`
+	SWR nullable.Nullable[Meter] `json:"swr,omitempty"`
 
 	// SWRRatio SWR as a number, where the radio's own documentation calibrates its
 	// meter well enough to say: 1.5, 2.0, 3.0.
@@ -1214,7 +1215,7 @@ type State struct {
 	//
 	// Also absent above the top calibration point, where the curve is
 	// undocumented — the bar pins and this stops rather than extrapolating.
-	SWRRatio *float64 `json:"swr_ratio,omitempty"`
+	SWRRatio nullable.Nullable[float64] `json:"swr_ratio,omitempty"`
 
 	// Tuner The internal antenna tuner. Absent on a radio that has none or that
 	// remoses cannot ask.
@@ -1259,6 +1260,13 @@ type State struct {
 // display for ever. Applying a delta by merging its keys therefore gets
 // the right answer without knowing that rule.
 //
+// Those four are declared `nullable`, and that is load-bearing rather than
+// decorative: it is what makes the distinction survive into a generated
+// client. Without it the usual mapping is an optional pointer, where null
+// and absent are both a nil — so a client generated from this document
+// could not implement what this paragraph specifies, and would fail in
+// exactly the way the paragraph exists to prevent.
+//
 // Fifty fields per radio at a two-a-second poll is real bandwidth over a
 // link that may be somebody's phone, which is why the stream sends these
 // rather than whole snapshots. A client that wants snapshots can ignore
@@ -1280,7 +1288,7 @@ type StateFields struct {
 	//
 	// Note that full scale is not always the data field's range: an Icom's
 	// ALC runs to 120 of a possible 255, and `scale` carries that.
-	ALC *Meter `json:"alc,omitempty"`
+	ALC nullable.Nullable[Meter] `json:"alc,omitempty"`
 
 	// Antenna Which antenna socket is selected, counting from 1.
 	//
@@ -1443,7 +1451,7 @@ type StateFields struct {
 	// Icom counts 0-255, Kenwood counts meter dots — so compare the two
 	// rather than assuming either. Check `caps.power_meter` before
 	// offering the display at all.
-	PowerMeter *Meter `json:"power_meter,omitempty"`
+	PowerMeter nullable.Nullable[Meter] `json:"power_meter,omitempty"`
 
 	// Preamp The receive preamplifier: 0 for off, 1 to `caps.preamp_levels` for
 	// the amplifiers in the order the radio numbers them. On a set with
@@ -1542,7 +1550,7 @@ type StateFields struct {
 	// On an FT-857 or FT-897 this is one bit rather than a deflection —
 	// `scale` is 1 and `raw` is 0 or 1 — because a high-SWR alarm is all
 	// those radios report. The scale says so; do not assume a range.
-	SWR *Meter `json:"swr,omitempty"`
+	SWR nullable.Nullable[Meter] `json:"swr,omitempty"`
 
 	// SWRRatio SWR as a number, where the radio's own documentation calibrates its
 	// meter well enough to say: 1.5, 2.0, 3.0.
@@ -1556,7 +1564,7 @@ type StateFields struct {
 	//
 	// Also absent above the top calibration point, where the curve is
 	// undocumented — the bar pins and this stops rather than extrapolating.
-	SWRRatio *float64 `json:"swr_ratio,omitempty"`
+	SWRRatio nullable.Nullable[float64] `json:"swr_ratio,omitempty"`
 
 	// Tuner The internal antenna tuner. Absent on a radio that has none or that
 	// remoses cannot ask.
@@ -1972,6 +1980,13 @@ type WSDelta struct {
 	// explicitly is what stops the last transmission's SWR sitting on a
 	// display for ever. Applying a delta by merging its keys therefore gets
 	// the right answer without knowing that rule.
+	//
+	// Those four are declared `nullable`, and that is load-bearing rather than
+	// decorative: it is what makes the distinction survive into a generated
+	// client. Without it the usual mapping is an optional pointer, where null
+	// and absent are both a nil — so a client generated from this document
+	// could not implement what this paragraph specifies, and would fail in
+	// exactly the way the paragraph exists to prevent.
 	//
 	// Fifty fields per radio at a two-a-second poll is real bandwidth over a
 	// link that may be somebody's phone, which is why the stream sends these

@@ -100,11 +100,13 @@ type Event struct {
 // arrives as an explicit null and lands as a nil pointer, which is what stops
 // the last transmission's SWR sitting on the display for ever.
 //
-// It is done with the bytes rather than with the generated wire.StateDelta
-// because that type cannot express the difference. Every optional field there
-// is a pointer with omitempty, so a null and an absent field both decode to nil
-// and both marshal back out as absent — applying the decoded form would report
-// a cleared meter as an unchanged one.
+// It is done with the bytes rather than by merging the decoded
+// wire.StateDelta field by field. The decoded form can express everything the
+// bytes can — the fields that clear are declared nullable, so the generated
+// type holds absent, null and a value apart — but merging it means fifty
+// `if d.X.IsSpecified() { st.X = d.X }` lines, which is a list that falls
+// behind the spec the first time somebody adds a field to it. Decoding onto
+// the snapshot applies exactly what the server named, for ever, with no list.
 //
 // st goes through its own JSON first, to get a copy whose pointers nobody else
 // holds: decoding into a struct with non-nil pointer fields writes THROUGH

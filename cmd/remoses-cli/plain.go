@@ -111,29 +111,29 @@ func statusFields(v *view) string {
 	}
 	if v.hasPowerReading() {
 		fmt.Fprintf(&b, " power_pct=%g", st.Power.Pct)
-		if st.Power.Watts != nil {
-			fmt.Fprintf(&b, " power_w=%g", *st.Power.Watts)
+		if w, ok := reading(st.Power.Watts); ok {
+			fmt.Fprintf(&b, " power_w=%g", w)
 		}
 	}
 	fmt.Fprintf(&b, " ptt=%t", st.PTT)
 	fmt.Fprintf(&b, " s_raw=%d s_scale=%d", st.SMeter.Raw, st.SMeter.Scale)
-	if st.SMeter.S != nil {
-		fmt.Fprintf(&b, " s_units=%g", *st.SMeter.S)
+	if s, ok := reading(st.SMeter.S); ok {
+		fmt.Fprintf(&b, " s_units=%g", s)
 	}
 	// The transmit meters appear only while they exist, which is only while
 	// transmitting. A log line carrying pwr_raw=0 in receive would be
 	// indistinguishable from a real reading into a dead load, and the whole
 	// point of a log is that somebody reads it afterwards and cannot ask.
-	if m := st.PowerMeter; m != nil {
+	if m, ok := reading(st.PowerMeter); ok {
 		fmt.Fprintf(&b, " pwr_raw=%d pwr_scale=%d", m.Raw, m.Scale)
 	}
-	if m := st.SWR; m != nil {
+	if m, ok := reading(st.SWR); ok {
 		fmt.Fprintf(&b, " swr_raw=%d swr_scale=%d", m.Raw, m.Scale)
 	}
-	if r := st.SWRRatio; r != nil {
-		fmt.Fprintf(&b, " swr=%.2f", *r)
+	if r, ok := reading(st.SWRRatio); ok {
+		fmt.Fprintf(&b, " swr=%.2f", r)
 	}
-	if m := st.ALC; m != nil {
+	if m, ok := reading(st.ALC); ok {
 		fmt.Fprintf(&b, " alc_raw=%d alc_scale=%d", m.Raw, m.Scale)
 	}
 	// Which receiver the fields above are describing, where the radio says. On

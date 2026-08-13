@@ -212,17 +212,17 @@ func meterLines(v *view) []string {
 	}
 
 	var out []string
-	if m := st.PowerMeter; m != nil {
+	if m, ok := reading(st.PowerMeter); ok {
 		out = append(out, fmt.Sprintf("  PWR %s  %s",
-			meterBar(fraction(*m), meterCells), formatMeterValue(*m)))
+			meterBar(fraction(m), meterCells), formatMeterValue(m)))
 	}
-	if m := st.SWR; m != nil {
+	if m, ok := reading(st.SWR); ok {
 		out = append(out, fmt.Sprintf("  SWR %s  %s",
-			meterBar(fraction(*m), meterCells), formatSWR(*m, st.SWRRatio)))
+			meterBar(fraction(m), meterCells), formatSWR(m, st.SWRRatio)))
 	}
-	if m := st.ALC; m != nil {
+	if m, ok := reading(st.ALC); ok {
 		out = append(out, fmt.Sprintf("  ALC %s  %s",
-			meterBar(fraction(*m), meterCells), formatMeterValue(*m)))
+			meterBar(fraction(m), meterCells), formatMeterValue(m)))
 	}
 	return out
 }

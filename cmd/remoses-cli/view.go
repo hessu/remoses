@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oapi-codegen/nullable"
+
 	"github.com/hessu/remoses/internal/client"
 	"github.com/hessu/remoses/internal/wire"
 )
@@ -162,6 +164,20 @@ func value[T any](p *T) T {
 	return *p
 }
 
+// reading unwraps a field the spec declares nullable — the transmit meters, the
+// calibrated S figure, the watt reading.
+//
+// Those carry three states on the wire and the generated type keeps all three:
+// absent, an explicit null, and a value. The distinction is what the stream
+// needs — a delta naming a meter as null is the radio saying the reading has
+// gone away, where the same field absent means it did not change — and a
+// display needs neither. There is nothing to draw either way, so both collapse
+// to "no reading" here, once, rather than at every call site.
+func reading[T any](n nullable.Nullable[T]) (T, bool) {
+	v, err := n.Get()
+	return v, err == nil
+}
+
 // fraction returns a meter reading normalised to 0..1, for drawing a bar.
 func fraction(m wire.Meter) float64 {
 	if m.Scale <= 0 {
@@ -251,8 +267,8 @@ func (v *view) significant() significant {
 		tuner:      value(v.st.Tuner),
 		cw:         v.st.CW,
 	}
-	if w := v.st.Power.Watts; w != nil {
-		s.powerW, s.havePowerW = *w, true
+	if w, ok := reading(v.st.Power.Watts); ok {
+		s.powerW, s.havePowerW = w, true
 	}
 	s.agc = value(v.st.AGC)
 	if p := v.st.Preamp; p != nil {
@@ -327,16 +343,16 @@ type meters struct {
 
 func (v *view) meters() meters {
 	m := meters{sRaw: v.st.SMeter.Raw, sScale: v.st.SMeter.Scale}
-	if p := v.st.PowerMeter; p != nil {
+	if p, ok := reading(v.st.PowerMeter); ok {
 		m.havePower, m.powerRaw = true, p.Raw
 	}
-	if s := v.st.SWR; s != nil {
+	if s, ok := reading(v.st.SWR); ok {
 		m.haveSWR, m.swrRaw = true, s.Raw
 	}
-	if r := v.st.SWRRatio; r != nil {
-		m.swrRatio = *r
+	if r, ok := reading(v.st.SWRRatio); ok {
+		m.swrRatio = r
 	}
-	if a := v.st.ALC; a != nil {
+	if a, ok := reading(v.st.ALC); ok {
 		m.haveALC, m.alcRaw = true, a.Raw
 	}
 	return m
@@ -346,7 +362,10 @@ func (v *view) meters() meters {
 // meters rather than PTT that decide, because a radio can be keyed and report
 // none of them — the IC-706 family cannot even report the PTT.
 func (v *view) haveTXMeters() bool {
-	return v.st.PowerMeter != nil || v.st.SWR != nil || v.st.ALC != nil
+	_, pwr := reading(v.st.PowerMeter)
+	_, swr := reading(v.st.SWR)
+	_, alc := reading(v.st.ALC)
+	return pwr || swr || alc
 }
 
 // formatFreq renders hertz the way a radio's display does: megahertz, then
@@ -375,10 +394,10 @@ func formatMode(st wire.State) string {
 // speaks. An uncalibrated rig reports no s at all and gets an empty string; the
 // raw reading is displayed alongside regardless.
 func formatSUnit(m wire.Meter) string {
-	if m.S == nil {
+	s, ok := reading(m.S)
+	if !ok {
 		return ""
 	}
-	s := *m.S
 	if s > 9 {
 		return fmt.Sprintf("S9+%.0f dB", math.Round((s-9)*6))
 	}
@@ -455,8 +474,8 @@ func (v *view) hasFilterSlots() bool {
 
 func formatPower(p wire.Power) string {
 	s := fmt.Sprintf("%.0f %%", p.Pct)
-	if p.Watts != nil {
-		s += fmt.Sprintf("  %g W", *p.Watts)
+	if w, ok := reading(p.Watts); ok {
+		s += fmt.Sprintf("  %g W", w)
 	}
 	return s
 }
@@ -479,15 +498,15 @@ func formatMeterValue(m wire.Meter) string {
 // The single-bit case is spelled out rather than drawn as a number: an FT-857
 // reports a high-SWR alarm and nothing else, and "1/1" would look like a
 // reading rather than the warning light it is.
-func formatSWR(m wire.Meter, ratio *float64) string {
+func formatSWR(m wire.Meter, ratio nullable.Nullable[float64]) string {
 	if m.Scale == 1 {
 		if m.Raw > 0 {
 			return "HIGH"
 		}
 		return "ok"
 	}
-	if ratio != nil {
-		return fmt.Sprintf("%.1f:1", *ratio)
+	if r, ok := reading(ratio); ok {
+		return fmt.Sprintf("%.1f:1", r)
 	}
 	return formatMeterValue(m)
 }

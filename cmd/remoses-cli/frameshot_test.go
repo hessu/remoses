@@ -17,20 +17,19 @@ func TestFrameShot(t *testing.T) {
 		Mode:       wire.ModeCW,
 		PassbandHz: 500,
 		FilterSlot: 1,
-		Power:      wire.Power{Pct: 25, Watts: ptrFloat64(25)},
+		Power:      wire.Power{Pct: 25, Watts: f64(25)},
 		SMeter:     wire.Meter{Raw: 96, Scale: 255},
 		CW:         wire.CWStatus{WPM: 25},
 	}
 
 	tx := base
 	tx.PTT = true
-	ratio := 1.4
-	tx.PowerMeter = &wire.Meter{Raw: 143, Scale: 255}
+	tx.PowerMeter = txMeter(143, 255)
 	// As the civ backend reports it: against the top of the calibrated range,
 	// where 120 is SWR 3.0.
-	tx.SWR = &wire.Meter{Raw: 38, Scale: 120}
-	tx.SWRRatio = &ratio
-	tx.ALC = &wire.Meter{Raw: 72, Scale: 120}
+	tx.SWR = txMeter(38, 120)
+	tx.SWRRatio = f64(1.4)
+	tx.ALC = txMeter(72, 120)
 	tx.Tuner = ptr(wire.TunerTuning)
 	base.Tuner = ptr(wire.TunerOn)
 
@@ -49,5 +48,3 @@ func TestFrameShot(t *testing.T) {
 		})
 	}
 }
-
-func ptrFloat64(v float64) *float64 { return &v }

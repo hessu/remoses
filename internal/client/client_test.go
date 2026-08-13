@@ -117,10 +117,16 @@ func TestStateDecodesTheDocumentedShape(t *testing.T) {
 	if st.PassbandHz != 500 || st.FilterSlot != 2 {
 		t.Errorf("filter = %d Hz slot %d", st.PassbandHz, st.FilterSlot)
 	}
-	if st.Power.Pct != 40 || st.Power.Native != 102 || st.Power.Watts != nil {
+	// watts is null in the fixture: a rig with no watt-accurate scale. Null is
+	// not the same as absent, and the generated type keeps them apart, so this
+	// asserts the reading is unavailable rather than merely unmentioned.
+	if st.Power.Pct != 40 || st.Power.Native != 102 || !st.Power.Watts.IsNull() {
 		t.Errorf("power = %+v", st.Power)
 	}
-	if st.SMeter.Raw != 78 || st.SMeter.Scale != 255 || st.SMeter.S == nil || *st.SMeter.S != 5.5 {
+	if s, err := st.SMeter.S.Get(); err != nil || s != 5.5 {
+		t.Errorf("s_meter = %+v (s: %v)", st.SMeter, err)
+	}
+	if st.SMeter.Raw != 78 || st.SMeter.Scale != 255 {
 		t.Errorf("s_meter = %+v", st.SMeter)
 	}
 	if st.CW.WPM != 28 {

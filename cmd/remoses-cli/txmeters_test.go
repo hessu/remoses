@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oapi-codegen/nullable"
+
 	"github.com/hessu/remoses/internal/wire"
 )
 
@@ -30,14 +32,13 @@ func TestMeterLinesInReceive(t *testing.T) {
 // on a Kenwood the command behind it is reporting the power meter instead, so
 // what is left in State is whatever the last receive poll saw.
 func TestMeterLinesWhileTransmitting(t *testing.T) {
-	ratio := 1.5
 	v := meterView(t, wire.State{
 		PTT:        true,
 		SMeter:     wire.Meter{Raw: 60, Scale: 255},
-		PowerMeter: &wire.Meter{Raw: 143, Scale: 255},
-		SWR:        &wire.Meter{Raw: 48, Scale: 255},
-		SWRRatio:   &ratio,
-		ALC:        &wire.Meter{Raw: 60, Scale: 120},
+		PowerMeter: txMeter(143, 255),
+		SWR:        txMeter(48, 255),
+		SWRRatio:   f64(1.5),
+		ALC:        txMeter(60, 120),
 	})
 	lines := meterLines(v)
 	if len(lines) != 3 {
@@ -59,8 +60,8 @@ func TestMeterLinesWhileTransmitting(t *testing.T) {
 func TestMeterLinesOnlyWhatTheRadioReports(t *testing.T) {
 	v := meterView(t, wire.State{
 		PTT:        true,
-		PowerMeter: &wire.Meter{Raw: 10, Scale: 15},
-		SWR:        &wire.Meter{Raw: 1, Scale: 1},
+		PowerMeter: txMeter(10, 15),
+		SWR:        txMeter(1, 1),
 	})
 	lines := meterLines(v)
 	if len(lines) != 2 {
@@ -74,17 +75,23 @@ func TestMeterLinesOnlyWhatTheRadioReports(t *testing.T) {
 }
 
 func TestFormatSWR(t *testing.T) {
-	ratio := 2.0
+	var absent, cleared nullable.Nullable[float64]
+	cleared.SetNull()
+
 	tests := []struct {
 		name  string
 		meter wire.Meter
-		ratio *float64
+		ratio nullable.Nullable[float64]
 		want  string
 	}{
-		{"a calibrated ratio wins", wire.Meter{Raw: 80, Scale: 255}, &ratio, "2.0:1"},
-		{"without one, the deflection", wire.Meter{Raw: 80, Scale: 255}, nil, "80/255  31 %"},
-		{"a single bit set", wire.Meter{Raw: 1, Scale: 1}, nil, "HIGH"},
-		{"a single bit clear", wire.Meter{Raw: 0, Scale: 1}, nil, "ok"},
+		{"a calibrated ratio wins", wire.Meter{Raw: 80, Scale: 255}, f64(2.0), "2.0:1"},
+		{"without one, the deflection", wire.Meter{Raw: 80, Scale: 255}, absent, "80/255  31 %"},
+		// A ratio the radio has explicitly cleared reads the same as one it
+		// never had: there is nothing to draw either way, and the display is
+		// where the three wire states collapse to two.
+		{"a cleared one, the deflection", wire.Meter{Raw: 80, Scale: 255}, cleared, "80/255  31 %"},
+		{"a single bit set", wire.Meter{Raw: 1, Scale: 1}, absent, "HIGH"},
+		{"a single bit clear", wire.Meter{Raw: 0, Scale: 1}, absent, "ok"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -106,13 +113,12 @@ func TestStatusFieldsTXMeters(t *testing.T) {
 		}
 	}
 
-	ratio := 1.5
 	tx := statusFields(meterView(t, wire.State{
 		PTT:        true,
-		PowerMeter: &wire.Meter{Raw: 143, Scale: 255},
-		SWR:        &wire.Meter{Raw: 48, Scale: 255},
-		SWRRatio:   &ratio,
-		ALC:        &wire.Meter{Raw: 60, Scale: 120},
+		PowerMeter: txMeter(143, 255),
+		SWR:        txMeter(48, 255),
+		SWRRatio:   f64(1.5),
+		ALC:        txMeter(60, 120),
 	}))
 	for _, want := range []string{
 		"pwr_raw=143 pwr_scale=255",
@@ -133,7 +139,7 @@ func TestMetersComparableAcrossTransmit(t *testing.T) {
 	tx := meterView(t, wire.State{
 		PTT:        true,
 		SMeter:     wire.Meter{Raw: 3, Scale: 255},
-		PowerMeter: &wire.Meter{Raw: 143, Scale: 255},
+		PowerMeter: txMeter(143, 255),
 	}).meters()
 
 	if rx == tx {
@@ -146,7 +152,7 @@ func TestMetersComparableAcrossTransmit(t *testing.T) {
 	same := meterView(t, wire.State{
 		PTT:        true,
 		SMeter:     wire.Meter{Raw: 3, Scale: 255},
-		PowerMeter: &wire.Meter{Raw: 143, Scale: 255},
+		PowerMeter: txMeter(143, 255),
 	}).meters()
 	if tx != same {
 		t.Error("two identical readings compared unequal; the pointers are not flattened")

@@ -1890,9 +1890,17 @@ Applying a delta is a JSON merge, and deliberately: `changed` uses `State`'s own
 client overwrites the members it carries and leaves the rest. A member present and **null**
 means the reading has gone away — the transmit meters, which exist only while the radio is
 keyed — and that is what stops the last transmission's SWR sitting on a display for ever.
-Note that this is the one thing the generated `StateDelta` cannot express: every optional
-field there is a pointer with `omitempty`, so null and absent both arrive as nil. remoses-cli
-applies the bytes for that reason, onto a generated `State`.
+
+Those four members are declared `nullable` in the document, and the generator is told to map
+that to a three-state type rather than to a pointer. This is the subtle half of the whole
+exercise. The prose specified a difference between `{"swr": null}` and `{}`; the schema did
+not, so the obvious mapping — `*Meter` with `omitempty` — collapsed both to nil, and a client
+generated from the document could not implement the document. The bug was invisible in
+remoses-cli, which merges the raw bytes and so never asked the type, and would have surfaced
+first in somebody else's client as an SWR reading that never went away.
+
+remoses-cli still merges the bytes, but for the other reason: a field-by-field merge of the
+decoded form is fifty lines that fall behind the spec the first time a field is added.
 
 ### Backpressure
 
@@ -2675,6 +2683,7 @@ Dependencies, deliberately few:
 | `golang.org/x/crypto/bcrypt` | Password hashing |
 | `golang.org/x/term` | Terminal size and password prompt, for remoses-cli |
 | `oapi-codegen/runtime` | Small support library the generated client links against |
+| `oapi-codegen/nullable` | Three-state optional (absent / null / value) for the fields a delta clears |
 | `oapi-codegen/oapi-codegen` | **Tool dependency**: generates `internal/wire`, never linked |
 
 Everything else is stdlib (`net/http`, `log/slog`, `crypto/subtle`). Result is a single static
