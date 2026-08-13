@@ -138,7 +138,7 @@ func patchDiff(got, want radio.Patch) string {
 	cmp("SWR", got.SWR, want.SWR)
 	cmp("ALC", got.ALC, want.ALC)
 	cmp("SWRRatio", got.SWRRatio, want.SWRRatio)
-	cmp("CWBusy", got.CWBusy, want.CWBusy)
+	cmp("CW", got.CW, want.CW)
 	cmp("Connected", got.Connected, want.Connected)
 	return strings.Join(diffs, "; ")
 }

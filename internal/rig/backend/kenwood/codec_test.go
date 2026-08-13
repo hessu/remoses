@@ -512,7 +512,7 @@ func comparePatch(t *testing.T, got, want radio.Patch) {
 	cmp("PassbandHz", got.PassbandHz, want.PassbandHz)
 	cmp("FilterSlot", got.FilterSlot, want.FilterSlot)
 	cmp("PTT", got.PTT, want.PTT)
-	cmp("CWBusy", got.CWBusy, want.CWBusy)
+	cmp("CW", got.CW, want.CW)
 	cmp("Connected", got.Connected, want.Connected)
 
 	compareMeter(t, "SMeter", got.SMeter, want.SMeter)

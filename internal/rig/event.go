@@ -41,8 +41,10 @@ type Event struct {
 	Seq   uint64
 	At    time.Time
 	State radio.State
-	// Patch holds the changed fields for EventState. It is empty for EventCW,
-	// whose payload is State.CW.
+	// Patch holds the changed fields: the poller's diff for EventState, and the
+	// queue status for EventCW. It is what the WebSocket layer renders a delta
+	// from, so an event that leaves it empty costs every listening client a full
+	// state snapshot.
 	Patch radio.Patch
 	// Err is the reason a connection went away, for EventConn only.
 	Err string

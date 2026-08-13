@@ -593,6 +593,49 @@ func TestCWEventsAreDiscrete(t *testing.T) {
 	}
 }
 
+// TestCWQueueChangesTravelAsDeltas is what an IC-7610 sending Morse showed:
+// the queue moving on every poll while busy stayed true, and every one of those
+// polls arriving as a FULL STATE SNAPSHOT because the patch behind it was
+// empty. Ten seconds of CW cost sixteen snapshots of fifty fields each.
+//
+// The state lane is allowed to send a snapshot — it is the honest answer to a
+// change no delta can name — so this asserts the absence rather than trusting
+// the presence: while nothing but the queue is moving, nothing but deltas
+// carrying `cw` should come out.
+func TestCWQueueChangesTravelAsDeltas(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, harnessOpts{poll: 10 * time.Millisecond})
+	c := h.dialBasic("/ws-authed")
+
+	readMsg(t, c) // hello
+	readMsg(t, c) // the opening snapshot, which is owed and expected
+
+	h.cws["ic7610"].churn.Store(true)
+
+	const want = 5
+	deltas, snapshots := 0, 0
+	deadline := time.Now().Add(5 * time.Second)
+	for deltas < want && time.Now().Before(deadline) {
+		m := readMsg(t, c)
+		switch str(m, "type") {
+		case "delta":
+			if _, ok := obj(t, m, "changed")["cw"]; ok {
+				deltas++
+			}
+		case "state":
+			snapshots++
+		}
+	}
+
+	if deltas < want {
+		t.Fatalf("saw %d cw deltas in 5 s, want %d", deltas, want)
+	}
+	if snapshots > 0 {
+		t.Errorf("%d full state snapshots for a queue that only moved; "+
+			"the delta path is not carrying the CW status", snapshots)
+	}
+}
+
 // TestKeepaliveKeepsResponsiveClient proves the keepalive runs and that a
 // client answering it is left alone.
 func TestKeepaliveKeepsResponsiveClient(t *testing.T) {
@@ -865,13 +908,13 @@ func TestChangedFieldsUsesStateNames(t *testing.T) {
 	power := radio.Power{Pct: 40, Native: 102}
 	ptt := true
 	meter := radio.Meter{Raw: 78, Scale: 255}
-	busy := true
+	cw := radio.CWStatus{Busy: true, Queued: 12, WPM: 28}
 	connected := false
 
 	p := radio.Patch{
 		Frequency: &freq, Mode: &mode, DataMode: &data, PassbandHz: &passband,
 		FilterSlot: &slot, Power: &power, PTT: &ptt, SMeter: &meter,
-		SWR: &meter, ALC: &meter, CWBusy: &busy, Connected: &connected,
+		SWR: &meter, ALC: &meter, CW: &cw, Connected: &connected,
 	}
 	st := radio.State{CW: radio.CWStatus{Busy: true, Queued: 12, WPM: 28}}
 

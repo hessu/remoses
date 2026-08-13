@@ -179,6 +179,45 @@ func TestDiffComparesReadingsRatherThanAddresses(t *testing.T) {
 	}
 }
 
+// TestDiffReportsAQueueThatMovedWithoutStopping is the other half of what a
+// transmitting radio showed.
+//
+// A message draining reports busy=true for its whole length while the queue
+// depth and the estimate move on every poll. When the patch could say only
+// "busy changed", those polls produced an EMPTY patch — and the WebSocket layer
+// answers an empty patch with a full state snapshot, because there is nothing
+// else honest it can send. Sending Morse therefore published the entire state
+// twice a second for as long as the message lasted.
+func TestDiffReportsAQueueThatMovedWithoutStopping(t *testing.T) {
+	sending := State{CW: CWStatus{Busy: true, Queued: 14, WPM: 20, EstRemainingMS: 6235}}
+
+	drained := sending
+	drained.CW.Queued, drained.CW.EstRemainingMS = 9, 4110
+
+	d := sending.Diff(drained)
+	if d.Empty() {
+		t.Fatal("a queue that moved reported no change at all")
+	}
+	if d.CW == nil {
+		t.Fatal("Diff did not report the CW status")
+	}
+	if d.CW.Queued != 9 || d.CW.EstRemainingMS != 4110 || !d.CW.Busy {
+		t.Errorf("cw = %+v, want the new depth and estimate with busy still set", *d.CW)
+	}
+
+	// The speed is part of it too: a client showing wpm should see it change.
+	faster := sending
+	faster.CW.WPM = 28
+	if d := sending.Diff(faster); d.CW == nil {
+		t.Error("Diff missed a keyer speed change")
+	}
+
+	// And an unchanged queue is still not a change.
+	if d := sending.Diff(sending); !d.Empty() {
+		t.Errorf("an unchanged queue reported a change: %+v", *d.CW)
+	}
+}
+
 // The transmit meters are pointers to the same type, and they are compared by
 // their own helper. It has the same trap in it.
 func TestTransmitMeterDiffComparesReadings(t *testing.T) {

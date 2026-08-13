@@ -434,8 +434,12 @@ func (c *client) stateMessageLocked(ev rig.Event) (any, bool) {
 		return nil, false
 	}
 	if ev.Patch.Empty() {
-		// A CW queue change advances seq without touching a field any delta can
-		// name, so a snapshot is the only honest rendering.
+		// An event that moved seq without moving a field any delta can name. It
+		// should be rare — radio.Patch carries everything the state does — and a
+		// snapshot is the only honest rendering of one, so this stays as the
+		// fallback rather than as a thing to reach for. It used to be the CW
+		// queue's normal path, which cost a full state snapshot twice a second
+		// for the length of every message.
 		return stateMsg{
 			Type:  typeState,
 			Radio: ev.RadioID,

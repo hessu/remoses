@@ -111,10 +111,9 @@ type clientMsg struct {
 //
 // radio.Patch is internal: pointer fields, no tags. The names here are
 // radio.State's JSON tags, so `changed` is always a subset of `state` and a
-// client needs one schema rather than two. st supplies the values for fields
-// whose patch representation is narrower than the state representation — the
-// patch records only that CW went busy, while the state carries the whole
-// CWStatus, and sending half of it would be worse than sending all of it.
+// client needs one schema rather than two. st supplies the values for the
+// transmit meters, whose "this went away" a patch cannot express; see the
+// comment on that group below.
 func changedFields(p radio.Patch, st radio.State) map[string]any {
 	m := make(map[string]any, 8)
 	if p.Frequency != nil {
@@ -141,8 +140,8 @@ func changedFields(p radio.Patch, st radio.State) map[string]any {
 	if p.SMeter != nil {
 		m["s_meter"] = *p.SMeter
 	}
-	if p.CWBusy != nil {
-		m["cw"] = st.CW
+	if p.CW != nil {
+		m["cw"] = *p.CW
 	}
 	if p.Connected != nil {
 		m["connected"] = *p.Connected

@@ -685,8 +685,17 @@ type Patch struct {
 	SWRRatio   *float64
 	Tuner      *Tuner
 	Standby    *bool
-	CWBusy     *bool
-	Connected  *bool
+	// CW is the whole queue status rather than the busy flag alone.
+	//
+	// The flag was not enough to describe a change. A message draining reports
+	// the same busy for seconds while the queue depth and the estimate move on
+	// every poll, so a patch that could only say "busy changed" came out EMPTY
+	// for most of a transmission — and the WebSocket layer, which cannot send a
+	// delta it has no field for, fell back to a full state snapshot twice a
+	// second for as long as the Morse lasted. Sending the queue costs a few
+	// bytes; sending fifty state fields to say the queue moved costs the rest.
+	CW        *CWStatus
+	Connected *bool
 
 	// The receive front end. AGC is a string enum whose zero value already
 	// means "unknown", so it needs no pointer; the rest carry a real zero.
@@ -732,7 +741,7 @@ func (p Patch) Empty() bool {
 		p.PTT == nil && p.SMeter == nil && p.PowerMeter == nil &&
 		p.SWR == nil && p.ALC == nil && p.SWRRatio == nil &&
 		p.Tuner == nil && p.Standby == nil &&
-		p.CWBusy == nil && p.Connected == nil &&
+		p.CW == nil && p.Connected == nil &&
 		p.Preamp == nil && p.AttenuatorDB == nil && p.RFGain == nil &&
 		p.AGC == nil && p.IPPlus == nil && p.DigiSel == nil &&
 		p.DigiSelShift == nil &&
@@ -861,8 +870,8 @@ func (s State) Apply(p Patch) State {
 		v := *p.RXAntenna
 		s.RXAntenna = &v
 	}
-	if p.CWBusy != nil {
-		s.CW.Busy = *p.CWBusy
+	if p.CW != nil {
+		s.CW = *p.CW
 	}
 	if p.Connected != nil {
 		s.Connected = *p.Connected
@@ -1072,8 +1081,11 @@ func (s State) Diff(next State) Patch {
 	if s.Connected != next.Connected {
 		p.Connected = &next.Connected
 	}
-	if s.CW.Busy != next.CW.Busy {
-		p.CWBusy = &next.CW.Busy
+	// The whole status, not just the flag: queued and the estimate move while
+	// busy stays true, and those are changes a client watching a message drain
+	// is watching for.
+	if s.CW != next.CW {
+		p.CW = &next.CW
 	}
 
 	if s.VFO != next.VFO {

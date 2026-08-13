@@ -448,12 +448,19 @@ func (s *Session) refreshCW() {
 	s.state.Store(&next)
 	s.stateMu.Unlock()
 
+	// The patch matters as much as the event. The discrete lane carries the
+	// queue to a client as a `cw` frame, but the WebSocket's state lane renders
+	// whatever a patch names — and an empty one leaves it nothing to say but a
+	// full snapshot. A message draining publishes a change on every poll, so
+	// that was the whole state, fifty fields of it, twice a second for the
+	// length of every transmission.
 	s.subs.publish(Event{
 		Kind:    EventCW,
 		RadioID: s.id,
 		Seq:     next.Seq,
 		At:      next.UpdatedAt,
 		State:   next,
+		Patch:   radio.Patch{CW: &st},
 	})
 }
 
