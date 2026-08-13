@@ -34,7 +34,7 @@ func writeConfig(t *testing.T, body string) string {
 func TestResolveBaseFromConfigFile(t *testing.T) {
 	path := writeConfig(t, `
 server:
-  listen: "127.0.0.1:8080"
+  listen: "127.0.0.1:7342"
   base_path: /api/v1
 auth:
   users:
@@ -46,7 +46,7 @@ auth:
 	if err != nil {
 		t.Fatalf("resolveBase: %v", err)
 	}
-	if want := "http://127.0.0.1:8080/api/v1"; got != want {
+	if want := "http://127.0.0.1:7342/api/v1"; got != want {
 		t.Errorf("base = %q, want %q", got, want)
 	}
 }
@@ -88,7 +88,7 @@ func TestResolveBaseFallsBackWhenTheDefaultConfigIsAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveBase: %v", err)
 	}
-	if want := "http://127.0.0.1:8080/api/v1"; got != want {
+	if want := "http://127.0.0.1:7342/api/v1"; got != want {
 		t.Errorf("base = %q, want %q", got, want)
 	}
 }

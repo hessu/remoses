@@ -46,7 +46,7 @@ func TestFrameShowsWhatAnOperatorWatches(t *testing.T) {
 
 func TestFrameFitsTheTerminal(t *testing.T) {
 	v := newTestView()
-	v.linkNote = "retry in 4.0 s (attempt 3): dial tcp 127.0.0.1:8080: connect: connection refused"
+	v.linkNote = "retry in 4.0 s (attempt 3): dial tcp 127.0.0.1:7342: connect: connection refused"
 	v.link = linkReconnecting
 
 	for _, width := range []int{40, 56, 72, 80, 100, 200} {

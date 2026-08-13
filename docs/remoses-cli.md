@@ -89,9 +89,9 @@ file (`remoses.yaml` by default, `-config` to point elsewhere):
 `server.listen` and `server.base_path` give the URL, and whether `server.tls` is
 set decides `http` or `https`.
 
-A wildcard bind such as `0.0.0.0:8080` is not an address a client can dial, so
+A wildcard bind such as `0.0.0.0:7342` is not an address a client can dial, so
 it resolves to loopback. If the default configuration file is not there, the
-daemon's built-in defaults are assumed — `http://127.0.0.1:8080/api/v1`.
+daemon's built-in defaults are assumed — `http://127.0.0.1:7342/api/v1`.
 
 `-url` overrides all of it, and fills in `/api/v1` when the URL has no path of
 its own.

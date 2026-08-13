@@ -15,12 +15,12 @@ func TestBaseURLFromConfig(t *testing.T) {
 	}{
 		{
 			name: "empty config uses the daemon defaults",
-			want: "http://127.0.0.1:8080/api/v1",
+			want: "http://127.0.0.1:7342/api/v1",
 		},
 		{
 			name: "loopback without tls is http",
-			cfg:  config.Config{Server: config.Server{Listen: "127.0.0.1:8080", BasePath: "/api/v1"}},
-			want: "http://127.0.0.1:8080/api/v1",
+			cfg:  config.Config{Server: config.Server{Listen: "127.0.0.1:7342", BasePath: "/api/v1"}},
+			want: "http://127.0.0.1:7342/api/v1",
 		},
 		{
 			name: "tls configured makes it https",
@@ -38,23 +38,23 @@ func TestBaseURLFromConfig(t *testing.T) {
 		},
 		{
 			name: "v6 wildcard resolves to v6 loopback",
-			cfg:  config.Config{Server: config.Server{Listen: "[::]:8080"}},
-			want: "http://[::1]:8080/api/v1",
+			cfg:  config.Config{Server: config.Server{Listen: "[::]:7342"}},
+			want: "http://[::1]:7342/api/v1",
 		},
 		{
 			name: "port-only bind resolves to loopback",
-			cfg:  config.Config{Server: config.Server{Listen: ":8080"}},
-			want: "http://127.0.0.1:8080/api/v1",
+			cfg:  config.Config{Server: config.Server{Listen: ":7342"}},
+			want: "http://127.0.0.1:7342/api/v1",
 		},
 		{
 			name: "base path without a leading slash",
-			cfg:  config.Config{Server: config.Server{Listen: "127.0.0.1:8080", BasePath: "remoses/api/v1"}},
-			want: "http://127.0.0.1:8080/remoses/api/v1",
+			cfg:  config.Config{Server: config.Server{Listen: "127.0.0.1:7342", BasePath: "remoses/api/v1"}},
+			want: "http://127.0.0.1:7342/remoses/api/v1",
 		},
 		{
 			name: "base path at the root",
-			cfg:  config.Config{Server: config.Server{Listen: "127.0.0.1:8080", BasePath: "/"}},
-			want: "http://127.0.0.1:8080",
+			cfg:  config.Config{Server: config.Server{Listen: "127.0.0.1:7342", BasePath: "/"}},
+			want: "http://127.0.0.1:7342",
 		},
 	}
 
@@ -87,9 +87,9 @@ func TestResolveURL(t *testing.T) {
 	}{
 		{"https://radio.example.net", "https://radio.example.net/api/v1"},
 		{"https://radio.example.net/", "https://radio.example.net/api/v1"},
-		{"http://host:8080/remoses/api/v1", "http://host:8080/remoses/api/v1"},
-		{"http://host:8080/remoses/api/v1/", "http://host:8080/remoses/api/v1"},
-		{"host:8080", "http://host:8080/api/v1"},
+		{"http://host:7342/remoses/api/v1", "http://host:7342/remoses/api/v1"},
+		{"http://host:7342/remoses/api/v1/", "http://host:7342/remoses/api/v1"},
+		{"host:7342", "http://host:7342/api/v1"},
 		{"wss://host/api/v1", "https://host/api/v1"},
 		{"ws://host", "http://host/api/v1"},
 		{"https://oh2xyz@host", "https://host/api/v1"},

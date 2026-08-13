@@ -180,7 +180,7 @@ Config `limits` likewise accepts `max_power_w` or `max_power_pct`.
 
 ```yaml
 server:
-  listen: "0.0.0.0:8080"
+  listen: "0.0.0.0:7342"
   base_path: /api/v1
   tls:
     cert_file: /etc/remoses/cert.pem

@@ -38,7 +38,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:    "unknown nested key",
-			yaml:    "server:\n  lissen: \"127.0.0.1:8080\"\n" + minimalYAML,
+			yaml:    "server:\n  lissen: \"127.0.0.1:7342\"\n" + minimalYAML,
 			wantErr: `unknown field "lissen"`,
 		},
 		{

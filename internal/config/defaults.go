@@ -6,7 +6,7 @@ import "time"
 // radios, not for an internet-facing service: loopback bind, cheap bcrypt, and
 // polling intervals fast enough that a VFO knob feels live.
 const (
-	DefaultListen   = "127.0.0.1:8080"
+	DefaultListen   = "127.0.0.1:7342"
 	DefaultBasePath = "/api/v1"
 
 	DefaultRealm = "remoses"

@@ -16,7 +16,7 @@
 server:
   # Loopback needs no TLS. Any other address does, because HTTP Basic replays
   # the password on every request — see server.insecure below.
-  listen: "0.0.0.0:8080"
+  listen: "0.0.0.0:7342"
   base_path: /api/v1
   tls:
     cert_file: /etc/remoses/cert.pem

@@ -20,7 +20,7 @@ menus — are on the backend pages: [Icom](icom.md), [Kenwood](kenwood.md),
 
 ```yaml
 server:
-  listen: "0.0.0.0:8080"
+  listen: "0.0.0.0:7342"
   base_path: /api/v1
   tls:
     cert_file: /etc/remoses/cert.pem

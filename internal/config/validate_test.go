@@ -10,7 +10,7 @@ import (
 // table below.
 func validConfig() *Config {
 	return &Config{
-		Server: Server{Listen: "127.0.0.1:8080", BasePath: "/api/v1"},
+		Server: Server{Listen: "127.0.0.1:7342", BasePath: "/api/v1"},
 		Auth: Auth{
 			Realm:      "remoses",
 			BcryptCost: 8,
@@ -359,45 +359,45 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name:    "listen is not host:port",
-			mutate:  func(c *Config) { c.Server.Listen = "8080" },
-			wantErr: `server.listen "8080" is not host:port`,
+			mutate:  func(c *Config) { c.Server.Listen = "7342" },
+			wantErr: `server.listen "7342" is not host:port`,
 		},
 		{
 			name:    "wildcard bind without tls",
-			mutate:  func(c *Config) { c.Server.Listen = "0.0.0.0:8080" },
+			mutate:  func(c *Config) { c.Server.Listen = "0.0.0.0:7342" },
 			wantErr: "Basic auth replays the password on every request",
 		},
 		{
 			name:    "bare port bind without tls",
-			mutate:  func(c *Config) { c.Server.Listen = ":8080" },
+			mutate:  func(c *Config) { c.Server.Listen = ":7342" },
 			wantErr: "server.insecure: true to override",
 		},
 		{
 			name:    "routable bind without tls",
-			mutate:  func(c *Config) { c.Server.Listen = "192.0.2.10:8080" },
+			mutate:  func(c *Config) { c.Server.Listen = "192.0.2.10:7342" },
 			wantErr: "is not a loopback address and tls is not configured",
 		},
 		{
 			name: "wildcard bind with tls",
 			mutate: func(c *Config) {
-				c.Server.Listen = "0.0.0.0:8080"
+				c.Server.Listen = "0.0.0.0:7342"
 				c.Server.TLS = &TLS{CertFile: "/etc/remoses/cert.pem", KeyFile: "/etc/remoses/key.pem"}
 			},
 		},
 		{
 			name: "wildcard bind with the insecure escape hatch",
 			mutate: func(c *Config) {
-				c.Server.Listen = "0.0.0.0:8080"
+				c.Server.Listen = "0.0.0.0:7342"
 				c.Server.Insecure = true
 			},
 		},
 		{
 			name:   "ipv6 loopback needs no tls",
-			mutate: func(c *Config) { c.Server.Listen = "[::1]:8080" },
+			mutate: func(c *Config) { c.Server.Listen = "[::1]:7342" },
 		},
 		{
 			name:   "localhost needs no tls",
-			mutate: func(c *Config) { c.Server.Listen = "localhost:8080" },
+			mutate: func(c *Config) { c.Server.Listen = "localhost:7342" },
 		},
 	}
 
