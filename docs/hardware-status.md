@@ -205,6 +205,56 @@ dropping PTT.
 Its CW could not be tried: this radio has no CAT keyer at all, and the
 `serial_key` path needs a second serial port that was not there.
 
+### TS-590SG — the first radio verified through `remoses test-run`
+
+On the bench here, like the others, but driven entirely by the self-test rather
+than by hand. So it is two results at once: the radio, and the tool that is
+meant to let people who are not here produce the same evidence.
+
+Six runs over ninety minutes, on Linux over a CP2102 at 57600. The last three
+are identical step for step: **52 pass, 7 refused, 6 skipped, 6 info, nothing
+failed, and the radio put back as it was found.** Frequency, every mode, both
+filter slots and the width ladder, transmit power, PTT with the transmit meters,
+both VFOs, the receive front end, the noise blankers and reducers and both
+notches, the antenna selector, break-in in all three states, a tuning cycle that
+found a match on 28 MHz — and **CW confirmed audible on RF by the operator**,
+which is the one thing no report can record.
+
+That completes what the TS-590SG needed. Its command set is the TS-590S's, which
+was verified here on the air, and a test asserts the two profiles stay identical.
+
+**It found two bugs, and the pair of them is an argument for the whole idea.**
+
+- **A transmit/receive changeover is not instant, and the read-back beat it.**
+  Two of the first three runs reported "the radio is still transmitting" after
+  the unkey and one did not — decided entirely by whether a poll tick happened
+  to land inside the step and read a second time. The session now waits for the
+  transmit flag to agree, bounded, before asking. A wrong answer that depends on
+  scheduling is worse than a slow one, and this is the wrong answer that matters
+  most: a client told the transmitter is still up when it is not, or the
+  dead-man path appearing to fail at the one job it exists for.
+- **A refused set was reported as a refused read.** A Kenwood rejection is a bare
+  "?" that names nothing, and a refused *set* is answered late enough to arrive
+  while the read-back is outstanding — so the report said `NR;: rejected`, of a
+  plain read that had been answering all session. It cost the first reader of
+  that file a wrong turn, which is exactly the cost this project cannot afford
+  in a file written by somebody who is not here to be asked.
+
+**And it found three faults in the test tool** — which is the other half of what
+this run was for, because every report anybody else ever sends depends on it. Mode steps were named with control characters
+rather than mode names — `radio.Mode` is a `uint8`, so `string(m)` yields the
+rune with that code point — so every report so far was unreadable exactly where
+it was most interesting. The mode sweep left the radio wherever the capability
+list happened to end, so break-in and the automatic notch were tested in modes
+that cannot have them. And a rejection by the radio was scored as a finding
+rather than as the correct answer.
+
+The last of those is worth stating as a rule the tool now follows: **a control
+must be exercised in a mode that has it.** Break-in on this radio is set with
+`VX`, which addresses VOX in anything but CW; `FW` is not the filter-width
+command in SSB at all. Tested in the wrong mode, both produce refusals that
+describe the test rather than the radio — and in the first reports, six of them.
+
 ### IC-7610 behind Hamlib rigctld
 
 The same radio as the first entry, reached the other way: a Hamlib 4.7 daemon on
@@ -299,12 +349,18 @@ Kenwood backend had no notion of break-in at all.
 
 ## What this still does not tell you
 
-- **What has been verified is two Icoms, a Kenwood and a Yaesu**, named above,
-  plus one of those Icoms through Hamlib. Treat every other model as
+- **What has been verified is two Icoms, two Kenwoods and a Yaesu**, named
+  above, plus one of those Icoms through Hamlib. Treat every other model as
   "implemented from documentation, awaiting confirmation". The **ASCII** Yaesu
   profiles — a different protocol from the FT-857D that was tested — the
   remaining Icom profiles and the other Kenwood profiles have never seen a
   radio.
+- **No radio has yet been verified by anybody but its maintainer.** The
+  TS-590SG was driven entirely by `remoses test-run`, which is the shape a
+  report from a stranger would take and is why that command exists — but it was
+  still this bench, this cabling and somebody who knows what the answers ought
+  to be. The first report from a radio nobody here owns will be the real test of
+  it.
 - **The rigctld backend has met one Hamlib backend, not Hamlib.** What it can do
   for a given rig is whatever that rig's Hamlib backend implements, and the one
   radio tried through it was an IC-7610 — which is also the radio remoses knows

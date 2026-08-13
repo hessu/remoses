@@ -2,8 +2,9 @@
 
 The TS-480 to the TS-990S, plus a generic profile.
 
-A **TS-590S** has been verified on the air. The other profiles are implemented
-from Kenwood's own documentation and have never met a radio. See
+A **TS-590S** and a **TS-590SG** have both been verified on the air, the SG
+driven entirely by `remoses test-run`. The other profiles are implemented from
+Kenwood's own documentation and have never met a radio. See
 [hardware status](hardware-status.md).
 
 The same ASCII dialect is spoken by several Elecraft and modern Yaesu radios,
@@ -79,7 +80,7 @@ low-to-high transition. The defaults are right for a CAT port; see
 |---|---|---|---|
 | TS-480 | `ts480` | No DATA mode, no filter selection; break-in on `VX` is **inferred**, see below | — |
 | TS-590S | `ts590s` | Frequency, modes, filters, power, PTT, break-in and CW exercised on the air | **yes** |
-| TS-590SG | `ts590sg` | Same command set as the S; the two differ only in `ID` | — |
+| TS-590SG | `ts590sg` | Same command set as the S; the two differ only in `ID`. Exercised end to end by `remoses test-run`, CW heard on the air | **yes** |
 | TS-890S | `ts890s` | PTT cannot be polled, only pushed | — |
 | TS-990S | `ts990s` | 200 W; PTT cannot be polled, only pushed; **`FA`/`FB` are Main/Sub bands, not VFOs** | — |
 | other Kenwood | `generic` | TS-590 shape, but no break-in — see below | — |
@@ -210,3 +211,22 @@ are things the radio does and its reference does not describe:
 
 A TS-480 also **answers three spaces instead of refusing** an AGC read in FM,
 which is decoded as "no reading" rather than as a frame to complain about.
+
+## A rejection names nothing, and arrives late
+
+`?` is the whole of a refusal on this family: no echo of the command, no code.
+Worse, a refused **set** is answered late enough that the "?" arrives while the
+*read-back after it* is outstanding — so the obvious reading of the trace blames
+a read that was perfectly fine.
+
+A TS-590SG report opened with exactly that, `NR;: rejected`, of a plain read that
+had been answering all session. remoses now names both commands and points at
+the set as the likelier of the two, without claiming to know: a read really can
+be refused here in its own right, since this family refuses a level while its
+circuit is off and the automatic notch outside SSB and AM.
+
+**Two controls must be exercised in the right mode or they will look broken.**
+Break-in is `VX`, which addresses VOX in anything but CW. And `FW` is not the
+filter-width command in SSB — that passband is shaped with `SH` and `SL`, so
+remoses refuses `FW` there rather than changing something else. Both are
+correct behaviour that reads as failure if asked for in the wrong place.

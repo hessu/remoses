@@ -105,7 +105,7 @@ that manufacturer's radios.
 |---|---|---|
 | TS-480 | `ts480` | — |
 | TS-590S | `ts590s` | **yes** |
-| TS-590SG | `ts590sg` | — |
+| TS-590SG | `ts590sg` | **yes** |
 | TS-890S | `ts890s` | — |
 | TS-990S | `ts990s` | — |
 | other Kenwood | `generic` | — |
