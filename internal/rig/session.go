@@ -1687,6 +1687,7 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		if err := s.rig.SetPTT(ctx, s, *req.PTT); err != nil {
 			return s.State(), err
 		}
+		s.settlePTT(ctx, *req.PTT)
 	}
 	// Last, because it transmits, for the same reason PTT is last: the radio is
 	// fully configured before anything keys it. The dead-man timer is armed as
@@ -1703,6 +1704,54 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		return s.readback(ctx, backend.PollSlow, backend.PollFast)
 	}
 	return s.readback(ctx, backend.PollFast)
+}
+
+// settlePTT waits, briefly, for the radio to actually change over before the
+// read-back asks it whether it did.
+//
+// A transmit/receive changeover is a physical event with relays in it, and on
+// most of these radios the keying command is answered by nothing at all — so a
+// read-back issued the instant afterwards can catch the rig still on the other
+// side of the switch and report that the unkey did not work.
+//
+// Three self-test runs on one TS-590SG, minutes apart, disagreed about exactly
+// that: two reported "the radio is still transmitting" after RX; and one
+// passed, and the only difference between them was whether a poll tick happened
+// to land inside the step and read a second time. An answer that depends on
+// scheduling is worse than a slow one, and this is the answer that matters
+// most — a client told the transmitter is still up when it is not, or the
+// dead-man path appearing to fail at the one job it exists for.
+//
+// It lives here rather than in a backend because backends are forbidden timers:
+// they are pure byte-builders, and every clock in this package is the session's.
+//
+// It never reports failure. A radio that will not agree within the window is
+// reported honestly by the read-back that follows; the only purpose of this is
+// to avoid asking before the answer means anything.
+func (s *Session) settlePTT(ctx context.Context, want bool) {
+	if !s.Caps().PTTControl {
+		return
+	}
+	const (
+		attempts = 6
+		gap      = 40 * time.Millisecond
+	)
+	for range attempts {
+		if s.State().PTT == want {
+			return
+		}
+		// A radio with auto-information on may push the change rather than
+		// answer a poll, so both routes are given the same chance: sleep, then
+		// re-read the tier the transmit flag lives on.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(gap):
+		}
+		if err := s.rig.Poll(ctx, s, backend.PollFast); err != nil {
+			return
+		}
+	}
 }
 
 // readback re-reads the radio after a write, so callers see reality rather than

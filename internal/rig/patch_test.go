@@ -124,6 +124,42 @@ func TestPatchVFONotInCapsIsRefusedEvenWhenAddressable(t *testing.T) {
 	})
 }
 
+// A transmit/receive changeover takes time, and on most of these radios the
+// keying command is answered by nothing — so a read-back issued immediately
+// afterwards can catch the radio still on the other side of the switch.
+//
+// Three self-test runs on one TS-590SG disagreed about exactly this: two said
+// "still transmitting" after an unkey and one did not, decided purely by
+// whether a poll tick landed inside the window. The answer must not depend on
+// scheduling, least of all this answer.
+func TestPTTIsConfirmedBeforeTheReadBack(t *testing.T) {
+	h := newHarness(t, nil)
+	// The rig takes two reads to admit it has changed over, which is what the
+	// field traces show: the first IF; after RX; still reports TX.
+	h.dev.pttLag = 2
+	h.start(t)
+
+	ctx := context.Background()
+	on, off := true, false
+
+	st, err := h.s.ApplyPatch(ctx, PatchRequest{PTT: &on})
+	if err != nil {
+		t.Fatalf("keying: %v", err)
+	}
+	if !st.PTT {
+		t.Error("the response says the radio is receiving after it was told to transmit")
+	}
+
+	st, err = h.s.ApplyPatch(ctx, PatchRequest{PTT: &off})
+	if err != nil {
+		t.Fatalf("unkeying: %v", err)
+	}
+	if st.PTT {
+		t.Error("the response says the radio is still transmitting after it was told to stop: " +
+			"the read-back beat the changeover, which is the bug this guards")
+	}
+}
+
 // Exchanging the two receivers is what reaches a band an IC-9700 will not put
 // its main receiver on while the sub one is there. It is an action: true only,
 // gated on the capability, and applied before everything else in the request —

@@ -163,6 +163,13 @@ type fakeDevice struct {
 	nak    map[string]bool // commands the rig rejects
 	seen   []string
 
+	// pttLag is how many PTT reads still report the old state after the keying
+	// command, which is what a real changeover looks like: relays take time and
+	// the keying command is answered by nothing, so the first read back can
+	// catch the radio mid-switch.
+	pttLag  int
+	pttHeld int
+
 	inits atomic.Int64
 	port  atomic.Pointer[fakePort]
 }
@@ -243,7 +250,13 @@ func (d *fakeDevice) handle(cmd string) (string, bool) {
 		// Set is silent, like Kenwood TX;/RX;. Query answers.
 		if arg != "" {
 			d.ptt = arg == "1"
+			d.pttHeld = d.pttLag
 			return "", false
+		}
+		// While the changeover is still "in progress", report the old state.
+		if d.pttHeld > 0 {
+			d.pttHeld--
+			return fmt.Sprintf("PT%d", b2i(!d.ptt)), true
 		}
 		return fmt.Sprintf("PT%d", b2i(d.ptt)), true
 	case "PC":
