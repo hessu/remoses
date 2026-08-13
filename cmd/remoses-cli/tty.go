@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/wire"
 )
 
 // Frame width bounds. Below the minimum the two-column layout stops lining up;
@@ -113,7 +113,7 @@ func layout(v *view, width int) []string {
 		head += " - " + name
 	}
 	if v.desc != nil && v.desc.Backend != "" {
-		head += " - " + v.desc.Backend
+		head += " - " + string(v.desc.Backend)
 	}
 
 	out := []string{
@@ -139,9 +139,9 @@ func layout(v *view, width int) []string {
 	// the radio reports it and only when it is the sub one. "MAIN" on every
 	// line of every single-receiver radio would be noise; SUB is the case worth
 	// interrupting somebody for, because the VFO pair below is then the *other*
-	// receiver's. See radio.State.SelectedBand.
+	// receiver's. See selected_band in the spec.
 	freq := fmt.Sprintf("  %s MHz    %s", formatFreq(st.Frequency), formatMode(st))
-	if st.SelectedBand == radio.BandSub {
+	if value(st.SelectedBand) == wire.BandSub {
 		freq += "    SUB"
 	}
 	out = append(out, row(freq, ptt, width), "")
@@ -171,8 +171,8 @@ func layout(v *view, width int) []string {
 		out = append(out, row(filter, power, width))
 	}
 	out = append(out, row("  cw        "+formatCW(st.CW), lockNote(v), width))
-	if st.Tuner != radio.TunerUnknown {
-		out = append(out, "  tuner     "+formatTuner(st.Tuner))
+	if t := st.Tuner; t != nil {
+		out = append(out, "  tuner     "+formatTuner(*t))
 	}
 	if fe := frontEndLine(st); fe != "" {
 		out = append(out, "  rx        "+fe)
@@ -208,21 +208,21 @@ func meterLines(v *view) []string {
 			sUnit += "  "
 		}
 		return []string{fmt.Sprintf("  S   %s  %s%d/%d",
-			meterBar(st.SMeter.Fraction(), meterCells), sUnit, st.SMeter.Raw, st.SMeter.Scale)}
+			meterBar(fraction(st.SMeter), meterCells), sUnit, st.SMeter.Raw, st.SMeter.Scale)}
 	}
 
 	var out []string
 	if m := st.PowerMeter; m != nil {
 		out = append(out, fmt.Sprintf("  PWR %s  %s",
-			meterBar(m.Fraction(), meterCells), formatMeterValue(*m)))
+			meterBar(fraction(*m), meterCells), formatMeterValue(*m)))
 	}
 	if m := st.SWR; m != nil {
 		out = append(out, fmt.Sprintf("  SWR %s  %s",
-			meterBar(m.Fraction(), meterCells), formatSWR(*m, st.SWRRatio)))
+			meterBar(fraction(*m), meterCells), formatSWR(*m, st.SWRRatio)))
 	}
 	if m := st.ALC; m != nil {
 		out = append(out, fmt.Sprintf("  ALC %s  %s",
-			meterBar(m.Fraction(), meterCells), formatMeterValue(*m)))
+			meterBar(fraction(*m), meterCells), formatMeterValue(*m)))
 	}
 	return out
 }
@@ -238,7 +238,7 @@ func radioBadge(v *view) string {
 	// they are both true. A radio that is switched off is reachable — the link
 	// is fine — so showing CONNECTED would leave an operator wondering why
 	// nothing works, and DISCONNECTED would send them to check a cable.
-	if v.st.Standby {
+	if value(v.st.Standby) {
 		return "STANDBY"
 	}
 	if v.st.Connected {
@@ -254,7 +254,7 @@ func stateNote(v *view) string {
 	// The values on screen are whatever was last true before the radio was
 	// switched off, so saying so matters more here than for a stale snapshot:
 	// nothing about them looks wrong.
-	case v.st.Standby:
+	case value(v.st.Standby):
 		// Short enough to survive the narrowest frame: the badge already says
 		// STANDBY rather than DISCONNECTED, so this only has to explain why the
 		// numbers below it look plausible and are not current.
@@ -276,7 +276,7 @@ func lockNote(v *view) string {
 	if v.desc == nil || !v.desc.Lock.Held {
 		return "lock   free"
 	}
-	who := v.desc.Lock.Holder
+	who := value(v.desc.Lock.Holder)
 	if who == "" {
 		who = "another user"
 	}

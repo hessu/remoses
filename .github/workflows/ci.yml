@@ -1,5 +1,6 @@
-# The three checks `make check` runs — formatting, vet and the race-enabled
-# test suite — on every pull request and on main after a merge.
+# The four checks `make check` runs — formatting, vet, the generated API code
+# and the race-enabled test suite — on every pull request and on main after a
+# merge.
 #
 # Nothing here has its own copy of a command. Each step calls the Makefile
 # target an operator would run locally, so "it passed on my machine" and "it
@@ -63,6 +64,14 @@ jobs:
           GOOS: darwin
           CGO_ENABLED: "0"
         run: go vet ./...
+
+      # internal/wire is generated from api/openapi.yaml and checked in, so this
+      # is the step that keeps the two the same document. The tests prove the
+      # daemon agrees with the generated Go; nothing but this proves the
+      # generated Go is still what the spec says.
+      - name: openapi codegen
+        if: ${{ !cancelled() }}
+        run: make spec-check
 
       # -race, per the Makefile, and it is the point rather than a flourish:
       # this project's core is the concurrency between a session's reader

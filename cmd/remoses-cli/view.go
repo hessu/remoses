@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/hessu/remoses/internal/client"
-	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/wire"
 )
 
 // linkState is what this monitor's own connection to the daemon is doing. It is
-// deliberately separate from radio.State.Connected: "the radio is unplugged"
-// and "I cannot reach the daemon" look nothing alike to an operator, and
-// collapsing them into one indicator would send someone to the wrong end of the
-// link.
+// deliberately separate from the state's own `connected`: "the radio is
+// unplugged" and "I cannot reach the daemon" look nothing alike to an operator,
+// and collapsing them into one indicator would send someone to the wrong end of
+// the link.
 type linkState int
 
 const (
@@ -38,11 +38,17 @@ func (l linkState) String() string {
 
 // view is everything on screen: the radio's state, what is known about the
 // radio itself, and the health of the connection carrying it.
+//
+// The two it holds — wire.Radio and wire.State — are generated from
+// api/openapi.yaml, so this display can only show fields the published contract
+// declares. That is the arrangement working rather than a constraint to work
+// around: a field remoses-cli draws is one a client written against the spec
+// can draw too.
 type view struct {
 	radioID string
-	desc    *client.Radio
+	desc    *wire.Radio
 
-	st        radio.State
+	st        wire.State
 	haveState bool
 	stale     bool
 	// connErr is the reason the radio's port went away, from a conn event. It
@@ -70,17 +76,19 @@ func newView(radioID string, now func() time.Time) *view {
 	return &view{radioID: radioID, link: linkConnecting, now: now}
 }
 
-// setSnapshot records a REST fetch.
-func (v *view) setSnapshot(s *client.State) {
-	v.st = s.State
+// setSnapshot records a REST fetch. age_ms and stale come with a REST read and
+// with nothing else, which is why they are lifted out here rather than read off
+// v.st wherever they are drawn.
+func (v *view) setSnapshot(s *wire.State) {
+	v.st = *s
 	v.haveState = true
-	v.stale = s.Stale
-	v.ageBase, v.ageAt = s.Age(), v.now()
+	v.stale = client.IsStale(s)
+	v.ageBase, v.ageAt = client.Age(s), v.now()
 }
 
 // setState records a websocket snapshot. It arrives having just been read from
 // the session's cache, so its age restarts at zero.
-func (v *view) setState(st radio.State) {
+func (v *view) setState(st wire.State) {
 	v.st = st
 	v.haveState = true
 	v.stale = false
@@ -99,7 +107,7 @@ func (v *view) applyDelta(ev client.Event) error {
 
 // applyCW records a discrete cw event. Those carry the queue but nothing else,
 // so only the queue is touched.
-func (v *view) applyCW(cw radio.CWStatus) {
+func (v *view) applyCW(cw wire.CWStatus) {
 	v.st.CW = cw
 	v.haveState = true
 	v.ageBase, v.ageAt = 0, v.now()
@@ -137,10 +145,36 @@ func (v *view) radioName() string {
 	return v.radioID
 }
 
+// value dereferences an optional field, or answers its zero.
+//
+// Optional is how the spec says "this radio cannot report that", and the
+// generated types spell it as a pointer. Flattening one to its zero is safe
+// wherever the zero is not itself a reading: an absent tuner and an absent AGC
+// setting are the empty string, an absent standby flag is false. It is NOT safe
+// for the numbers — a preamp that reads 0 is switched off, which is a different
+// statement from a radio with no preamplifier — so those keep their pointers
+// and their own presence flags below.
+func value[T any](p *T) T {
+	var zero T
+	if p == nil {
+		return zero
+	}
+	return *p
+}
+
+// fraction returns a meter reading normalised to 0..1, for drawing a bar.
+func fraction(m wire.Meter) float64 {
+	if m.Scale <= 0 {
+		return 0
+	}
+	f := float64(m.Raw) / float64(m.Scale)
+	return min(max(f, 0), 1)
+}
+
 // significant is the part of the state whose change is worth an output line.
 //
 // It exists so that both renderers make the same decision from the same value,
-// and it is comparable on purpose: the pointers in radio.State would otherwise
+// and it is comparable on purpose: the pointers in wire.State would otherwise
 // compare by address, which is not what "did anything change" means. The
 // meters are excluded — they move continuously and are handled separately.
 type significant struct {
@@ -148,8 +182,8 @@ type significant struct {
 	standby    bool
 	stale      bool
 	connErr    string
-	frequency  uint64
-	mode       radio.Mode
+	frequency  int64
+	mode       wire.Mode
 	dataMode   bool
 	passbandHz int
 	filterSlot int
@@ -157,8 +191,8 @@ type significant struct {
 	powerW     float64
 	havePowerW bool
 	ptt        bool
-	tuner      radio.Tuner
-	cw         radio.CWStatus
+	tuner      wire.Tuner
+	cw         wire.CWStatus
 
 	// The receive front end. Flattened out of the pointers State holds them in,
 	// because this type is compared with == and pointers would compare by
@@ -171,7 +205,7 @@ type significant struct {
 	attDB        int
 	haveRFGain   bool
 	rfGain       float64
-	agc          radio.AGC
+	agc          wire.AGC
 	haveIPPlus   bool
 	ipPlus       bool
 	haveDigiSel  bool
@@ -192,7 +226,7 @@ type significant struct {
 	notch       bool
 	haveNotchF  bool
 	notchFreq   float64
-	notchWidth  radio.NotchWidth
+	notchWidth  wire.NotchWidth
 	haveAuto    bool
 	autoNotch   bool
 	haveAnt     bool
@@ -204,7 +238,7 @@ type significant struct {
 func (v *view) significant() significant {
 	s := significant{
 		connected:  v.st.Connected,
-		standby:    v.st.Standby,
+		standby:    value(v.st.Standby),
 		stale:      v.stale,
 		connErr:    v.connErr,
 		frequency:  v.st.Frequency,
@@ -214,13 +248,13 @@ func (v *view) significant() significant {
 		filterSlot: v.st.FilterSlot,
 		powerPct:   v.st.Power.Pct,
 		ptt:        v.st.PTT,
-		tuner:      v.st.Tuner,
+		tuner:      value(v.st.Tuner),
 		cw:         v.st.CW,
 	}
 	if w := v.st.Power.Watts; w != nil {
 		s.powerW, s.havePowerW = *w, true
 	}
-	s.agc = v.st.AGC
+	s.agc = value(v.st.AGC)
 	if p := v.st.Preamp; p != nil {
 		s.preamp, s.havePreamp = *p, true
 	}
@@ -239,7 +273,7 @@ func (v *view) significant() significant {
 	if d := v.st.DigiSelShift; d != nil {
 		s.digiSelShift, s.haveDSShift = *d, true
 	}
-	s.notchWidth = v.st.NotchWidth
+	s.notchWidth = value(v.st.NotchWidth)
 	if n := v.st.NoiseBlanker; n != nil {
 		s.nb, s.haveNB = *n, true
 	}
@@ -319,15 +353,15 @@ func (v *view) haveTXMeters() bool {
 // kilohertz, then hertz, in groups of three. 14025300 becomes 14.025.300, which
 // is readable at a glance in a way that a bare nine-digit integer is not — and
 // glancing at the frequency is most of what this tool is for.
-func formatFreq(hz uint64) string {
+func formatFreq(hz int64) string {
 	return fmt.Sprintf("%d.%03d.%03d", hz/1_000_000, (hz/1000)%1000, hz%1000)
 }
 
 // formatMode spells the mode and the orthogonal data flag together, because
 // that is how an operator reads them, while keeping them separate values
 // underneath as the rigs do.
-func formatMode(st radio.State) string {
-	m := st.Mode.String()
+func formatMode(st wire.State) string {
+	m := string(st.Mode)
 	if st.DataMode {
 		m += "/D"
 	}
@@ -340,7 +374,7 @@ func formatMode(st radio.State) string {
 // per S unit, so that is what is shown rather than a fractional S number nobody
 // speaks. An uncalibrated rig reports no s at all and gets an empty string; the
 // raw reading is displayed alongside regardless.
-func formatSUnit(m radio.Meter) string {
+func formatSUnit(m wire.Meter) string {
 	if m.S == nil {
 		return ""
 	}
@@ -419,7 +453,7 @@ func (v *view) hasFilterSlots() bool {
 	return v.desc == nil || v.desc.Caps.FilterSlots > 0
 }
 
-func formatPower(p radio.Power) string {
+func formatPower(p wire.Power) string {
 	s := fmt.Sprintf("%.0f %%", p.Pct)
 	if p.Watts != nil {
 		s += fmt.Sprintf("  %g W", *p.Watts)
@@ -435,8 +469,8 @@ func formatPower(p radio.Power) string {
 // operator reads at a glance, and the raw pair is what makes a bug reportable —
 // the scales differ per meter and per model, and "143/255" beside "56%" is what
 // tells somebody the scale is the one they expected.
-func formatMeterValue(m radio.Meter) string {
-	return fmt.Sprintf("%d/%d  %.0f %%", m.Raw, m.Scale, m.Fraction()*100)
+func formatMeterValue(m wire.Meter) string {
+	return fmt.Sprintf("%d/%d  %.0f %%", m.Raw, m.Scale, fraction(m)*100)
 }
 
 // formatSWR renders the SWR reading, preferring the ratio where the radio's
@@ -445,7 +479,7 @@ func formatMeterValue(m radio.Meter) string {
 // The single-bit case is spelled out rather than drawn as a number: an FT-857
 // reports a high-SWR alarm and nothing else, and "1/1" would look like a
 // reading rather than the warning light it is.
-func formatSWR(m radio.Meter, ratio *float64) string {
+func formatSWR(m wire.Meter, ratio *float64) string {
 	if m.Scale == 1 {
 		if m.Raw > 0 {
 			return "HIGH"
@@ -463,8 +497,8 @@ func formatSWR(m radio.Meter, ratio *float64) string {
 //
 // A cycle transmits, so it is worth saying so on a display whose whole purpose
 // is to tell an operator what a radio they cannot see is doing.
-func formatTuner(t radio.Tuner) string {
-	if t == radio.TunerTuning {
+func formatTuner(t wire.Tuner) string {
+	if t == wire.TunerTuning {
 		return ">> TUNING <<"
 	}
 	return string(t)
@@ -481,7 +515,7 @@ func formatTuner(t radio.Tuner) string {
 // The preamp is spelled "off" rather than "0" and the attenuator "0 dB" rather
 // than "off", because that is how the front panels label them: a preamplifier
 // is in or out, an attenuator has a depth.
-func frontEndLine(st radio.State) string {
+func frontEndLine(st wire.State) string {
 	var parts []string
 	if p := st.Preamp; p != nil {
 		if *p == 0 {
@@ -496,8 +530,8 @@ func frontEndLine(st radio.State) string {
 	if g := st.RFGain; g != nil {
 		parts = append(parts, fmt.Sprintf("rf %.0f%%", *g))
 	}
-	if st.AGC != radio.AGCUnknown {
-		parts = append(parts, "agc "+string(st.AGC))
+	if a := st.AGC; a != nil {
+		parts = append(parts, "agc "+string(*a))
 	}
 	// The two Icom extras, named only when they are on: a client showing
 	// "ip+ off" on every radio that has one would spend a column on a control
@@ -521,7 +555,7 @@ func frontEndLine(st radio.State) string {
 // Each part appears only where the radio reports it, and the levels ride with
 // their switch rather than getting a column of their own: "nb 1 40%" is one
 // control an operator thinks of as one thing.
-func noiseLine(st radio.State) string {
+func noiseLine(st wire.State) string {
 	var parts []string
 	if n := st.NoiseBlanker; n != nil {
 		parts = append(parts, withLevel("nb", *n, st.NBLevel))
@@ -534,8 +568,8 @@ func noiseLine(st radio.State) string {
 		if f := st.NotchFreq; f != nil {
 			s += fmt.Sprintf(" %.0f%%", *f)
 		}
-		if st.NotchWidth != radio.NotchWidthUnknown {
-			s += " " + string(st.NotchWidth)
+		if w := st.NotchWidth; w != nil {
+			s += " " + string(*w)
 		}
 		parts = append(parts, s)
 	}
@@ -566,7 +600,7 @@ func withLevel(name string, sel int, level *float64) string {
 }
 
 // formatCW renders the Morse queue.
-func formatCW(cw radio.CWStatus) string {
+func formatCW(cw wire.CWStatus) string {
 	what := "idle"
 	if cw.Busy {
 		what = "sending"

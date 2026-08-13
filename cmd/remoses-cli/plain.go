@@ -95,7 +95,7 @@ func statusFields(v *view) string {
 	fmt.Fprintf(&b, "connected=%t", st.Connected)
 	// Only while it is true, and next to connected, because the pair is what
 	// says "reachable but switched off" rather than either one alone.
-	if st.Standby {
+	if value(st.Standby) {
 		b.WriteString(" standby=true")
 	}
 	fmt.Fprintf(&b, " freq=%d mode=%s data=%t", st.Frequency, st.Mode, st.DataMode)
@@ -139,11 +139,11 @@ func statusFields(v *view) string {
 	// Which receiver the fields above are describing, where the radio says. On
 	// an IC-9700 with the sub band selected, freq= and mode= are that
 	// receiver's while vfo_a= and vfo_b= are the main one's.
-	if st.SelectedBand != "" {
-		fmt.Fprintf(&b, " band=%s", st.SelectedBand)
+	if band := st.SelectedBand; band != nil {
+		fmt.Fprintf(&b, " band=%s", *band)
 	}
-	if st.Tuner != "" {
-		fmt.Fprintf(&b, " tuner=%s", st.Tuner)
+	if t := st.Tuner; t != nil {
+		fmt.Fprintf(&b, " tuner=%s", *t)
 	}
 	// The receive front end, each only where the radio reports one: a preamp=0
 	// on a radio with no preamplifier command would be a claim about hardware
@@ -157,8 +157,8 @@ func statusFields(v *view) string {
 	if g := st.RFGain; g != nil {
 		fmt.Fprintf(&b, " rf_gain=%g", *g)
 	}
-	if st.AGC != "" {
-		fmt.Fprintf(&b, " agc=%s", st.AGC)
+	if a := st.AGC; a != nil {
+		fmt.Fprintf(&b, " agc=%s", *a)
 	}
 	if p := st.IPPlus; p != nil {
 		fmt.Fprintf(&b, " ip_plus=%t", *p)
@@ -189,8 +189,8 @@ func statusFields(v *view) string {
 	if f := st.NotchFreq; f != nil {
 		fmt.Fprintf(&b, " notch_freq=%g", *f)
 	}
-	if st.NotchWidth != "" {
-		fmt.Fprintf(&b, " notch_width=%s", st.NotchWidth)
+	if w := st.NotchWidth; w != nil {
+		fmt.Fprintf(&b, " notch_width=%s", *w)
 	}
 	if a := st.AutoNotch; a != nil {
 		fmt.Fprintf(&b, " auto_notch=%t", *a)

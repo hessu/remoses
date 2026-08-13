@@ -6,8 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hessu/remoses/internal/client"
-	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/wire"
 )
 
 // joined renders a frame as one string for content assertions. The escape
@@ -84,7 +83,8 @@ func TestFrameRendersADisconnectedRadio(t *testing.T) {
 
 	st := sampleState()
 	st.Connected = false
-	v.setSnapshot(&client.State{State: st, AgeMS: 134000, Stale: true})
+	st.AgeMS, st.Stale = ptr(134000), ptr(true)
+	v.setSnapshot(&st)
 	v.link = linkLive
 
 	got := joined(v, 80)
@@ -111,13 +111,13 @@ func TestFrameRendersADisconnectedRadio(t *testing.T) {
 // one — and "power  0 %" beside a radio putting out ten watts reads as a fault.
 func TestFrameOmitsFieldsTheRadioCannotReport(t *testing.T) {
 	v := newTestView()
-	v.desc = &client.Radio{
-		ID: "ft857", Name: "Yaesu FT-857D", Backend: "yaesu", Connected: true,
-		Caps: radio.Caps{PTTControl: true, SMeterScale: 15},
+	v.desc = &wire.Radio{
+		ID: "ft857", Name: "Yaesu FT-857D", Backend: wire.BackendYaesu, Connected: true,
+		Caps: wire.Caps{PTTControl: true, SMeterScale: 15},
 	}
 	st := sampleState()
 	st.PassbandHz, st.FilterSlot = 0, 0
-	st.Power = radio.Power{}
+	st.Power = wire.Power{}
 	v.setState(st)
 
 	got := joined(v, 80)
@@ -138,9 +138,9 @@ func TestFrameOmitsFieldsTheRadioCannotReport(t *testing.T) {
 // by somebody who cannot ask what power_pct=0 meant.
 func TestPlainOmitsFieldsTheRadioCannotReport(t *testing.T) {
 	buf, r, v, _ := newPlainFixture(t, time.Second)
-	v.desc = &client.Radio{
-		ID: "ft857", Name: "Yaesu FT-857D", Backend: "yaesu", Connected: true,
-		Caps: radio.Caps{PTTControl: true, SMeterScale: 15},
+	v.desc = &wire.Radio{
+		ID: "ft857", Name: "Yaesu FT-857D", Backend: wire.BackendYaesu, Connected: true,
+		Caps: wire.Caps{PTTControl: true, SMeterScale: 15},
 	}
 	r.update(v, updateState)
 
@@ -165,13 +165,13 @@ func TestFrameMarksTheSubReceiver(t *testing.T) {
 	v := newTestView()
 	st := sampleState()
 
-	st.SelectedBand = radio.BandMain
+	st.SelectedBand = ptr(wire.BandMain)
 	v.setState(st)
 	if got := joined(v, 80); strings.Contains(got, "SUB") {
 		t.Errorf("main is marked; only the sub case is worth interrupting for:\n%s", got)
 	}
 
-	st.SelectedBand = radio.BandSub
+	st.SelectedBand = ptr(wire.BandSub)
 	v.setState(st)
 	if got := joined(v, 80); !strings.Contains(got, "SUB") {
 		t.Errorf("the sub receiver is not marked:\n%s", got)
@@ -227,7 +227,7 @@ func TestFrameShowsWhoHoldsTheLock(t *testing.T) {
 		t.Errorf("free lock not shown:\n%s", got)
 	}
 
-	v.desc.Lock = client.LockState{Held: true, Holder: "oh2abc"}
+	v.desc.Lock = wire.LockState{Held: true, Holder: ptr("oh2abc")}
 	if got := joined(v, 80); !strings.Contains(got, "lock   oh2abc") {
 		t.Errorf("lock holder not shown:\n%s", got)
 	}
@@ -326,7 +326,7 @@ func TestTTYRendererClearsAShrunkFrame(t *testing.T) {
 func TestMeterBarWidthMatchesTheFrame(t *testing.T) {
 	v := newTestView()
 	st := sampleState()
-	st.SMeter = radio.Meter{Raw: 255, Scale: 255}
+	st.SMeter = wire.Meter{Raw: 255, Scale: 255}
 	v.setState(st)
 
 	got := joined(v, 80)

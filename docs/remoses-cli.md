@@ -6,7 +6,15 @@ stream.
 
 It never issues a `PATCH`, `POST` or `DELETE` and **never takes a lock** — a
 monitor that took the lock would lock out the operator actually working the
-radio.
+radio. That is enforced rather than promised: the Go it uses to talk to the
+daemon is generated from `api/openapi.yaml`, and the generator is told to emit
+the two GET operations and nothing else, so there is no `PATCH` in the binary
+to call.
+
+The same arrangement is why this program is worth having beyond the display:
+everything it shows, it reads through the published contract. A field the spec
+does not declare is one remoses-cli cannot draw, which makes a gap in the
+document somebody's failing test rather than somebody's missing feature.
 
 ```sh
 remoses-cli ic7610                       # watch the local instance

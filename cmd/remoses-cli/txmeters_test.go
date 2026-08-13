@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/wire"
 )
 
-func meterView(t *testing.T, st radio.State) *view {
+func meterView(t *testing.T, st wire.State) *view {
 	t.Helper()
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	v := newView("ic7610", func() time.Time { return now })
@@ -18,7 +18,7 @@ func meterView(t *testing.T, st radio.State) *view {
 
 // In receive the block is the S meter, as it always was.
 func TestMeterLinesInReceive(t *testing.T) {
-	v := meterView(t, radio.State{SMeter: radio.Meter{Raw: 60, Scale: 255}})
+	v := meterView(t, wire.State{SMeter: wire.Meter{Raw: 60, Scale: 255}})
 	lines := meterLines(v)
 	if len(lines) != 1 || !strings.HasPrefix(strings.TrimSpace(lines[0]), "S ") {
 		t.Fatalf("meterLines() = %q, want one S meter line", lines)
@@ -31,13 +31,13 @@ func TestMeterLinesInReceive(t *testing.T) {
 // what is left in State is whatever the last receive poll saw.
 func TestMeterLinesWhileTransmitting(t *testing.T) {
 	ratio := 1.5
-	v := meterView(t, radio.State{
+	v := meterView(t, wire.State{
 		PTT:        true,
-		SMeter:     radio.Meter{Raw: 60, Scale: 255},
-		PowerMeter: &radio.Meter{Raw: 143, Scale: 255},
-		SWR:        &radio.Meter{Raw: 48, Scale: 255},
+		SMeter:     wire.Meter{Raw: 60, Scale: 255},
+		PowerMeter: &wire.Meter{Raw: 143, Scale: 255},
+		SWR:        &wire.Meter{Raw: 48, Scale: 255},
 		SWRRatio:   &ratio,
-		ALC:        &radio.Meter{Raw: 60, Scale: 120},
+		ALC:        &wire.Meter{Raw: 60, Scale: 120},
 	})
 	lines := meterLines(v)
 	if len(lines) != 3 {
@@ -57,10 +57,10 @@ func TestMeterLinesWhileTransmitting(t *testing.T) {
 // Only the meters the radio reports get a line: an FT-857 has forward power and
 // a high-SWR bit and no ALC at all.
 func TestMeterLinesOnlyWhatTheRadioReports(t *testing.T) {
-	v := meterView(t, radio.State{
+	v := meterView(t, wire.State{
 		PTT:        true,
-		PowerMeter: &radio.Meter{Raw: 10, Scale: 15},
-		SWR:        &radio.Meter{Raw: 1, Scale: 1},
+		PowerMeter: &wire.Meter{Raw: 10, Scale: 15},
+		SWR:        &wire.Meter{Raw: 1, Scale: 1},
 	})
 	lines := meterLines(v)
 	if len(lines) != 2 {
@@ -77,14 +77,14 @@ func TestFormatSWR(t *testing.T) {
 	ratio := 2.0
 	tests := []struct {
 		name  string
-		meter radio.Meter
+		meter wire.Meter
 		ratio *float64
 		want  string
 	}{
-		{"a calibrated ratio wins", radio.Meter{Raw: 80, Scale: 255}, &ratio, "2.0:1"},
-		{"without one, the deflection", radio.Meter{Raw: 80, Scale: 255}, nil, "80/255  31 %"},
-		{"a single bit set", radio.Meter{Raw: 1, Scale: 1}, nil, "HIGH"},
-		{"a single bit clear", radio.Meter{Raw: 0, Scale: 1}, nil, "ok"},
+		{"a calibrated ratio wins", wire.Meter{Raw: 80, Scale: 255}, &ratio, "2.0:1"},
+		{"without one, the deflection", wire.Meter{Raw: 80, Scale: 255}, nil, "80/255  31 %"},
+		{"a single bit set", wire.Meter{Raw: 1, Scale: 1}, nil, "HIGH"},
+		{"a single bit clear", wire.Meter{Raw: 0, Scale: 1}, nil, "ok"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -99,7 +99,7 @@ func TestFormatSWR(t *testing.T) {
 // exist. A line carrying pwr_raw=0 could not be told from a real reading into a
 // dead load, and a log is read by somebody who cannot ask.
 func TestStatusFieldsTXMeters(t *testing.T) {
-	rx := statusFields(meterView(t, radio.State{SMeter: radio.Meter{Raw: 3, Scale: 255}}))
+	rx := statusFields(meterView(t, wire.State{SMeter: wire.Meter{Raw: 3, Scale: 255}}))
 	for _, absent := range []string{"pwr_raw", "swr_raw", "swr=", "alc_raw"} {
 		if strings.Contains(rx, absent) {
 			t.Errorf("receive log line carries %q: %s", absent, rx)
@@ -107,12 +107,12 @@ func TestStatusFieldsTXMeters(t *testing.T) {
 	}
 
 	ratio := 1.5
-	tx := statusFields(meterView(t, radio.State{
+	tx := statusFields(meterView(t, wire.State{
 		PTT:        true,
-		PowerMeter: &radio.Meter{Raw: 143, Scale: 255},
-		SWR:        &radio.Meter{Raw: 48, Scale: 255},
+		PowerMeter: &wire.Meter{Raw: 143, Scale: 255},
+		SWR:        &wire.Meter{Raw: 48, Scale: 255},
 		SWRRatio:   &ratio,
-		ALC:        &radio.Meter{Raw: 60, Scale: 120},
+		ALC:        &wire.Meter{Raw: 60, Scale: 120},
 	}))
 	for _, want := range []string{
 		"pwr_raw=143 pwr_scale=255",
@@ -129,11 +129,11 @@ func TestStatusFieldsTXMeters(t *testing.T) {
 // A meter moving is a change the log should throttle on, and a transmission
 // ending is one it should not miss.
 func TestMetersComparableAcrossTransmit(t *testing.T) {
-	rx := meterView(t, radio.State{SMeter: radio.Meter{Raw: 3, Scale: 255}}).meters()
-	tx := meterView(t, radio.State{
+	rx := meterView(t, wire.State{SMeter: wire.Meter{Raw: 3, Scale: 255}}).meters()
+	tx := meterView(t, wire.State{
 		PTT:        true,
-		SMeter:     radio.Meter{Raw: 3, Scale: 255},
-		PowerMeter: &radio.Meter{Raw: 143, Scale: 255},
+		SMeter:     wire.Meter{Raw: 3, Scale: 255},
+		PowerMeter: &wire.Meter{Raw: 143, Scale: 255},
 	}).meters()
 
 	if rx == tx {
@@ -143,10 +143,10 @@ func TestMetersComparableAcrossTransmit(t *testing.T) {
 		t.Error("a transmission ending did not register as a meter change")
 	}
 
-	same := meterView(t, radio.State{
+	same := meterView(t, wire.State{
 		PTT:        true,
-		SMeter:     radio.Meter{Raw: 3, Scale: 255},
-		PowerMeter: &radio.Meter{Raw: 143, Scale: 255},
+		SMeter:     wire.Meter{Raw: 3, Scale: 255},
+		PowerMeter: &wire.Meter{Raw: 143, Scale: 255},
 	}).meters()
 	if tx != same {
 		t.Error("two identical readings compared unequal; the pointers are not flattened")

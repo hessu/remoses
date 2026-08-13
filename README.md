@@ -218,10 +218,15 @@ no cgo, no runtime.
 ```sh
 make          # build remoses and remoses-cli into build/
 make test     # go test -race ./...
-make check    # fmt-check + vet + test, the pre-commit target
+make check    # fmt-check + vet + spec-check + test, the pre-commit target
+make generate # regenerate internal/wire from api/openapi.yaml
 make cross    # cross-compiled binaries into dist/
 make release  # ...packaged into per-platform archives with checksums
 ```
+
+`make generate` is only needed after editing the API document; its output is
+checked in, so building needs neither the generator nor the network. `make
+check` runs `spec-check`, which fails if the two have drifted apart.
 
 `make release` is exactly what the tag build runs, so a release can be
 reproduced on a laptop, and the platform list lives in the Makefile alone.
@@ -264,8 +269,10 @@ backend page for your radio covers what that manufacturer needs.
 - [docs/DESIGN.md](docs/DESIGN.md) — architecture, the concurrency model, the
   locking and safety design, the CW pacing loops, and the per-model protocol
   references with the differences between radios spelled out.
-- [api/openapi.yaml](api/openapi.yaml) — the HTTP API, and the source of truth a
-  conformance test holds the router to.
+- [api/openapi.yaml](api/openapi.yaml) — the HTTP API and the WebSocket frames,
+  and the source of truth in a stronger sense than usual: the Go that
+  remoses-cli talks to the daemon with is generated from it, and conformance
+  tests hold the router, the responses and every stream frame to it.
 
 ## Licence
 

@@ -5,14 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"time"
 
 	"github.com/coder/websocket"
 
-	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/wire"
 )
 
 // streamReadLimit bounds one server message. A full state snapshot is a few
@@ -30,8 +30,8 @@ const (
 	pingTimeout  = 10 * time.Second
 )
 
-// EventKind discriminates a server message. The set is closed: the server
-// contract says so, and an unrecognised type is skipped rather than surfaced.
+// EventKind discriminates a server message. The set is closed: the contract
+// says so, and an unrecognised type is skipped rather than surfaced.
 type EventKind int
 
 const (
@@ -46,40 +46,41 @@ const (
 func (k EventKind) String() string {
 	switch k {
 	case EventHello:
-		return "hello"
+		return string(wire.WSHelloTypeHello)
 	case EventState:
-		return "state"
+		return string(wire.WSStateTypeState)
 	case EventDelta:
-		return "delta"
+		return string(wire.WSDeltaTypeDelta)
 	case EventCW:
-		return "cw"
+		return string(wire.WSCWTypeCW)
 	case EventConn:
-		return "conn"
+		return string(wire.WSConnTypeConn)
 	case EventResync:
-		return "resync"
+		return string(wire.WSResyncTypeResync)
 	}
 	return "unknown"
 }
 
 // Event is one decoded server message.
+//
+// It is flatter than the generated union, which carries one struct per frame
+// type: a monitor handles all six in one switch, and lifting the fields they
+// share out of six types is what lets it. The union is still what decides which
+// frame this is, so the flattening cannot invent a field the spec does not have.
 type Event struct {
 	Kind  EventKind
 	Radio string
-	Seq   uint64
+	Seq   int64
 	TS    time.Time
 
 	// State is the snapshot carried by a state message.
-	State radio.State
-	// Changed is the raw object of a delta message, and Fields names its keys.
-	// The raw form is kept because the keys are radio.State's own JSON tags,
-	// which makes applying a delta a decode onto the current snapshot rather
-	// than a field-by-field switch that would have to be edited every time the
-	// state grows a member.
+	State wire.State
+	// Changed is the `changed` object of a delta message, as it arrived. See
+	// ApplyDelta for why the bytes are kept rather than the decoded form.
 	Changed json.RawMessage
-	Fields  []string
 
-	// CW carries a cw message. Queued and WPM are the message's; Busy too.
-	CW radio.CWStatus
+	// CW carries a cw message.
+	CW wire.CWStatus
 	// Connected and Err carry a conn message.
 	Connected bool
 	Err       string
@@ -92,27 +93,37 @@ type Event struct {
 
 // ApplyDelta returns st with the delta's changed fields applied.
 //
-// The decode goes straight onto a copy of the snapshot because the wire names
-// in `changed` are radio.State's JSON tags by construction — the server builds
-// them from that struct — so json.Unmarshal applies exactly the fields present
-// and leaves the rest alone.
-func (e Event) ApplyDelta(st radio.State) (radio.State, error) {
-	next := st
-	// A shallow copy shares the meter pointers with st, and decoding into a
-	// non-nil pointer field writes through it. Without this, applying a delta
-	// would mutate the caller's previous snapshot as a side effect — which
-	// matters, because the previous snapshot is what a renderer diffs against.
-	if st.SWR != nil {
-		v := *st.SWR
-		next.SWR = &v
+// The decode goes straight onto the snapshot because the names in `changed` are
+// wire.State's own JSON tags — both come from the same schema, StateFields — so
+// json.Unmarshal applies exactly the fields the server named and leaves the
+// rest alone. That includes the nulls: a transmit meter that has gone away
+// arrives as an explicit null and lands as a nil pointer, which is what stops
+// the last transmission's SWR sitting on the display for ever.
+//
+// It is done with the bytes rather than with the generated wire.StateDelta
+// because that type cannot express the difference. Every optional field there
+// is a pointer with omitempty, so a null and an absent field both decode to nil
+// and both marshal back out as absent — applying the decoded form would report
+// a cleared meter as an unchanged one.
+//
+// st goes through its own JSON first, to get a copy whose pointers nobody else
+// holds: decoding into a struct with non-nil pointer fields writes THROUGH
+// them, so without it a delta would reach back into the caller's previous
+// snapshot. Copying the pointer fields by hand instead would be a list that
+// silently falls behind the spec, which is the failure this whole arrangement
+// exists to prevent.
+func (e Event) ApplyDelta(st wire.State) (wire.State, error) {
+	raw, err := json.Marshal(st)
+	if err != nil {
+		return st, fmt.Errorf("copying state for %s: %w", e.Radio, err)
 	}
-	if st.ALC != nil {
-		v := *st.ALC
-		next.ALC = &v
+	var next wire.State
+	if err := json.Unmarshal(raw, &next); err != nil {
+		return st, fmt.Errorf("copying state for %s: %w", e.Radio, err)
 	}
 
 	if len(e.Changed) > 0 {
-		if err := unmarshalState(e.Changed, &next); err != nil {
+		if err := json.Unmarshal(e.Changed, &next); err != nil {
 			return st, fmt.Errorf("applying delta for %s: %w", e.Radio, err)
 		}
 	}
@@ -141,6 +152,10 @@ type Stream struct {
 // handshake; a programmatic client that used it would be doing an extra round
 // trip to work around a limitation it does not have.
 func (c *Client) Stream(ctx context.Context, radioID string) (*Stream, error) {
+	if err := checkRadioID(radioID); err != nil {
+		return nil, err
+	}
+
 	u := *c.base
 	switch u.Scheme {
 	case "https":
@@ -167,7 +182,8 @@ func (c *Client) Stream(ctx context.Context, radioID string) (*Stream, error) {
 		// error the operator has to guess at.
 		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
 			defer resp.Body.Close()
-			return nil, errorFromResponse(u.String(), resp)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, problemLimit))
+			return nil, errorFromResponse(u.String(), resp, body)
 		}
 		return nil, fmt.Errorf("websocket %s: %w", u.String(), err)
 	}
@@ -239,79 +255,104 @@ func (s *Stream) keepalive(ctx context.Context) {
 	}
 }
 
-// envelope is every server frame in one struct. The message set is small and
-// closed, so one decode with a type discriminator is simpler — and cheaper —
-// than a two-pass decode into per-type structs.
-type envelope struct {
-	Type  string    `json:"type"`
-	Radio string    `json:"radio"`
-	Seq   uint64    `json:"seq"`
-	TS    time.Time `json:"ts"`
-
-	// State is raw because a snapshot has to go through unmarshalState; see
-	// decode.go.
-	State   json.RawMessage `json:"state"`
+// deltaPayload keeps the `changed` object of a delta frame as bytes.
+//
+// wire.WSDelta decodes it into a StateDelta, which is the right type for a
+// client that wants to look at one field of one delta. It is the wrong thing to
+// apply a delta with; see ApplyDelta.
+type deltaPayload struct {
 	Changed json.RawMessage `json:"changed"`
-
-	Busy   bool `json:"busy"`
-	Queued int  `json:"queued"`
-	WPM    int  `json:"wpm"`
-
-	Connected bool   `json:"connected"`
-	Error     string `json:"error"`
-
-	Version string   `json:"version"`
-	Radios  []string `json:"radios"`
 }
 
 // decodeEvent turns one frame into an Event. The bool reports whether the frame
 // was a type this client knows; an unknown one is not an error, because the
 // contract entitles a client to ignore it.
 func decodeEvent(data []byte) (Event, bool, error) {
-	var env envelope
-	if err := json.Unmarshal(data, &env); err != nil {
+	var msg wire.WSMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return Event{}, false, fmt.Errorf("decoding websocket message: %w", err)
+	}
+	kind, err := msg.Discriminator()
+	if err != nil {
 		return Event{}, false, fmt.Errorf("decoding websocket message: %w", err)
 	}
 
-	ev := Event{Radio: env.Radio, Seq: env.Seq, TS: env.TS}
-	switch env.Type {
-	case "hello":
-		ev.Kind, ev.Version, ev.Radios = EventHello, env.Version, env.Radios
-	case "state":
-		ev.Kind = EventState
-		if err := unmarshalState(env.State, &ev.State); err != nil {
+	switch kind {
+	case string(wire.WSHelloTypeHello):
+		m, err := msg.AsWSHello()
+		if err != nil {
+			return Event{}, false, fmt.Errorf("decoding hello: %w", err)
+		}
+		return Event{
+			Kind:    EventHello,
+			TS:      m.ServerTime,
+			Version: m.Version,
+			Radios:  m.Radios,
+		}, true, nil
+
+	case string(wire.WSStateTypeState):
+		m, err := msg.AsWSState()
+		if err != nil {
 			return Event{}, false, fmt.Errorf("decoding state snapshot: %w", err)
 		}
-	case "delta":
-		ev.Kind, ev.Changed = EventDelta, env.Changed
-		ev.Fields = changedFieldNames(env.Changed)
-	case "cw":
-		ev.Kind = EventCW
-		ev.CW = radio.CWStatus{Busy: env.Busy, Queued: env.Queued, WPM: env.WPM}
-	case "conn":
-		ev.Kind, ev.Connected, ev.Err = EventConn, env.Connected, env.Error
-	case "resync":
-		ev.Kind = EventResync
-	default:
-		return Event{}, false, nil
-	}
-	return ev, true, nil
-}
+		return Event{
+			Kind:  EventState,
+			Radio: m.Radio,
+			Seq:   m.Seq,
+			TS:    m.TS,
+			State: m.State,
+		}, true, nil
 
-// changedFieldNames lists the keys of a delta, sorted so that output built from
-// them is stable.
-func changedFieldNames(raw json.RawMessage) []string {
-	if len(raw) == 0 {
-		return nil
+	case string(wire.WSDeltaTypeDelta):
+		m, err := msg.AsWSDelta()
+		if err != nil {
+			return Event{}, false, fmt.Errorf("decoding delta: %w", err)
+		}
+		var payload deltaPayload
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return Event{}, false, fmt.Errorf("decoding delta: %w", err)
+		}
+		return Event{
+			Kind:    EventDelta,
+			Radio:   m.Radio,
+			Seq:     m.Seq,
+			TS:      m.TS,
+			Changed: payload.Changed,
+		}, true, nil
+
+	case string(wire.WSCWTypeCW):
+		m, err := msg.AsWSCW()
+		if err != nil {
+			return Event{}, false, fmt.Errorf("decoding cw event: %w", err)
+		}
+		return Event{
+			Kind:  EventCW,
+			Radio: m.Radio,
+			Seq:   m.Seq,
+			TS:    m.TS,
+			CW:    wire.CWStatus{Busy: m.Busy, Queued: m.Queued, WPM: m.WPM},
+		}, true, nil
+
+	case string(wire.WSConnTypeConn):
+		m, err := msg.AsWSConn()
+		if err != nil {
+			return Event{}, false, fmt.Errorf("decoding conn event: %w", err)
+		}
+		return Event{
+			Kind:      EventConn,
+			Radio:     m.Radio,
+			Seq:       m.Seq,
+			TS:        m.TS,
+			Connected: m.Connected,
+			Err:       valueOr(m.Error),
+		}, true, nil
+
+	case string(wire.WSResyncTypeResync):
+		m, err := msg.AsWSResync()
+		if err != nil {
+			return Event{}, false, fmt.Errorf("decoding resync: %w", err)
+		}
+		return Event{Kind: EventResync, Radio: m.Radio, Seq: m.Seq, TS: m.TS}, true, nil
 	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(m))
-	for k := range m {
-		names = append(names, k)
-	}
-	slices.Sort(names)
-	return names
+	return Event{}, false, nil
 }

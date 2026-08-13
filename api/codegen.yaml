@@ -1,0 +1,60 @@
+# oapi-codegen settings for internal/wire, the Go view of api/openapi.yaml.
+#
+# Run it with `make generate`, from the repository root: the paths here are
+# relative to that, and the checked-in output is what everything else compiles
+# against, so a machine without the generator still builds.
+#
+# The point of generating at all is that remoses-cli then reads the same
+# document a third-party client would. A field the spec forgets to declare, or
+# declares differently from what the daemon sends, stops being a thing somebody
+# discovers while writing a client and becomes a thing that fails here.
+package: wire
+output: internal/wire/wire.gen.go
+
+generate:
+  models: true
+  # The client is generated too, but see include-operation-ids below: it is the
+  # request plumbing for two GETs, not the whole API.
+  client: true
+
+output-options:
+  # The WebSocket frames are schemas that no path references — a 101 has no
+  # body to hang them off — so pruning unreferenced components would throw away
+  # exactly the half of the contract this was done for.
+  skip-prune: true
+
+  # remoses-cli is a monitor, and "it cannot change a radio" is a property of
+  # the code rather than a promise in a comment. Listing the two read
+  # operations is what keeps it one: there is no generated PatchState for
+  # anything in cmd/remoses-cli to call, however carelessly.
+  include-operation-ids:
+    - getRadio
+    - getState
+
+  # Field names in this API are mostly initialisms an amateur radio operator
+  # reads as words. Without these, `ptt` generates as Ptt and `swr_ratio` as
+  # SwrRatio, and the display code that has to spell them stops looking like
+  # the rest of the tree.
+  name-normalizer: ToCamelCaseWithInitialisms
+  additional-initialisms:
+    - PTT
+    - CW
+    - VFO
+    - VFOs
+    - SWR
+    - ALC
+    - AGC
+    - RF
+    - RX
+    - NB
+    - NR
+    - WPM
+    - MS
+    - TX
+
+compatibility:
+  # Prefix every enum constant with its type: ModeCW rather than CW, TunerOn
+  # rather than On. Without it the generator only disambiguates the values that
+  # currently collide, so adding an enum somewhere else in the document renames
+  # constants over here.
+  always-prefix-enum-values: true

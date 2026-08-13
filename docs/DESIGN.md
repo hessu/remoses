@@ -1743,9 +1743,34 @@ path as the `tx_timeout` dead-man timer (§12).
 
 Design-first: `api/openapi.yaml` is the source of truth. Handlers are hand-written against
 Go 1.22+ `net/http` `ServeMux` — its pattern routing removes the need for chi, and for a
-surface this small a code generator would cost more than it saves. Drift is caught instead by
-a conformance test that parses the spec and asserts every documented path and method has a
-registered route, and that no route exists which the spec does not document.
+surface this small a server generator would cost more than it saves.
+
+**Clients are generated, and remoses-cli is one of them.** `make generate` turns the document
+into `internal/wire` with oapi-codegen — the types, plus the request plumbing for the two GET
+operations `output-options.include-operation-ids` lists — and `internal/client` and
+`cmd/remoses-cli` are built on that and nothing else. This is the difference between a spec
+that is published and a spec that is used: the monitor reads the same document a third-party
+client would, so a field the spec forgets to declare is a field the monitor stops displaying,
+and it stops on a developer's machine rather than in somebody's browser.
+
+Restricting the generated client to the read operations is also what keeps "a monitor cannot
+change a radio" a property rather than a promise. There is no generated `PatchState` in the
+binary to call by accident.
+
+Drift is caught in three places, and each catches something the others cannot:
+
+- **Routes.** A conformance test parses the spec and asserts every documented path and method
+  has a registered route, and that no route exists which the spec does not document.
+- **Bodies.** The same test pushes real responses — descriptor, state, CW status, lock,
+  problem documents — through the generated types with **unknown fields refused**, and checks
+  that every member the schema marks `required` is actually there. The first direction
+  catches a field the daemon sends and the document does not declare; the second catches a
+  promise the daemon does not keep, which matters because a generated client turns a required
+  field into a plain value, where a missing one arrives as a zero that reads like a reading.
+- **The generated code itself.** `make spec-check`, part of `make check` and of CI,
+  regenerates `internal/wire` and fails if it differs from what is checked in. Without it an
+  edit to the document that nobody regenerated would leave the two describing different APIs
+  with every test passing.
 
 | Method | Path | Lock | Purpose |
 |---|---|---|---|
@@ -1832,13 +1857,42 @@ Server → client, newline-free JSON objects, all carrying `type`:
 { "type":"state",  "radio":"ic7610", "seq":4471, "ts":"…", "state":{ … } }
 { "type":"delta",  "radio":"ic7610", "seq":4472, "ts":"…", "changed":{"frequency":14025300} }
 
-{ "type":"cw",     "radio":"ic7610", "busy":true, "queued":12, "wpm":28 }
-{ "type":"conn",   "radio":"ts590sg", "connected":false, "error":"port closed" }
-{ "type":"resync", "radio":"ic7610" }        // client dropped events; refetch state
+{ "type":"cw",     "radio":"ic7610", "seq":4473, "ts":"…", "busy":true, "queued":12, "wpm":28 }
+{ "type":"conn",   "radio":"ts590sg", "seq":4474, "ts":"…", "connected":false, "error":"port closed" }
+{ "type":"resync", "radio":"ic7610", "seq":4474, "ts":"…" }  // dropped events; refetch state
 ```
 
 Client → server is minimal: `{"type":"ping"}` and `{"type":"subscribe","radios":[…]}`.
 All control stays on REST, so the WebSocket has no authorisation surface.
+
+**These are schemas, not prose.** `api/openapi.yaml` declares `WSMessage` as a `oneOf` over
+the six frames with `discriminator: {propertyName: type}`, and `WSClientMessage` the same for
+the two a client may send. OpenAPI has nothing to say about a WebSocket — the operation can
+only promise a 101 — so the frames are declared under `components/schemas` and the generator
+is told not to prune what no path references. The discriminator is the point: it is the
+difference between a generated client offering `AsWSDelta()` on a frame whose type says
+`delta`, and one offering a `state` field that is null on five frames out of six.
+
+A delta needs a type of its own, because `State` requires eighteen members and a delta names
+only what moved. So the state fields live in `StateFields`, with everything optional, and the
+two schemas that use it say what they promise: `State` is `StateFields` plus the required
+list, `StateDelta` is `StateFields` as it stands. Sending whole snapshots instead would make
+one schema do, and for a stream with few fields or few messages that is the better trade —
+but fifty fields per radio at a two-a-second poll is real bandwidth over a link that may be
+somebody's phone.
+
+`radio`, `seq` and `ts` are on **every** frame about a radio, discrete `cw` and `conn` events
+included, so a gap is detectable without correlating an event against a state message the
+rate limiter may be holding back. `hello` is the one frame without them, because it describes
+the connection rather than a radio.
+
+Applying a delta is a JSON merge, and deliberately: `changed` uses `State`'s own names, so a
+client overwrites the members it carries and leaves the rest. A member present and **null**
+means the reading has gone away — the transmit meters, which exist only while the radio is
+keyed — and that is what stops the last transmission's SWR sitting on a display for ever.
+Note that this is the one thing the generated `StateDelta` cannot express: every optional
+field there is a pointer with `omitempty`, so null and absent both arrive as nil. remoses-cli
+applies the bytes for that reason, onto a generated `State`.
 
 ### Backpressure
 
@@ -1855,7 +1909,13 @@ queues with non-blocking hand-offs, in two lanes:
 Every event kind also feeds the state lane, so a client's snapshot and its `seq` stay
 continuous even when discrete events are dropped. `seq` is never fabricated or reordered: an
 event whose `seq` a newer snapshot already covers is discarded, so the written stream is
-strictly increasing per radio and clients can detect gaps independently.
+strictly increasing per radio.
+
+Increasing, but not contiguous, and that distinction is the contract: coalescing means values
+are **skipped**, so a jump from 37 to 41 says a client was spared three updates a later one
+superseded, not that anything was lost. What must not be missed silently are the discrete
+events, and `resync` is how the server admits it dropped one. Its `seq` is the last version
+the connection was actually sent, so it says where the hole starts.
 
 `resync` is itself rate-limited per radio — each one costs the client a REST refetch, so a
 burst of drops must not become a burst of refetches.
@@ -2584,13 +2644,17 @@ a later addition:
 ```
 remoses/
 ├── cmd/remoses/              main, flags, `passwd` subcommand
+├── cmd/remoses-cli/          read-only terminal monitor
 ├── api/openapi.yaml          source of truth
+├── api/codegen.yaml          what `make generate` makes of it
 ├── docs/DESIGN.md            this file
 └── internal/
     ├── config/               load, validate, defaults
     ├── auth/                 basic auth, bcrypt, TTL cache
     ├── lock/                 per-radio lock manager
-    ├── api/                  generated server, handlers, problem+json
+    ├── api/                  hand-written handlers, problem+json
+    ├── wire/                 GENERATED from api/openapi.yaml; do not edit
+    ├── client/               transport, auth and errors around internal/wire
     ├── ws/                   hub, per-client queues, coalescing
     ├── rig/                  Manager, Session, State, command queue, poller
     │   ├── backend/          Rig interface + registry
@@ -2609,10 +2673,18 @@ Dependencies, deliberately few:
 | `goccy/go-yaml` | Config |
 | `github.com/coder/websocket` | WebSocket |
 | `golang.org/x/crypto/bcrypt` | Password hashing |
-| `oapi-codegen/oapi-codegen` | Build-time server generation |
+| `golang.org/x/term` | Terminal size and password prompt, for remoses-cli |
+| `oapi-codegen/runtime` | Small support library the generated client links against |
+| `oapi-codegen/oapi-codegen` | **Tool dependency**: generates `internal/wire`, never linked |
 
 Everything else is stdlib (`net/http`, `log/slog`, `crypto/subtle`). Result is a single static
 binary per platform, cross-compiling to linux/amd64, linux/arm64, darwin, and windows.
+
+The generator is a `tool` directive in `go.mod` rather than something to install: `go tool
+oapi-codegen` runs the version `go.sum` pins, so two machines generate the same file, and its
+own dependency tree — kin-openapi and the rest — is build-time only and reaches neither
+binary. `internal/wire` is checked in for the same reason the archives carry the docs: a
+build must not need the network or the generator.
 
 ---
 
@@ -2627,6 +2699,11 @@ binary per platform, cross-compiling to linux/amd64, linux/arm64, darwin, and wi
 - **Lock semantics** — expiry mid-transmission drops PTT; sliding renewal; steal behaviour.
 - **WebSocket backpressure** — a deliberately stalled client must not slow a rig session, and
   must receive `resync` rather than a wedged stream.
+- **Contract conformance** — real REST responses and every kind of WebSocket frame are
+  decoded into the types `api/openapi.yaml` generates, with unknown members refused and the
+  required ones checked for. The point is that these run against the daemon's own output
+  rather than against fixtures somebody wrote to match the spec: a fixture agrees with
+  whatever it was copied from, including a mistake.
 
 ---
 

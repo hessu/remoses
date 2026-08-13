@@ -2,9 +2,12 @@ package client
 
 import (
 	"context"
+	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -12,7 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/wire"
 )
 
 // newWSServer runs a real websocket server, not a fake, so that the handshake,
@@ -81,9 +84,11 @@ func TestStreamDeliversTheDocumentedEnvelopes(t *testing.T) {
 			// A type this client does not know must be ignored rather than
 			// ending the stream; the contract says so explicitly.
 			`{"type":"something-new","radio":"ic7610"}`,
-			`{"type":"cw","radio":"ic7610","busy":true,"queued":12,"wpm":28}`,
-			`{"type":"conn","radio":"ic7610","connected":false,"error":"port closed"}`,
-			`{"type":"resync","radio":"ic7610"}`,
+			`{"type":"cw","radio":"ic7610","seq":4473,"ts":"2026-08-04T20:11:06Z",` +
+				`"busy":true,"queued":12,"wpm":28}`,
+			`{"type":"conn","radio":"ic7610","seq":4474,"ts":"2026-08-04T20:11:07Z",` +
+				`"connected":false,"error":"port closed"}`,
+			`{"type":"resync","radio":"ic7610","seq":4474,"ts":"2026-08-04T20:11:08Z"}`,
 		}
 		for _, m := range msgs {
 			if err := send(conn, m); err != nil {
@@ -124,7 +129,7 @@ func TestStreamDeliversTheDocumentedEnvelopes(t *testing.T) {
 	if snap.Kind != EventState || snap.Seq != 4471 {
 		t.Fatalf("state = %+v", snap)
 	}
-	if snap.State.Frequency != 14025000 || snap.State.Mode != radio.ModeCW {
+	if snap.State.Frequency != 14025000 || snap.State.Mode != wire.ModeCW {
 		t.Errorf("snapshot = %+v", snap.State)
 	}
 
@@ -132,7 +137,7 @@ func TestStreamDeliversTheDocumentedEnvelopes(t *testing.T) {
 	if delta.Kind != EventDelta || delta.Seq != 4472 {
 		t.Fatalf("delta = %+v", delta)
 	}
-	if got, want := strings.Join(delta.Fields, ","), "frequency,s_meter"; got != want {
+	if got, want := strings.Join(changedKeys(t, delta), ","), "frequency,s_meter"; got != want {
 		t.Errorf("delta fields = %q, want %q", got, want)
 	}
 
@@ -149,6 +154,18 @@ func TestStreamDeliversTheDocumentedEnvelopes(t *testing.T) {
 	resync := next()
 	if resync.Kind != EventResync || resync.Radio != "ic7610" {
 		t.Fatalf("resync = %+v", resync)
+	}
+
+	// A discrete event carries the version it describes, like every other frame,
+	// so a client can place it in the stream without correlating it against a
+	// state message that the server may be holding back.
+	for _, ev := range []Event{cw, conn, resync} {
+		if ev.Seq == 0 {
+			t.Errorf("%s frame carried no seq: %+v", ev.Kind, ev)
+		}
+		if ev.TS.IsZero() {
+			t.Errorf("%s frame carried no ts: %+v", ev.Kind, ev)
+		}
 	}
 
 	if len(*queries) != 1 || (*queries)[0].Get("radios") != "ic7610" {
@@ -223,13 +240,25 @@ func TestStreamEndsWhenTheServerHangsUp(t *testing.T) {
 	}
 }
 
+// changedKeys names the fields a delta carried, in a stable order. The client
+// keeps the payload as bytes rather than as a decoded StateDelta, so this is
+// what a test can ask it about.
+func changedKeys(t *testing.T, ev Event) []string {
+	t.Helper()
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(ev.Changed, &m); err != nil {
+		t.Fatalf("delta payload is not an object: %v", err)
+	}
+	return slices.Sorted(maps.Keys(m))
+}
+
 func TestApplyDelta(t *testing.T) {
-	base := radio.State{
+	base := wire.State{
 		Frequency:  14025000,
-		Mode:       radio.ModeCW,
+		Mode:       wire.ModeCW,
 		PassbandHz: 500,
-		SMeter:     radio.Meter{Raw: 10, Scale: 255},
-		CW:         radio.CWStatus{WPM: 28},
+		SMeter:     wire.Meter{Raw: 10, Scale: 255},
+		CW:         wire.CWStatus{WPM: 28},
 		Connected:  true,
 		Seq:        10,
 	}
@@ -245,7 +274,7 @@ func TestApplyDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyDelta: %v", err)
 	}
-	if next.Frequency != 14025300 || next.Mode != radio.ModeUSB {
+	if next.Frequency != 14025300 || next.Mode != wire.ModeUSB {
 		t.Errorf("changed fields not applied: %+v", next)
 	}
 	if next.SMeter.Raw != 120 || !next.CW.Busy || next.CW.Queued != 4 {
@@ -267,8 +296,8 @@ func TestApplyDelta(t *testing.T) {
 // The previous snapshot is what a renderer diffs against, so applying a delta
 // must not reach back through the pointers it shares with it.
 func TestApplyDeltaDoesNotMutateThePreviousSnapshot(t *testing.T) {
-	swr := radio.Meter{Raw: 3, Scale: 100}
-	base := radio.State{Frequency: 14025000, SWR: &swr}
+	swr := wire.Meter{Raw: 3, Scale: 100}
+	base := wire.State{Frequency: 14025000, SWR: &swr}
 
 	ev, _, err := decodeEvent([]byte(`{"type":"delta","radio":"ic7610","seq":2,` +
 		`"changed":{"swr":{"raw":30,"scale":100}}}`))
@@ -285,6 +314,37 @@ func TestApplyDeltaDoesNotMutateThePreviousSnapshot(t *testing.T) {
 	}
 	if base.SWR.Raw != 3 {
 		t.Errorf("previous snapshot was mutated: %+v", base.SWR)
+	}
+}
+
+// A transmit meter that has gone away is sent as an explicit null, and a delta
+// that named it must clear it. This is the distinction the generated
+// wire.StateDelta cannot carry — every optional field there is a pointer with
+// omitempty, so null and absent both arrive as nil — and the reason ApplyDelta
+// works from the bytes.
+func TestApplyDeltaClearsAMeterSentAsNull(t *testing.T) {
+	swr := wire.Meter{Raw: 30, Scale: 100}
+	ratio := 1.5
+	pwr := wire.Meter{Raw: 200, Scale: 255}
+	base := wire.State{PTT: true, SWR: &swr, SWRRatio: &ratio, PowerMeter: &pwr}
+
+	ev, _, err := decodeEvent([]byte(`{"type":"delta","radio":"ic7610","seq":3,` +
+		`"ts":"2026-08-04T20:11:09Z","changed":{"ptt":false,"power_meter":null,` +
+		`"swr":null,"alc":null,"swr_ratio":null}}`))
+	if err != nil {
+		t.Fatalf("decodeEvent: %v", err)
+	}
+
+	next, err := ev.ApplyDelta(base)
+	if err != nil {
+		t.Fatalf("ApplyDelta: %v", err)
+	}
+	if next.PTT {
+		t.Error("ptt not applied")
+	}
+	if next.SWR != nil || next.SWRRatio != nil || next.PowerMeter != nil {
+		t.Errorf("transmit meters survived the end of the transmission: swr=%+v ratio=%v pwr=%+v",
+			next.SWR, next.SWRRatio, next.PowerMeter)
 	}
 }
 

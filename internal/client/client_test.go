@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/wire"
 )
 
 const (
@@ -111,7 +111,7 @@ func TestStateDecodesTheDocumentedShape(t *testing.T) {
 	if st.Frequency != 14025000 {
 		t.Errorf("frequency = %d", st.Frequency)
 	}
-	if st.Mode != radio.ModeCW {
+	if st.Mode != wire.ModeCW {
 		t.Errorf("mode = %v", st.Mode)
 	}
 	if st.PassbandHz != 500 || st.FilterSlot != 2 {
@@ -126,13 +126,13 @@ func TestStateDecodesTheDocumentedShape(t *testing.T) {
 	if st.CW.WPM != 28 {
 		t.Errorf("cw = %+v", st.CW)
 	}
-	if !st.Connected || st.Stale {
-		t.Errorf("connected = %t, stale = %t", st.Connected, st.Stale)
+	if !st.Connected || IsStale(st) {
+		t.Errorf("connected = %t, stale = %t", st.Connected, IsStale(st))
 	}
 	if st.Seq != 4471 {
 		t.Errorf("seq = %d", st.Seq)
 	}
-	if got, want := st.Age(), 120*time.Millisecond; got != want {
+	if got, want := Age(st), 120*time.Millisecond; got != want {
 		t.Errorf("Age = %v, want %v", got, want)
 	}
 
@@ -158,7 +158,7 @@ func TestStateOfADisconnectedRadioIsNotAnError(t *testing.T) {
 	if st.Connected {
 		t.Error("expected connected = false")
 	}
-	if !st.Stale {
+	if !IsStale(st) {
 		t.Error("expected stale = true")
 	}
 	if st.Frequency != 14025000 {
@@ -178,13 +178,13 @@ func TestRadioDescriptor(t *testing.T) {
 	if rd.Name != "IC-7610" || rd.Backend != "civ" || !rd.Connected {
 		t.Errorf("descriptor = %+v", rd)
 	}
-	if !rd.Lock.Held || rd.Lock.Holder != "oh2abc" || rd.Lock.IsMine {
+	if !rd.Lock.Held || rd.Lock.Holder == nil || *rd.Lock.Holder != "oh2abc" || rd.Lock.IsMine {
 		t.Errorf("lock = %+v", rd.Lock)
 	}
-	if rd.Caps.CWMethod != radio.CWViaCAT || rd.Caps.SMeterScale != 255 {
+	if rd.Caps.CWMethod != wire.CWMethodCat || rd.Caps.SMeterScale != 255 {
 		t.Errorf("caps = %+v", rd.Caps)
 	}
-	if len(rd.Limits.Bands) != 1 {
+	if rd.Limits.Bands == nil || len(*rd.Limits.Bands) != 1 {
 		t.Errorf("limits = %+v", rd.Limits)
 	}
 }
@@ -292,6 +292,31 @@ func TestClientOnlyIssuesGets(t *testing.T) {
 		if strings.Contains(call, "/lock") {
 			t.Errorf("monitor touched a lock: %q", call)
 		}
+	}
+}
+
+// A radio id goes into a URL path unescaped — the generated request builder
+// interpolates it — so an id that is not the daemon's own shape must be refused
+// here rather than turned into a request to whatever path it happens to spell.
+func TestUnusableRadioIDsAreRefusedBeforeAnyRequest(t *testing.T) {
+	srv, rec := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		serveJSON(w, stateJSON)
+	})
+	c := newClient(t, srv)
+
+	for _, id := range []string{"../lock", "ic7610/state", "IC7610", "", "ic7610?x=1"} {
+		if _, err := c.State(context.Background(), id); err == nil {
+			t.Errorf("State(%q): expected an error", id)
+		}
+		if _, err := c.Radio(context.Background(), id); err == nil {
+			t.Errorf("Radio(%q): expected an error", id)
+		}
+		if _, err := c.Stream(context.Background(), id); err == nil {
+			t.Errorf("Stream(%q): expected an error", id)
+		}
+	}
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Errorf("requests were sent for unusable ids: %v", calls)
 	}
 }
 

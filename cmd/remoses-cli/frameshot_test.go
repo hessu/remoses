@@ -4,44 +4,44 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/wire"
 )
 
 // TestFrameShot is a look at the whole display, receive and transmit, so that a
 // layout change shows up as a readable diff rather than as an assertion about a
 // substring. Run with -v to see it.
 func TestFrameShot(t *testing.T) {
-	base := radio.State{
+	base := wire.State{
 		Connected:  true,
 		Frequency:  28_030_000,
-		Mode:       radio.ModeCW,
+		Mode:       wire.ModeCW,
 		PassbandHz: 500,
 		FilterSlot: 1,
-		Power:      radio.Power{Pct: 25, Watts: ptrFloat64(25)},
-		SMeter:     radio.Meter{Raw: 96, Scale: 255},
-		CW:         radio.CWStatus{WPM: 25},
+		Power:      wire.Power{Pct: 25, Watts: ptrFloat64(25)},
+		SMeter:     wire.Meter{Raw: 96, Scale: 255},
+		CW:         wire.CWStatus{WPM: 25},
 	}
 
 	tx := base
 	tx.PTT = true
 	ratio := 1.4
-	tx.PowerMeter = &radio.Meter{Raw: 143, Scale: 255}
+	tx.PowerMeter = &wire.Meter{Raw: 143, Scale: 255}
 	// As the civ backend reports it: against the top of the calibrated range,
 	// where 120 is SWR 3.0.
-	tx.SWR = &radio.Meter{Raw: 38, Scale: 120}
+	tx.SWR = &wire.Meter{Raw: 38, Scale: 120}
 	tx.SWRRatio = &ratio
-	tx.ALC = &radio.Meter{Raw: 72, Scale: 120}
-	tx.Tuner = radio.TunerTuning
-	base.Tuner = radio.TunerOn
+	tx.ALC = &wire.Meter{Raw: 72, Scale: 120}
+	tx.Tuner = ptr(wire.TunerTuning)
+	base.Tuner = ptr(wire.TunerOn)
 
 	// A radio that is reachable but switched off. The readings are whatever was
 	// last true before it went off, which is why the note matters.
 	standby := base
-	standby.Standby = true
+	standby.Standby = ptr(true)
 
 	for _, tc := range []struct {
 		name string
-		st   radio.State
+		st   wire.State
 	}{{"receive", base}, {"transmit", tx}, {"standby", standby}} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := meterView(t, tc.st)

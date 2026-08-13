@@ -48,7 +48,7 @@ PLATFORMS := \
 	windows/arm64
 
 .PHONY: all build test race cover vet fmt fmt-check lint check run config-check \
-        cross release clean tidy help
+        generate spec-check cross release clean tidy help
 
 all: build ## Build the binaries
 
@@ -77,8 +77,39 @@ fmt-check: ## Fail if anything is unformatted
 	@out=$$(gofmt -l .); \
 	if [ -n "$$out" ]; then echo "unformatted:"; echo "$$out"; exit 1; fi
 
+# internal/wire is generated from api/openapi.yaml and checked in, so a build
+# needs neither the generator nor the network. The generator itself is a tool
+# dependency in go.mod, so `go tool` runs the version go.sum pins rather than
+# whatever is on the machine.
+generate: ## Regenerate internal/wire from api/openapi.yaml
+	go tool oapi-codegen -config api/codegen.yaml api/openapi.yaml
+	@echo "generated internal/wire/wire.gen.go"
+
+# The half of "the spec is the contract" that a test cannot cover: the tests
+# prove the daemon agrees with the checked-in Go, and this proves the checked-in
+# Go is still what the document says. Without it an edit to openapi.yaml that
+# nobody regenerated would leave the two describing different APIs, with
+# everything passing.
+# It regenerates in place and puts the file back, rather than generating
+# somewhere else and comparing: the output path is in api/codegen.yaml and the
+# config wins over -o, so "somewhere else" would silently compare against
+# nothing at all. Whatever happens, the working tree is left as it was found.
+spec-check: ## Fail if internal/wire is stale with respect to the spec
+	@out=internal/wire/wire.gen.go; saved=$$(mktemp); cp $$out $$saved; \
+	if ! go tool oapi-codegen -config api/codegen.yaml api/openapi.yaml; then \
+		cp $$saved $$out; rm -f $$saved; exit 1; \
+	fi; \
+	if diff -q $$saved $$out >/dev/null; then \
+		rm -f $$saved; echo "internal/wire matches api/openapi.yaml"; \
+	else \
+		diff -u $$saved $$out | head -40; \
+		cp $$saved $$out; rm -f $$saved; \
+		echo "$$out does not match api/openapi.yaml; run make generate"; \
+		exit 1; \
+	fi
+
 # What CI should run, and what to run before committing.
-check: fmt-check vet test ## fmt-check + vet + test
+check: fmt-check vet spec-check test ## fmt-check + vet + spec-check + test
 
 run: build ## Run against remoses.yaml
 	$(BUILD_DIR)/$(BIN) -config remoses.yaml

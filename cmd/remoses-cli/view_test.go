@@ -6,23 +6,26 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/hessu/remoses/internal/client"
-	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/wire"
 )
 
 func f64(v float64) *float64 { return &v }
 
+// ptr is for the optional fields of a generated type, where "the radio cannot
+// report this" is spelled as a nil pointer.
+func ptr[T any](v T) *T { return &v }
+
 // sampleState is the DESIGN.md §8 example, so the display is exercised against
 // numbers the contract actually documents.
-func sampleState() radio.State {
-	return radio.State{
+func sampleState() wire.State {
+	return wire.State{
 		Frequency:  14025000,
-		Mode:       radio.ModeCW,
+		Mode:       wire.ModeCW,
 		PassbandHz: 500,
 		FilterSlot: 2,
-		Power:      radio.Power{Pct: 40, Native: 102},
-		SMeter:     radio.Meter{Raw: 78, Scale: 255, S: f64(5.5)},
-		CW:         radio.CWStatus{WPM: 28},
+		Power:      wire.Power{Pct: 40, Native: 102},
+		SMeter:     wire.Meter{Raw: 78, Scale: 255, S: f64(5.5)},
+		CW:         wire.CWStatus{WPM: 28},
 		Connected:  true,
 		Seq:        4471,
 		UpdatedAt:  time.Date(2026, 8, 4, 20, 11, 4, 0, time.UTC),
@@ -32,10 +35,10 @@ func sampleState() radio.State {
 // testRadio is the descriptor the fixtures share. Its capabilities are not
 // decoration: they decide which fields the renderers draw at all, so an
 // IC-7610 has to say it has the power and filter commands an IC-7610 has.
-func testRadio() *client.Radio {
-	return &client.Radio{
-		ID: "ic7610", Name: "IC-7610", Backend: "civ", Connected: true,
-		Caps: radio.Caps{PowerControl: true, FilterWidth: true, FilterSlots: 3},
+func testRadio() *wire.Radio {
+	return &wire.Radio{
+		ID: "ic7610", Name: "IC-7610", Backend: wire.BackendCiv, Connected: true,
+		Caps: wire.Caps{PowerControl: true, FilterWidth: true, FilterSlots: 3},
 	}
 }
 
@@ -49,7 +52,7 @@ func newTestView() *view {
 }
 
 func TestFormatFreq(t *testing.T) {
-	tests := map[uint64]string{
+	tests := map[int64]string{
 		14025300:   "14.025.300",
 		14025000:   "14.025.000",
 		1840000:    "1.840.000",
@@ -65,7 +68,7 @@ func TestFormatFreq(t *testing.T) {
 }
 
 func TestFormatSUnit(t *testing.T) {
-	if got := formatSUnit(radio.Meter{Raw: 10, Scale: 255}); got != "" {
+	if got := formatSUnit(wire.Meter{Raw: 10, Scale: 255}); got != "" {
 		t.Errorf("uncalibrated meter = %q, want empty", got)
 	}
 	tests := map[float64]string{
@@ -76,7 +79,7 @@ func TestFormatSUnit(t *testing.T) {
 		12.333: "S9+20 dB",
 	}
 	for s, want := range tests {
-		got := formatSUnit(radio.Meter{Raw: 1, Scale: 255, S: f64(s)})
+		got := formatSUnit(wire.Meter{Raw: 1, Scale: 255, S: f64(s)})
 		if got != want {
 			t.Errorf("formatSUnit(%v) = %q, want %q", s, got, want)
 		}
@@ -122,31 +125,31 @@ func TestMeterBarResolvesSingleUnitSteps(t *testing.T) {
 }
 
 func TestFormatPower(t *testing.T) {
-	if got := formatPower(radio.Power{Pct: 40, Native: 102}); got != "40 %" {
+	if got := formatPower(wire.Power{Pct: 40, Native: 102}); got != "40 %" {
 		t.Errorf("relative power = %q", got)
 	}
-	if got := formatPower(radio.Power{Pct: 40, Native: 40, Watts: f64(40)}); got != "40 %  40 W" {
+	if got := formatPower(wire.Power{Pct: 40, Native: 40, Watts: f64(40)}); got != "40 %  40 W" {
 		t.Errorf("watt-accurate power = %q", got)
 	}
 }
 
 func TestFormatMode(t *testing.T) {
-	if got := formatMode(radio.State{Mode: radio.ModeCW}); got != "CW" {
+	if got := formatMode(wire.State{Mode: wire.ModeCW}); got != "CW" {
 		t.Errorf("mode = %q", got)
 	}
 	// Data mode is orthogonal to the mode, as the rigs model it; the display
 	// joins them without the state pretending they are one value.
-	if got := formatMode(radio.State{Mode: radio.ModeUSB, DataMode: true}); got != "USB/D" {
+	if got := formatMode(wire.State{Mode: wire.ModeUSB, DataMode: true}); got != "USB/D" {
 		t.Errorf("data mode = %q", got)
 	}
 }
 
 func TestFormatCW(t *testing.T) {
-	idle := formatCW(radio.CWStatus{WPM: 28})
+	idle := formatCW(wire.CWStatus{WPM: 28})
 	if !strings.HasPrefix(idle, "idle") || !strings.Contains(idle, "28 wpm") {
 		t.Errorf("idle = %q", idle)
 	}
-	busy := formatCW(radio.CWStatus{Busy: true, Queued: 12, WPM: 28, EstRemainingMS: 4300})
+	busy := formatCW(wire.CWStatus{Busy: true, Queued: 12, WPM: 28, EstRemainingMS: 4300})
 	for _, want := range []string{"sending", "queued 12", "28 wpm", "~4.3 s"} {
 		if !strings.Contains(busy, want) {
 			t.Errorf("busy = %q, missing %q", busy, want)
@@ -179,7 +182,8 @@ func TestAgeIsServerReportedPlusLocalElapsed(t *testing.T) {
 	st := sampleState()
 	// A snapshot whose UpdatedAt is an hour ahead of this machine's clock.
 	st.UpdatedAt = now.Add(time.Hour)
-	v.setSnapshot(&client.State{State: st, AgeMS: 120})
+	st.AgeMS = ptr(120)
+	v.setSnapshot(&st)
 
 	if got := v.age(); got != 120*time.Millisecond {
 		t.Fatalf("age = %v, want 120ms", got)
@@ -195,7 +199,9 @@ func TestAgeIsServerReportedPlusLocalElapsed(t *testing.T) {
 func TestStreamUpdateResetsAge(t *testing.T) {
 	now := time.Now()
 	v := newView("ic7610", func() time.Time { return now })
-	v.setSnapshot(&client.State{State: sampleState(), AgeMS: 5000, Stale: true})
+	snap := sampleState()
+	snap.AgeMS, snap.Stale = ptr(5000), ptr(true)
+	v.setSnapshot(&snap)
 	if !v.stale {
 		t.Fatal("stale was not taken from the snapshot")
 	}
@@ -214,7 +220,7 @@ func TestSignificantIgnoresMeters(t *testing.T) {
 	before := v.significant()
 
 	st := sampleState()
-	st.SMeter = radio.Meter{Raw: 200, Scale: 255, S: f64(9)}
+	st.SMeter = wire.Meter{Raw: 200, Scale: 255, S: f64(9)}
 	v.setState(st)
 
 	if v.significant() != before {
@@ -236,17 +242,17 @@ func TestSignificantIgnoresMeters(t *testing.T) {
 func TestSignificantComparesPowerByValue(t *testing.T) {
 	v := newTestView()
 	st := sampleState()
-	st.Power = radio.Power{Pct: 40, Native: 40, Watts: f64(40)}
+	st.Power = wire.Power{Pct: 40, Native: 40, Watts: f64(40)}
 	v.setState(st)
 	a := v.significant()
 
-	st.Power = radio.Power{Pct: 40, Native: 40, Watts: f64(40)}
+	st.Power = wire.Power{Pct: 40, Native: 40, Watts: f64(40)}
 	v.setState(st)
 	if v.significant() != a {
 		t.Error("two equal powers compared unequal")
 	}
 
-	st.Power = radio.Power{Pct: 50, Native: 50, Watts: f64(50)}
+	st.Power = wire.Power{Pct: 50, Native: 50, Watts: f64(50)}
 	v.setState(st)
 	if v.significant() == a {
 		t.Error("a power change went unnoticed")
@@ -270,7 +276,7 @@ func TestRadioNameFallsBackToTheID(t *testing.T) {
 	if got := v.radioName(); got != "ic7610" {
 		t.Errorf("name before the descriptor arrives = %q", got)
 	}
-	v.desc = &client.Radio{Name: "IC-7610"}
+	v.desc = &wire.Radio{Name: "IC-7610"}
 	if got := v.radioName(); got != "IC-7610" {
 		t.Errorf("name = %q", got)
 	}

@@ -304,14 +304,23 @@ paths:
         clients are supported. The stream is read-only and needs no lock; all
         control stays on REST, so the socket has no authorisation surface.
 
+        Every frame is a `WSMessage` and every client message a
+        `WSClientMessage`; both are discriminated by `type`. OpenAPI cannot
+        attach them to this operation — a 101 has no body — so they are declared
+        under `components/schemas`, which is where a generator will find them.
+
         On connect the server sends `hello`, then one `state` snapshot per
-        radio, then `delta` messages. `seq` is monotonic per radio so clients
-        can detect gaps.
+        radio, then `delta` messages as things change.
 
         Backpressure: state is last-value-wins and is coalesced for a slow
-        client, then rate-limited per radio. Discrete `cw`, `lock` and `conn`
-        events are not coalesced; if that queue overflows the server emits
-        `resync` and the client should refetch state.
+        client, then rate-limited per radio, so `seq` skips values. Discrete
+        `cw` and `conn` events are not coalesced; if that queue overflows the
+        server emits `resync` and the client should refetch state.
+
+        There is no lock frame. Lock changes have no event feed inside remoses,
+        and inventing one from a timer would report a 30 second lease either too
+        slowly to be useful or too often to be free; clients read lock state
+        from `GET /radios` and `GET /radios/{radioId}/lock`.
       parameters:
         - name: radios
           in: query
@@ -340,7 +349,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status]
+                required: [status, radios_connected, radios_total]
                 properties:
                   status: { type: string, example: ok }
                   radios_connected: { type: integer }
@@ -470,6 +479,131 @@ components:
         to act on the operating VFO and call it A, which it refuses to do.
       enum: [current, A, B, main, sub]
 
+    # The enumerations below are named rather than spelled out at each use.
+    #
+    # A generated client is the reason. An enum written inline in `State` and
+    # again in `StatePatch` becomes two unrelated types in the generated code —
+    # a client could not pass the value it just read back to the field it came
+    # from without a cast — and the two spellings drift the moment somebody
+    # edits one of them. Naming them once also puts the prose about what the
+    # radios disagree over in one place.
+    #
+    # Where a set can be read but only part of it can be written there are two
+    # schemas rather than one, on the pattern Power and PowerSet already set:
+    # the reading is the wider set, and what a client may ask for is its own
+    # type, so a value that is a reading only cannot be sent back by accident.
+
+    AGC:
+      type: string
+      description: |
+        The AGC speed, as read from the radio. `caps.agc_settings` lists what
+        this radio accepts, and the set really does differ between models of one
+        make: a TS-590 has slow and fast and no middle, a TS-890 has all three,
+        and Icom's command has no off at all.
+
+        The three `auto-*` values are READINGS ONLY, and only Yaesu reports
+        them. That radio accepts `auto` and answers with the speed auto chose,
+        so a client that sets `auto` and reads `auto-mid` has not failed to set
+        anything — which is why they are absent from `AGCSet`.
+      enum: [off, fast, mid, slow, auto, auto-fast, auto-mid, auto-slow]
+
+    AGCSet:
+      type: string
+      description: |
+        An AGC speed a client may ask for. The `auto-*` readings are excluded:
+        they say what auto CHOSE, and there is no way to tell a radio "be
+        automatic, and also be mid". Ask for `auto` instead.
+      enum: [off, fast, mid, slow, auto]
+
+    Tuner:
+      type: string
+      description: |
+        The internal antenna tuner: bypassed, in line, or running a tuning
+        cycle. `tuning` means the radio is keying its own transmitter right now
+        to find a match, so a client should show it the way it shows PTT.
+      enum: [off, on, tuning]
+
+    TunerSet:
+      type: string
+      description: |
+        A tuner position a client may ask for. `tuning` is a state to observe,
+        not one to ask for — start a cycle with `tuner_tune` — so a client that
+        reads the state and writes it back can never key a transmitter.
+      enum: [off, on]
+
+    NotchWidth:
+      type: string
+      description: |
+        How wide the manual notch bites. Icom only; `caps.notch_widths` is empty
+        elsewhere, because a Kenwood accepts a width and then always answers 0
+        for it, and remoses does not offer one it could write and never read
+        back.
+      enum: [wide, mid, narrow]
+
+    BreakIn:
+      type: string
+      description: |
+        CW break-in, which decides whether CW sent over CAT reaches the air at
+        all: with it off and the transmitter not already keyed, the rig accepts
+        a message and transmits nothing.
+
+        `on` is break-in enabled on a radio that does not say which kind. Not
+        every rig distinguishes them over CAT — an IC-910H's command is "0=OFF,
+        1=ON" where the rest of its family has three values — and reporting that
+        as `semi` or `full` would invent a distinction the radio declined to
+        make. It is an audible one: full is QSK and switches the rig between
+        transmit and receive inside the gaps between elements.
+      enum: [off, semi, full, on]
+
+    Band:
+      type: string
+      description: |
+        One of a two-receiver radio's two receivers. "Band" rather than
+        "receiver" because that is what the radios call them — Icom's MAIN and
+        SUB bands — and an operator reading a client will recognise the word off
+        the front panel.
+      enum: [main, sub]
+
+    PowerSwitch:
+      type: string
+      description: |
+        Switch the radio itself off or on.
+
+        `off` is the recoverable off: on a radio with a choice it is the one
+        that draws more standby current and wakes on a single command.
+        `off_deep` asks for the lowest standby current the radio offers — on a
+        Kenwood, the same as its front-panel switch — which needs the longer
+        wake sequence afterwards. A radio with only one off sends it either way.
+      enum: [on, off, off_deep]
+
+    VFOAddressing:
+      type: string
+      description: |
+        What `state.vfo_a` and `state.vfo_b` name. `named` means stable labels
+        for two fixed slots (an IC-7610's main and sub bands). `relative` means
+        A is whichever VFO the operator has selected and B is the other — an
+        IC-9700, whose protocol offers exactly that selector and never reports
+        which letter is selected. Either way, B is where split sends the
+        transmit.
+      enum: [named, relative]
+
+    CWMethod:
+      type: string
+      description: |
+        How a radio keys Morse: not at all, from a buffer inside the rig filled
+        over CAT, or locally generated and keyed on a serial control line.
+      enum: [none, cat, serial_key]
+
+    Backend:
+      type: string
+      description: |
+        The protocol family remoses speaks to this radio.
+
+        `yaesu` covers both of Yaesu's CAT systems: the ASCII dialect the modern
+        radios speak and the five-byte binary one of the FT-857/FT-897
+        generation. The model chooses, so there is one backend name.
+      enum: [civ, kenwood, yaesu, rigctld]
+
     VFOState:
       description: |
         One VFO's own settings. On a radio with `caps.per_vfo_mode` these are
@@ -477,6 +611,7 @@ components:
         flag and IF filter per VFO — and elsewhere only `frequency` is
         meaningful.
       type: object
+      required: [frequency, mode, data_mode, passband_hz, filter_slot]
       properties:
         frequency: { type: integer, format: int64 }
         mode: { $ref: "#/components/schemas/Mode" }
@@ -490,14 +625,16 @@ components:
         disagree about units and normalising that away would lose information:
         Kenwood PC is watts, Icom 14 0A is a relative index.
       type: object
-      required: [pct, native]
+      required: [watts, pct, native]
       properties:
         watts:
           type: number
+          format: double
           nullable: true
           description: Absolute watts, null when the rig has no watt-accurate scale.
         pct:
           type: number
+          format: double
           description: Normalised 0..100 against the rig's maximum for the current mode.
         native:
           type: integer
@@ -507,8 +644,8 @@ components:
       description: Exactly one of watts or pct.
       type: object
       properties:
-        watts: { type: number }
-        pct: { type: number, minimum: 0, maximum: 100 }
+        watts: { type: number, format: double }
+        pct: { type: number, format: double, minimum: 0, maximum: 100 }
 
     Meter:
       description: |
@@ -520,20 +657,26 @@ components:
       properties:
         raw: { type: integer }
         scale: { type: integer }
-        s: { type: number, nullable: true }
+        s: { type: number, format: double, nullable: true }
 
     CWStatus:
       type: object
-      required: [busy, queued, wpm]
+      required: [busy, queued, wpm, est_remaining_ms]
       properties:
         busy: { type: boolean }
         queued: { type: integer, description: Characters not yet keyed }
         wpm: { type: integer }
         est_remaining_ms: { type: integer }
 
-    State:
+    # State is defined in three pieces, and the split is for the WebSocket
+    # stream: a delta names the fields that changed and nothing else, so it
+    # cannot reuse a schema that requires six of them. StateFields is the
+    # vocabulary — every field a radio state can carry, none of them required —
+    # and the two schemas below say which parts of it a given message promises.
+    #
+    # A client should never need to name StateFields itself.
+    StateFields:
       type: object
-      required: [frequency, mode, ptt, connected, seq, updated_at]
       properties:
         frequency: { type: integer, format: int64, description: Hz }
         mode: { $ref: "#/components/schemas/Mode" }
@@ -582,8 +725,7 @@ components:
             remoses stops polling it rather than leaving a stale reading that
             would look live.
         selected_band:
-          type: string
-          enum: [main, sub]
+          allOf: [{ $ref: "#/components/schemas/Band" }]
           description: |
             Which of a two-receiver radio's receivers the operator has selected,
             and therefore **which receiver the operating fields describe**.
@@ -667,14 +809,10 @@ components:
             It is set however the radio came to be off — a `power_switch`
             request, or somebody pressing the front-panel button.
         tuner:
-          type: string
-          enum: [off, on, tuning]
+          allOf: [{ $ref: "#/components/schemas/Tuner" }]
           description: |
-            The internal antenna tuner: bypassed, in line, or running a tuning
-            cycle. Absent on a radio that has none or that remoses cannot ask.
-
-            `tuning` means the radio is keying its own transmitter right now to
-            find a match, so a client should show it the way it shows PTT.
+            The internal antenna tuner. Absent on a radio that has none or that
+            remoses cannot ask.
 
             On a TS-590S the state also reports whether a finished cycle
             succeeded, which no command does: a cycle that finds a match ends on
@@ -707,6 +845,7 @@ components:
             not a value remoses can set independently.
         rf_gain:
           type: number
+          format: double
           description: |
             The receiver's RF gain, 0-100%.
 
@@ -715,19 +854,10 @@ components:
             0-255, and a number that means a different thing on two radios of
             one make is a number a client cannot draw.
         agc:
-          type: string
-          enum: [off, fast, mid, slow, auto, auto-fast, auto-mid, auto-slow]
+          allOf: [{ $ref: "#/components/schemas/AGC" }]
           description: |
-            The AGC speed. `caps.agc_settings` lists what this radio accepts,
-            and the set really does differ between models of one make: a TS-590
-            has slow and fast and no middle, a TS-890 has all three, and Icom's
-            command has no off at all.
-
-            The three `auto-*` values are READINGS ONLY, and only Yaesu reports
-            them. That radio accepts `auto` and answers with the speed auto
-            chose, so a client that sets `auto` and reads `auto-mid` has not
-            failed to set anything. Sending one back is refused with 422 — ask
-            for `auto` instead.
+            The AGC speed. Sending an `auto-*` reading back is refused with 422;
+            see `AGCSet`.
         ip_plus:
           type: boolean
           description: |
@@ -746,6 +876,7 @@ components:
             preselector off on the operator's behalf.
         digi_sel_shift:
           type: number
+          format: double
           description: |
             Where the DIGI-SEL preselector sits, 0-100%. Reported even while the
             preselector is switched out: the radio remembers it, and a client
@@ -762,6 +893,7 @@ components:
             combination rather than a third blanker, so it is not published.
         nb_level:
           type: number
+          format: double
           description: |
             The blanker's threshold, 0-100%. On Kenwood this is refused while
             the blanker is off, so it is absent until one is running.
@@ -773,6 +905,7 @@ components:
             algorithm whose level means something else entirely.
         nr_level:
           type: number
+          format: double
           description: |
             The reducer's level, 0-100%.
 
@@ -792,6 +925,7 @@ components:
             than letting one vanish.
         notch_freq:
           type: number
+          format: double
           description: |
             Where the manual notch sits, 0-100% of the radio's own range.
 
@@ -799,13 +933,7 @@ components:
             0-255 on Icom, 0-127 on Kenwood, and an actual 10 Hz to 3200 Hz on
             Yaesu.
         notch_width:
-          type: string
-          enum: [wide, mid, narrow]
-          description: |
-            How wide the manual notch bites. Icom only — see
-            `caps.notch_widths`, which is empty elsewhere. A Kenwood accepts a
-            width and then always answers 0 for it, so remoses does not offer
-            one it could write and never read back.
+          $ref: "#/components/schemas/NotchWidth"
         auto_notch:
           type: boolean
           description: |
@@ -832,33 +960,85 @@ components:
             report it. Kenwood's `AN` carries it; no Yaesu or Icom read for this
             backend does.
         break_in:
-          type: string
-          enum: [off, semi, full, on]
+          allOf: [{ $ref: "#/components/schemas/BreakIn" }]
           description: |
-            CW break-in. Absent on a radio remoses cannot ask. It decides
-            whether CW sent over CAT reaches the air: with it off and the
-            transmitter not already keyed, the rig accepts a message and
-            transmits nothing. `POST /cw` will not let that happen silently —
-            depending on the server's `cw.break_in` policy it either switches
-            break-in on first or refuses with 422. A client offering a CW box
-            should show this beside it, and may see it change by itself after a
-            send for that reason.
+            CW break-in. Absent on a radio remoses cannot ask.
 
-            `on` means break-in is enabled on a radio that does not say which
-            kind. Not every rig distinguishes them over CAT — an IC-910H's
-            command is "0=OFF, 1=ON" where the rest of its family has three
-            values — and reporting that as `semi` or `full` would invent a
-            distinction the radio declined to make. It is an audible one: full
-            is QSK and switches the rig between transmit and receive inside the
-            gaps between elements. On such a radio, setting `semi` or `full` is
-            still accepted, both mean its single "on", and the state reads back
-            `on`.
+            `POST /cw` will not let a message go silently unsent — depending on
+            the server's `cw.break_in` policy it either switches break-in on
+            first or refuses with 422. A client offering a CW box should show
+            this beside it, and may see it change by itself after a send for
+            that reason.
 
         connected: { type: boolean }
-        seq: { type: integer, format: int64 }
+        seq:
+          type: integer
+          format: int64
+          description: |
+            The state cache's version for this radio, monotonic per radio and
+            never reused. The WebSocket stream carries it on every frame, which
+            is what lets a client tell a message that describes state it already
+            has from one that describes something newer.
+
+            Values are SKIPPED rather than delivered in sequence: state is
+            last-value-wins and the stream coalesces, so a client that sees 8
+            after 5 has not lost anything it needed. Discrete `cw` and `conn`
+            events are the ones that cannot be missed, and `resync` is how the
+            server admits it dropped one.
         updated_at: { type: string, format: date-time }
-        age_ms: { type: integer }
-        stale: { type: boolean }
+        age_ms:
+          type: integer
+          description: |
+            How old the snapshot was when the server answered. Present on a REST
+            read; absent in the stream, where a snapshot is published as it is
+            taken and there is nothing yet to be old.
+        stale:
+          type: boolean
+          description: |
+            The poller has not refreshed within the expected interval, which is
+            the client's cue to distrust the numbers rather than to guess from
+            `age_ms` what "too old" means for this radio. REST reads only, for
+            the same reason as `age_ms`.
+
+    State:
+      description: |
+        A radio's state as remoses last read it.
+
+        The required fields are the ones the daemon publishes for every radio,
+        connected or not: they come from the state cache, which always has a
+        value for them even if that value is what was true before the port went
+        away. Everything else is present only where the radio has the control
+        and remoses can read it — see the individual fields, and check `caps`
+        before drawing a control whose absence you would otherwise have to
+        guess the meaning of.
+      allOf:
+        - $ref: "#/components/schemas/StateFields"
+        - type: object
+          required:
+            [frequency, mode, data_mode, passband_hz, filter_slot, power, ptt,
+             s_meter, cw, vfo, vfo_a, vfo_b, split, dual_watch, sub_s_meter,
+             connected, seq, updated_at]
+
+    StateDelta:
+      description: |
+        The fields that changed, and only those. Carried by a `delta` frame on
+        the WebSocket; the names and types are `State`'s, so a client applies
+        one by overwriting the fields it names and leaving the rest alone.
+
+        A field present and NULL means the reading has gone away, which is not
+        the same as its being absent from the object. The transmit meters —
+        `power_meter`, `swr`, `alc`, `swr_ratio` — are the fields this happens
+        to: they exist only while the radio is keyed, and clearing them
+        explicitly is what stops the last transmission's SWR sitting on a
+        display for ever. Applying a delta by merging its keys therefore gets
+        the right answer without knowing that rule.
+
+        Fifty fields per radio at a two-a-second poll is real bandwidth over a
+        link that may be somebody's phone, which is why the stream sends these
+        rather than whole snapshots. A client that wants snapshots can ignore
+        deltas and refetch, but it will be paying for the choice.
+      allOf:
+        - $ref: "#/components/schemas/StateFields"
 
     StatePatch:
       description: |
@@ -882,8 +1062,8 @@ components:
         vfo: { $ref: "#/components/schemas/VFO" }
         passband_hz: { type: integer }
         filter_slot: { type: integer }
-        power_w: { type: number }
-        power_pct: { type: number, minimum: 0, maximum: 100 }
+        power_w: { type: number, format: double }
+        power_pct: { type: number, format: double, minimum: 0, maximum: 100 }
         ptt: { type: boolean }
         split:
           type: boolean
@@ -892,8 +1072,7 @@ components:
           type: boolean
           description: Needs `caps.dual_watch`; 422 otherwise.
         break_in:
-          type: string
-          enum: [off, semi, full, on]
+          allOf: [{ $ref: "#/components/schemas/BreakIn" }]
           description: |
             CW break-in. Needs `caps.break_in_control`; 422 otherwise. Applied
             before PTT, so a request that enables break-in and then sends does
@@ -904,8 +1083,7 @@ components:
             `State.break_in`. `on` on a radio that does distinguish them selects
             `semi`, the quieter of the two.
         power_switch:
-          type: string
-          enum: [on, off, off_deep]
+          allOf: [{ $ref: "#/components/schemas/PowerSwitch" }]
           description: |
             Switch the radio itself off or on. Needs `caps.power_switch`; 422
             otherwise. **Must be the only field in the request** — a patch that
@@ -913,13 +1091,8 @@ components:
             since one of the two is always addressed to a radio that is not
             listening.
 
-            `off` is the recoverable off: on a radio with a choice it is the
-            one that draws more standby current and wakes on a single command.
-            `off_deep` asks for the lowest standby current the radio offers —
-            on a Kenwood, the same as its front-panel switch — which needs the
-            longer wake sequence afterwards. A radio with only one off sends it
-            either way. **Prefer `off` unless somebody can reach the radio**: a
-            remote station that cannot be woken is one that needs a visit.
+            **Prefer `off` unless somebody can reach the radio**: a remote
+            station that cannot be woken is one that needs a visit.
 
             `on` is a single method whatever the radio needs: the backend tries
             the cheap wake first and escalates to its family's documented ritual
@@ -955,17 +1128,13 @@ components:
             message.
         rf_gain:
           type: number
+          format: double
           description: |
             Set the receiver RF gain, 0-100%. Needs `caps.rf_gain_control`.
         agc:
-          type: string
-          enum: [off, fast, mid, slow, auto]
+          allOf: [{ $ref: "#/components/schemas/AGCSet" }]
           description: |
             Set the AGC speed. Must be one of `caps.agc_settings`.
-
-            The `auto-*` values a state can report are not accepted here: they
-            say what auto CHOSE, and there is no way to tell a radio "be
-            automatic, and also be mid". Ask for `auto`.
 
             Kenwood radios refuse this in FM — their references say so, and the
             error tone sounds at the radio — so a request there returns 422 with
@@ -981,6 +1150,7 @@ components:
             `caps.digi_sel_control`.
         digi_sel_shift:
           type: number
+          format: double
           description: |
             Move the DIGI-SEL preselector, 0-100%. Needs
             `caps.digi_sel_shift_control`. Accepted while the preselector is
@@ -992,6 +1162,7 @@ components:
             `caps.noise_blanker_levels`.
         nb_level:
           type: number
+          format: double
           description: |
             Set the blanker threshold, 0-100%. Applied AFTER `noise_blanker` in
             the same request, because Kenwood refuses a level while the blanker
@@ -1003,6 +1174,7 @@ components:
             `caps.noise_reduction_levels`.
         nr_level:
           type: number
+          format: double
           description: |
             Set the reducer's level, 0-100%, against whichever range the
             running reducer uses. Applied after `noise_reduction`.
@@ -1016,11 +1188,11 @@ components:
             and would silently give you whichever was written last.
         notch_freq:
           type: number
+          format: double
           description: |
             Park the manual notch, 0-100% of the radio's range.
         notch_width:
-          type: string
-          enum: [wide, mid, narrow]
+          allOf: [{ $ref: "#/components/schemas/NotchWidth" }]
           description: |
             Set the manual notch width. Must be one of `caps.notch_widths`,
             which is empty outside Icom.
@@ -1042,14 +1214,10 @@ components:
           description: |
             Switch the receive-only input. Needs `caps.rx_antenna_control`.
         tuner:
-          type: string
-          enum: [off, on]
+          allOf: [{ $ref: "#/components/schemas/TunerSet" }]
           description: |
             Switch the antenna tuner in or out of line. Needs
             `caps.tuner_control`; 422 otherwise.
-
-            Only `off` and `on` are accepted. `tuning` is a state to observe,
-            not one to ask for — start a cycle with `tuner_tune`.
 
             Applied before `ptt` and before `tuner_tune`, so a request that
             switches the tuner in and then tunes does the two in the order that
@@ -1103,7 +1271,27 @@ components:
             this in the first place.
 
     Caps:
+      description: |
+        What this radio can do, as far as remoses can work it. Read these rather
+        than guessing from the model name — and rather than inferring a
+        capability from a state field, since most of those are absent both when
+        the radio has no such control and when it is simply switched off.
+
+        Everything the daemon can answer for every radio is required, so a
+        client need not treat "the flag is missing" as a third case. The
+        optional ones are the lists and figures that only some radios have at
+        all: an attenuator's steps, the AGC speeds, a watt figure.
       type: object
+      required:
+        [modes, vfos, ptt_control, power_control, power_watt_accurate,
+         filter_width, filter_slots, s_meter_scale, power_meter, swr_meter,
+         alc_meter, power_switch, tuner_control, tuner_tune, preamp_levels,
+         rf_gain_control, ip_plus_control, digi_sel_control,
+         digi_sel_shift_control, noise_blanker_levels, nb_level_control,
+         noise_reduction_levels, nr_level_control, notch_control,
+         notch_freq_control, auto_notch_control, notch_exclusive, antennas,
+         rx_antenna_control, sub_receiver, sub_receiver_readable, split,
+         dual_watch, band_exchange, per_vfo_mode, break_in_control, cw_method]
       properties:
         modes:
           type: array
@@ -1114,7 +1302,7 @@ components:
         power_watt_accurate:
           type: boolean
           description: True when the rig's power scale is real watts.
-        max_power_w: { type: number }
+        max_power_w: { type: number, format: double }
         filter_width: { type: boolean }
         filter_slots: { type: integer }
         s_meter_scale: { type: integer }
@@ -1133,16 +1321,10 @@ components:
             it, which would move the operator's own focus, and remoses does not
             switch bands to fill in a meter.
         vfo_addressing:
-          type: string
-          enum: [named, relative]
+          allOf: [{ $ref: "#/components/schemas/VFOAddressing" }]
           description: |
-            What `state.vfo_a` and `state.vfo_b` name. `named` means stable
-            labels for two fixed slots (an IC-7610's main and sub bands).
-            `relative` means A is whichever VFO the operator has selected and B
-            is the other — an IC-9700, whose protocol offers exactly that
-            selector and never reports which letter is selected. Absent on a
-            radio with a single addressable VFO. Either way, B is where split
-            sends the transmit.
+            What `state.vfo_a` and `state.vfo_b` name. Absent on a radio with a
+            single addressable VFO.
         split:
           type: boolean
           description: Transmit-on-the-other-VFO can be read and set.
@@ -1211,9 +1393,7 @@ components:
             remoses can read and set the receiver's RF gain on this radio.
         agc_settings:
           type: array
-          items:
-            type: string
-            enum: [off, fast, mid, slow, auto]
+          items: { $ref: "#/components/schemas/AGCSet" }
           description: |
             The AGC speeds this radio accepts, empty where remoses cannot work
             its AGC at all. Offer these rather than a fixed three: the set
@@ -1256,9 +1436,7 @@ components:
           description: remoses can move the manual notch.
         notch_widths:
           type: array
-          items:
-            type: string
-            enum: [wide, mid, narrow]
+          items: { $ref: "#/components/schemas/NotchWidth" }
           description: |
             The manual notch widths this radio accepts, empty where it has none
             that remoses can both set and read back.
@@ -1325,9 +1503,7 @@ components:
             client need not; configured `manual` it refuses instead, with 422.
             Either way a message is never accepted and then silently not
             transmitted, which is what a rig with break-in off does on its own.
-        cw_method:
-          type: string
-          enum: [none, cat, serial_key]
+        cw_method: { $ref: "#/components/schemas/CWMethod" }
         cw_charset:
           type: string
           description: Characters this radio will key. Clients should validate against it.
@@ -1337,8 +1513,8 @@ components:
     Limits:
       type: object
       properties:
-        max_power_w: { type: number }
-        max_power_pct: { type: number }
+        max_power_w: { type: number, format: double }
+        max_power_pct: { type: number, format: double }
         tx_timeout_s: { type: integer }
         bands:
           type: array
@@ -1346,14 +1522,11 @@ components:
 
     Radio:
       type: object
-      required: [id, name, backend, connected]
+      required: [id, name, backend, connected, caps, limits, lock]
       properties:
         id: { type: string }
         name: { type: string }
-        # yaesu covers both of Yaesu's CAT systems: the ASCII dialect the modern
-        # radios speak and the five-byte binary one of the FT-857/FT-897
-        # generation. The model chooses, so there is one backend name.
-        backend: { type: string, enum: [civ, kenwood, yaesu, rigctld] }
+        backend: { $ref: "#/components/schemas/Backend" }
         connected: { type: boolean }
         caps: { $ref: "#/components/schemas/Caps" }
         limits: { $ref: "#/components/schemas/Limits" }
@@ -1376,7 +1549,7 @@ components:
 
     LockState:
       type: object
-      required: [held]
+      required: [held, is_mine]
       properties:
         held: { type: boolean }
         holder: { type: string }
@@ -1404,7 +1577,7 @@ components:
 
     CWAccepted:
       type: object
-      required: [queued_chars]
+      required: [queued_chars, position, est_duration_ms]
       properties:
         queued_chars: { type: integer }
         position: { type: integer }
@@ -1416,3 +1589,207 @@ components:
       properties:
         ticket: { type: string }
         expires_at: { type: string, format: date-time }
+
+    # The WebSocket vocabulary.
+    #
+    # OpenAPI has nothing to say about a WebSocket, so GET /ws below can only
+    # promise a 101. The frames are described here anyway, as ordinary schemas,
+    # because a client generated from this document should not have to
+    # hand-write the half of the API that carries the traffic — and because a
+    # message shape nobody can generate against is a message shape that drifts.
+    #
+    # WSMessage is a oneOf with a discriminator rather than one struct with
+    # every field optional. That is the difference between a generated client
+    # offering `AsWSDelta()` on a frame whose type says "delta", and one
+    # offering a `state` field that is null on five frames out of six.
+
+    WSMessage:
+      description: |
+        One frame from the server, discriminated by `type`.
+
+        The set is closed: a client is entitled to ignore a type it does not
+        recognise, so adding one is a protocol change rather than a free
+        extension point. On connect the server sends `hello`, then one `state`
+        per subscribed radio, then deltas and events as they happen.
+      oneOf:
+        - $ref: "#/components/schemas/WSHello"
+        - $ref: "#/components/schemas/WSState"
+        - $ref: "#/components/schemas/WSDelta"
+        - $ref: "#/components/schemas/WSCW"
+        - $ref: "#/components/schemas/WSConn"
+        - $ref: "#/components/schemas/WSResync"
+      discriminator:
+        propertyName: type
+        mapping:
+          hello: "#/components/schemas/WSHello"
+          state: "#/components/schemas/WSState"
+          delta: "#/components/schemas/WSDelta"
+          cw: "#/components/schemas/WSCW"
+          conn: "#/components/schemas/WSConn"
+          resync: "#/components/schemas/WSResync"
+
+    WSEvent:
+      description: |
+        What every frame about a radio carries. `hello` is the one frame that
+        does not, because it describes the connection rather than a radio.
+
+        All three are on every such frame, including the discrete `cw` and
+        `conn` events, so that a client can place any message in the stream
+        without correlating it against something else it received.
+      type: object
+      required: [radio, seq, ts]
+      properties:
+        radio:
+          type: string
+          description: The radio this frame is about.
+          example: ic7610
+        seq:
+          type: integer
+          format: int64
+          description: |
+            The state cache's version this frame describes — the same counter as
+            `state.seq`, monotonic per radio.
+
+            Deltas SKIP values, by design: the stream coalesces per radio, so a
+            client that sees 41 after 37 has been spared three updates that a
+            later one superseded. What a jump does not mean is that a discrete
+            event was lost — that is what `resync` says, and nothing else does.
+
+            A `cw` or `conn` frame carries the version its own change produced,
+            which is why the same number can appear twice: once as the event,
+            once as the state that followed from it.
+        ts:
+          type: string
+          format: date-time
+          description: When the server read the change, not when it sent it.
+
+    WSHello:
+      description: |
+        Sent once, first, on every connection.
+      type: object
+      required: [type, version, radios, server_time]
+      properties:
+        type: { type: string, enum: [hello] }
+        version:
+          type: string
+          description: The daemon's build version.
+        radios:
+          type: array
+          items: { type: string }
+          description: |
+            What THIS connection carries, which is not always what was asked
+            for: `?radios=` names that the instance does not have are dropped
+            rather than refused, so this is where a client finds out.
+          example: [ic7610]
+        server_time: { type: string, format: date-time }
+
+    WSState:
+      description: |
+        A full snapshot: sent once per radio on connect, on a new subscription,
+        and whenever a change cannot be expressed as a delta.
+      allOf:
+        - $ref: "#/components/schemas/WSEvent"
+        - type: object
+          required: [type, state]
+          properties:
+            type: { type: string, enum: [state] }
+            state: { $ref: "#/components/schemas/State" }
+
+    WSDelta:
+      description: |
+        The fields that changed since the last frame for this radio. Apply it
+        over the snapshot; see `StateDelta` for what a null means.
+      allOf:
+        - $ref: "#/components/schemas/WSEvent"
+        - type: object
+          required: [type, changed]
+          properties:
+            type: { type: string, enum: [delta] }
+            changed: { $ref: "#/components/schemas/StateDelta" }
+
+    WSCW:
+      description: |
+        The Morse queue moved. Discrete and never coalesced: "the queue emptied"
+        and "the queue filled again" are different facts rather than two
+        versions of one.
+      allOf:
+        - $ref: "#/components/schemas/WSEvent"
+        - type: object
+          required: [type, busy, queued, wpm]
+          properties:
+            type: { type: string, enum: [cw] }
+            busy: { type: boolean }
+            queued: { type: integer, description: Characters not yet keyed }
+            wpm: { type: integer }
+
+    WSConn:
+      description: |
+        The link to the radio came up or went down. Also discrete.
+      allOf:
+        - $ref: "#/components/schemas/WSEvent"
+        - type: object
+          required: [type, connected]
+          properties:
+            type: { type: string, enum: [conn] }
+            connected: { type: boolean }
+            error:
+              type: string
+              description: |
+                Why the port went away. Absent on the way up. It is the one
+                thing an operator at the other end of the link cannot see for
+                themselves, which is why it is carried rather than only logged.
+
+    WSResync:
+      description: |
+        This client's view of the radio has a hole in it: the server dropped
+        discrete events for it rather than wedging or hanging up. Refetch
+        `GET /radios/{radioId}/state`.
+
+        `seq` is the last version this connection was actually sent, so the hole
+        is after it.
+      allOf:
+        - $ref: "#/components/schemas/WSEvent"
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [resync] }
+
+    WSClientMessage:
+      description: |
+        The whole client-to-server vocabulary, discriminated by `type`.
+
+        It is this small on purpose. All control stays on REST, so there is no
+        message a client can send here that reaches a radio — the socket has no
+        authorisation surface at all. Anything else is ignored in silence rather
+        than answered with an error that would invite a client to look for one.
+      oneOf:
+        - $ref: "#/components/schemas/WSPing"
+        - $ref: "#/components/schemas/WSSubscribe"
+      discriminator:
+        propertyName: type
+        mapping:
+          ping: "#/components/schemas/WSPing"
+          subscribe: "#/components/schemas/WSSubscribe"
+
+    WSPing:
+      description: |
+        Liveness, for a client that cannot send a WebSocket control frame. There
+        is no pong: the server's own ping is what measures the link, and this
+        only proves the client is still there.
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [ping] }
+
+    WSSubscribe:
+      description: |
+        Replace the subscription. An empty list means every radio, exactly as an
+        absent `?radios=` does at connect. Newly subscribed radios get a `state`
+        frame before any delta.
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [subscribe] }
+        radios:
+          type: array
+          items: { type: string }
