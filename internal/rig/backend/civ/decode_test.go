@@ -125,8 +125,16 @@ func TestDecode(t *testing.T) {
 			check:   wantEmpty,
 		},
 		{
+			// 14 01 is the AF level: a real command 14 sub-command that this
+			// backend does not model, so its answer must resolve to nothing
+			// rather than being read as one of the levels beside it.
+			//
+			// This case used to use 14 0B on the same grounds, and 0B turned
+			// out to be the MIC gain — which is the argument for picking the
+			// example out of the radio's own command table rather than out of
+			// the gaps in this decoder.
 			name:    "unhandled level sub-command",
-			frame:   fromRig(cmdLevel, 0x0B, 0x01, 0x28),
+			frame:   fromRig(cmdLevel, 0x01, 0x01, 0x28),
 			wantKey: backend.KeyUnsolicited,
 			wantOK:  true,
 			check:   wantEmpty,

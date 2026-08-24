@@ -71,6 +71,12 @@ const (
 	KeyNRLevel    backend.Key = "14/06"
 	KeyNotchFreq  backend.Key = "14/0D"
 	KeyNBLevel    backend.Key = "14/12"
+
+	// The transmit audio chain: the gain into the modulator, the speech
+	// compressor and its level.
+	KeyMicGain   backend.Key = "14/0B"
+	KeyProc      backend.Key = "16/44"
+	KeyProcLevel backend.Key = "14/0E"
 )
 
 // Decode turns one framed message into an Update.
@@ -276,6 +282,15 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 					u.Patch.NotchWidth = &w
 				}
 			}
+		case subProc:
+			// The one transmit control in this group. Gated by the model like
+			// the rest: on a radio whose 16 group has no 44 row, a frame of
+			// this shape is not evidence about its speech processor.
+			if r.model.Proc {
+				u.Key = KeyProc
+				on := body[1] != 0x00
+				u.Patch.Proc = &on
+			}
 		}
 		return u, nil
 
@@ -349,6 +364,26 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 				if n, ok := decodeBCD2(body[1:]); ok {
 					pct := float64(n) / levelMax * 100
 					u.Patch.NotchFreq = &pct
+				}
+			}
+		case subMicGain:
+			if r.model.MicGain {
+				u.Key = KeyMicGain
+				if n, ok := decodeBCD2(body[1:]); ok {
+					pct := float64(n) / levelMax * 100
+					u.Patch.TXAudioGain = &pct
+				}
+			}
+		case subProcLevel:
+			// Published as a percentage like every other level here, even
+			// though this one's field spreads the radio's own 0-10 compressor
+			// scale over the same 0-255. A client showing "50%" and a radio
+			// showing "5" are agreeing.
+			if r.model.ProcLevel {
+				u.Key = KeyProcLevel
+				if n, ok := decodeBCD2(body[1:]); ok {
+					pct := float64(n) / levelMax * 100
+					u.Patch.ProcLevel = &pct
 				}
 			}
 		}

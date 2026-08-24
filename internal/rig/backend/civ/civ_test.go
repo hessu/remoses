@@ -42,6 +42,14 @@ type simRig struct {
 	rfGain       [2]byte
 	digiSelShift [2]byte
 
+	// The transmit audio chain: 14 0B the gain into the modulator, 16 44 the
+	// compressor's switch, 14 0E its level. The level's default is a reminder
+	// of what that field really carries — 128 of 255 is a 5 on the radio's own
+	// 0-10 compressor scale, not "128".
+	proc      byte
+	micGain   [2]byte
+	procLevel [2]byte
+
 	// The noise processing and the notches.
 	nb         byte
 	nr         byte
@@ -127,6 +135,8 @@ func newSim(t *testing.T) *simRig {
 		nbLevel:      [2]byte{0x00, 0x50},
 		nrLevel:      [2]byte{0x01, 0x00},
 		notchFreq:    [2]byte{0x01, 0x28},
+		micGain:      [2]byte{0x01, 0x50}, // 150 of 255
+		procLevel:    [2]byte{0x01, 0x28}, // 128 of 255, a 5 on the radio's dial
 
 		// VFO A on 14.025 CW/FIL2 like the operating fields, VFO B somewhere
 		// else entirely on USB/FIL1, so a test that mixes the two up produces
@@ -235,6 +245,8 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 			subNBLevel:      &s.nbLevel,
 			subNRLevel:      &s.nrLevel,
 			subNotchFreq:    &s.notchFreq,
+			subMicGain:      &s.micGain,
+			subProcLevel:    &s.procLevel,
 		}[body[0]]
 		if dst == nil {
 			return ng, nil
@@ -357,6 +369,7 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 			subAutoNotch: &s.autoNotch,
 			subNotch:     &s.notch,
 			subNotchWide: &s.notchWidth,
+			subProc:      &s.proc,
 		}[body[0]]
 		if dst == nil {
 			return ng, nil
@@ -592,10 +605,13 @@ func TestPoll(t *testing.T) {
 		// And after the front end, the noise processing and the notches: 16 22
 		// and 14 12 for the blanker, 16 40 and 14 06 for the reducer, then the
 		// manual notch, its position and width, and the automatic one.
+		// And last the transmit audio chain: 14 0B the gain into the modulator,
+		// 16 44 the speech compressor, 14 0E its level.
 		{"slow", backend.PollSlow, []string{"1C/01", "14/0A", "1A/03",
 			"25", "25", "26", "26", "0F", "07", "16", "1A/06",
 			"16", "11", "14/02", "16", "16", "16", "14/13",
-			"16", "14/12", "16", "14/06", "16", "14/0D", "16", "16"}},
+			"16", "14/12", "16", "14/06", "16", "14/0D", "16", "16",
+			"14/0B", "16", "14/0E"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -923,9 +939,15 @@ func TestSlowPollSkipsWhatAModelLacks(t *testing.T) {
 	// The IC-910H has a preamp, a pad and an AGC; a blanker, and no reducer at
 	// all — its 16 40 carries the switch and the level together, which is not
 	// the family's form.
+	//
+	// The transmit audio chain splits them again, and asymmetrically. The
+	// IC-718 ends with 14 0B and 16 44 — its mic gain and its compressor — and
+	// no 14 0E, because its 14 group jumps 0C straight to 0F. The IC-910H has
+	// all three, which is the one place in this test where the outlier is the
+	// better-equipped radio.
 	for model, want := range map[string][]string{
-		"ic-718":  {"14/0A", "16", "11", "14/02", "16", "16", "14/06", "16"},
-		"ic-910h": {"14/0A", "16", "16", "11", "16", "16"},
+		"ic-718":  {"14/0A", "16", "11", "14/02", "16", "16", "14/06", "16", "14/0B", "16"},
+		"ic-910h": {"14/0A", "16", "16", "11", "16", "16", "14/0B", "16", "14/0E"},
 	} {
 		t.Run(model, func(t *testing.T) {
 			s := newSim(t)

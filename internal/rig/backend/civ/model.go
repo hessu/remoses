@@ -168,6 +168,36 @@ type Model struct {
 	NotchWidth     bool
 	AutoNotch      bool
 
+	// The transmit audio chain, one flag per command for the same reason the
+	// noise group has one: the older radios carry some of these rows and not
+	// others.
+	//
+	//	MicGain 14 0B   Proc 16 44   ProcLevel 14 0E
+	//
+	// The modern references print all three together and identically — the
+	// IC-7610's guide gives "14 0B Send/read MIC gain (00 00=min. ~ 02 55=
+	// max.)", "14 0E Send/read the COMP level (00 00=0 ~ 02 55=10)" and
+	// "16 44 Set the Speech compressor (00=OFF, 01=ON)" — but the older sets
+	// are not a subset of that in any tidy way, so each entry states its own.
+	// The IC-718 has the gain and the switch and no level; the IC-706MKIIG has
+	// the switch alone, having no command 14; and the IC-910H, the outlier
+	// everywhere else in this file, has all three.
+	//
+	// Note that 14 0E's range is NOT a percentage of anything the operator
+	// sees: the radio's own compressor scale is 0 to 10, spread over the same
+	// 0-255 field every other level uses. remoses publishes a percentage like
+	// the rest, so 50% is a 5 on the radio's display.
+	//
+	// And on one radio it is not spread over 0-255 at all. The IC-703's table
+	// prints "COMP Level setting (0=0 to 10=10)" — the field IS the 0-10 scale
+	// — so ProcLevel stays false there, because this backend has one level
+	// encoder and it writes 0-255. That is the whole reason these are three
+	// flags: a radio can have the switch, or the switch and the gain, or all
+	// three, or all three in an encoding remoses cannot yet send.
+	MicGain   bool
+	Proc      bool
+	ProcLevel bool
+
 	// TXMeters is true when the radio has the transmit meters, 15 11 (PO),
 	// 15 12 (SWR) and 15 13 (ALC).
 	//
@@ -402,6 +432,13 @@ func modern(name, label string, addr byte, modes []radio.Mode) Model {
 		NotchFreq:      true,
 		NotchWidth:     true,
 		AutoNotch:      true,
+		// And the transmit audio chain entire, which this generation has: the
+		// mic gain, the compressor and its level. Every current reference guide
+		// read for this backend prints all three, in the same rows with the
+		// same ranges.
+		MicGain:   true,
+		Proc:      true,
+		ProcLevel: true,
 	}
 }
 
@@ -513,9 +550,20 @@ func mkiiFamily(name, label string, addr byte) Model {
 		// 14 group, the RF gain is not — it is the panel's own knob.
 		Preamp:     1,
 		Attenuator: []int{20},
-		// The MKIIG's 16 group is 02, 12, 22, 42, 43, 44 and 46: a noise
-		// blanker, and no noise reduction or notch of either kind. The two
-		// earlier radios' tables cannot be read at all and share this profile.
+		// The MKIIG's 16 group is 02, 12, 22, 42, 43, 44, 46 and 47 — preamp,
+		// AGC, NB, TONE, TSQL, COMP, VOX and BK-IN, each its own labelled row
+		// (instruction manual §6, printed p. 46): a noise blanker, and no noise
+		// reduction or notch of either kind.
+		//
+		// The two earlier radios share this profile, and it is worth being
+		// straight about what that rests on. Their tables ARE legible — printed
+		// p. 39 and p. 41 — and what they show is a command set running 05 to
+		// 10 with no 16 group at all, and no 11 or 15 either. So the blanker,
+		// the preamp and the pad here are claimed for the IC-706 and IC-706MKII
+		// on the strength of the MKIIG's table rather than their own, which is
+		// the same footing as the 03 and 04 reads those radios answer without
+		// printing. Worth revisiting on a radio; not changed here, because it is
+		// three capabilities across two models and belongs in its own change.
 		NoiseBlanker: true,
 		// No 1A at all, so neither a filter width nor a data mode.
 		FilterWidth: false,
@@ -550,6 +598,26 @@ var models = map[string]Model{
 	"generic": func() Model {
 		m := modern("generic", "generic Icom", 0, modesCommon())
 		m.DataMode = false
+		// The mic gain and the compressor's switch stay on, and the
+		// compressor's LEVEL comes off. That split is not fastidiousness; it
+		// is where the references stop agreeing.
+		//
+		// All thirteen tables here with a command 14 put the MIC gain on 0B
+		// over 0-255, and all fourteen with a command 16 put the compressor on
+		// 44 as a two-value switch — the IC-910H and the IC-706MKIIG included,
+		// three decades apart, with no model spelling either differently. An
+		// unidentified Icom missing the row answers NG, which the poll already
+		// tolerates.
+		//
+		// 14 0E is the one that varies, and it varies in the direction that
+		// does not announce itself: three spellings across the family. Most put
+		// a 0-10 compressor scale on the usual 0-255 field; the IC-910H's is a
+		// plain 0-100% on that field; the IC-703's field IS 0 to ten; and the
+		// IC-718 has no 0E at all. Writing 255 to a radio of the IC-703's
+		// generation is an out-of-range level rather than a refusal, and
+		// nothing on the bus says which generation is answering. So the level
+		// is offered where a model has been named and not otherwise.
+		m.ProcLevel = false
 		return m
 	}(),
 
@@ -813,7 +881,28 @@ var models = map[string]Model{
 		// ON for a single pad — remoses sends the 20 its specification names and
 		// offers one switch, rather than three steps the radio does not have.
 		Attenuator: []int{20},
-		// No 14 group in its table at all, so no RF gain.
+		// It DOES have a 14 group, and this entry used to say it had none.
+		// Chapter 13, printed p. 79: 01, 02, 03, 04, 06, 09, 0A, 0B, 0C, 0E and
+		// 0F — an AF level, an RF gain, a squelch, an IF shift, a noise
+		// reduction level, a CW pitch, the RF power, the mic gain, the keyer
+		// speed, the compressor level and the break-in delay.
+		//
+		// Which leaves a gap this change does not close: 14 02 is
+		// "[RF GAIN] level setting (0=max. CCW; 255=max. CW)" and RFGain is
+		// still false here, so the radio has a receiver gain control on the bus
+		// that remoses does not offer. That is the front end's to fix, with its
+		// own test; it is recorded rather than flipped in a transmit-audio
+		// change.
+		//
+		// The transmit chain it has entire, and its compressor level is the
+		// third spelling of 14 0E in this table: "Set mic. compressor level
+		// (0=0%; 255=100%)" — a plain percentage over 0-255, where the modern
+		// sets put a 0-10 scale on the same field and the IC-703 makes the
+		// field itself 0-10. Only the IC-703's breaks setLevel; this one is
+		// exactly what it expects.
+		MicGain:   true, // 14 0B, "[MIC GAIN] level setting"
+		Proc:      true, // 16 44, "Set mic. compressor (0=OFF; 1=ON)"
+		ProcLevel: true, // 14 0E
 	},
 
 	// The IC-706 family: three mobiles from the mid-1990s, and the oldest
@@ -858,7 +947,9 @@ var models = map[string]Model{
 	//          buffer: an operator keying a control line still needs the rig in
 	//          break-in for the transmitter to follow the key
 	//   16 02/12/22/42/43/44/46  preamp, AGC, noise blanker, tone, compressor
-	//          and VOX, none of which remoses models
+	//          and VOX. This is the row that names 44 as the compressor and 46
+	//          as VOX, and so is where the rest of this table's 16 44 comes
+	//          from; the tone commands and VOX remoses still does not model
 	//   19 00  the identity read, so a wrong bus address can be diagnosed
 	//
 	// It still has no 1C and no 14, so PTT and power remain absent.
@@ -872,6 +963,22 @@ var models = map[string]Model{
 		// on a three-value radio would quietly deliver semi to somebody who
 		// asked for QSK.
 		m.BreakIn = BreakInSemiFull
+		// 16 44, printed "COMP setting" in its own row of the same table.
+		//
+		// It stays on the MKIIG alone rather than going into mkiiFamily: the
+		// IC-706 and IC-706MKII tables have no command 16 at any sub-command,
+		// so there is nothing there to share.
+		//
+		// The data byte is an assumption, and a safe one. That table has no
+		// Data column at all — it names "COMP setting" and stops — so 00 and 01
+		// are taken from the rest of the family, which is the same reading, on
+		// the same page, that 16 47 already rests on. An on/off is also the
+		// cheapest place in the command set to be wrong: there are two values,
+		// both of them are in every other table, and a byte the radio does not
+		// know draws an NG rather than a setting nobody asked for.
+		//
+		// No mic gain and no compressor level: this radio has no command 14.
+		m.Proc = true
 		return m
 	}(),
 
@@ -960,6 +1067,25 @@ var models = map[string]Model{
 		NoiseBlanker:   true,
 		NoiseReduction: true,
 		AutoNotch:      true,
+		// The transmit audio chain, and this radio is the reason ProcLevel is
+		// a separate flag from Proc rather than riding along with it.
+		//
+		// 16 44 is "Speech compressor (0=OFF; 1=ON)" and 14 0B "Microphone gain
+		// setting (0=mini. to 255=max.)", both ordinary (manual §11, printed
+		// p. 72). But 14 0E is printed "COMP Level setting (0=0 to 10=10)" —
+		// a field that runs 0 to TEN, where every other level in that table
+		// says 0 to 255 outright and where the modern sets spell the same
+		// setting "00 00=0 ~ 02 55=10", a 0-255 field carrying a 0-10 scale.
+		// This radio's is the scale itself.
+		//
+		// setLevel writes 0-255 for the whole family, so claiming ProcLevel
+		// here would send 255 for a request of 100% to a radio whose maximum is
+		// 10 — not a refusal, a compressor set to whatever the radio makes of
+		// an out-of-range byte. A per-model level scale would fix it and would
+		// be one radio's worth of machinery for a profile that has never met a
+		// radio, so the level is not claimed and the switch and gain are.
+		MicGain: true,
+		Proc:    true,
 	},
 
 	// The IC-718 is the outlier, and every difference below is from its own
@@ -1008,6 +1134,17 @@ var models = map[string]Model{
 		NoiseReduction: true,
 		NRLevel:        true,
 		AutoNotch:      true,
+		// The transmit audio chain, minus its level. From the Advanced Manual's
+		// command table (§5, printed p. 5-3): 16 44 is "Read/send the Compressor
+		// function (00=OFF, 01=ON)" and 14 0B "Send/read the MIC gain (00 00=
+		// Minimum ~ 02 55=Maximum)", both in the family's usual form.
+		//
+		// 14 0E is simply not there. That radio's whole 14 group is 01, 02, 03,
+		// 06, 09, 0A, 0B, 0C and 0F — it jumps 0C to 0F — so the compressor is
+		// a switch with its level on the front panel, exactly as its noise
+		// blanker is. Which is why these are three flags and not one.
+		MicGain: true,
+		Proc:    true,
 	},
 }
 

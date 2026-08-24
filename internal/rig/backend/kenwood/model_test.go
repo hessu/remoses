@@ -462,22 +462,27 @@ func TestPollSlowPerModel(t *testing.T) {
 		// constant on those.
 		{"ts480", []string{"PC;", "AC;", "FB;", "FR;", "FT;",
 			"PA;", "RA;", "RG;", "GT;", "NB;", "NR;", "NT;", "BP;", "AN;",
-			"SD;", "VX;", "FW;"}},
+			"MG;", "PR;", "PL;", "SD;", "VX;", "FW;"}},
 		{"ts590sg", []string{"PC;", "AC;", "FB;", "FR;", "FT;", "FL;", "DA;",
 			"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;", "AN;",
-			"SD;", "VX;", "FW;"}},
+			"MG;", "PR;", "PL;", "SD;", "VX;", "FW;"}},
 		// DATA came with the mode code, and FW is not a width here. The TS-890S
 		// asks for no filter at all: its FL0 read form carries the selection, so
 		// there is no way to ask without also setting. Its BI is two-valued, so
 		// SD comes first; the TS-990S's is three-valued and needs no delay.
 		// No AN; on either of these: the TS-890S's takes four parameters that
 		// have not been transcribed and the TS-990S has no AN row at all.
+		//
+		// And the speech processor is read with PR0; on both, where the older
+		// pair use PR;. That difference is on the wire in this very table: PR1;
+		// would be the effect type here and "processor on" there.
 		{"ts890s", []string{"PC;", "AC;", "FB;", "FR;", "FT;",
-			"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;", "SD;", "BI;"}},
+			"PA;", "RA;", "RG;", "GC;", "NB;", "NR;", "NT;", "BP;",
+			"MG;", "PR0;", "PL;", "SD;", "BI;"}},
 		// And no FB;/FR;/FT; at all on the TS-990S: its FA and FB are the Main
 		// and Sub bands rather than two VFOs, so remoses does not address them.
 		{"ts990s", []string{"PC;", "AC;", "FL00;", "PA;", "RA;", "RG;", "GC;",
-			"NB;", "NR;", "NT;", "BP;", "BI;"}},
+			"NB;", "NR;", "NT;", "BP;", "MG;", "PR0;", "PL;", "BI;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {

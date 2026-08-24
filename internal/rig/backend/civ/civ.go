@@ -299,9 +299,36 @@ func (r *Rig) Caps() radio.Caps {
 		NotchFreqControl:     r.model.NotchFreq,
 		NotchWidths:          r.model.notchWidths(),
 		AutoNotchControl:     r.model.AutoNotch,
-		// No antenna selector: on this family the antenna is a per-band memory
-		// in the Set menu rather than a live switch. See radio.State.Antenna.
+		// No antenna selector — but NOT because these radios have none, which
+		// is what this said until somebody opened the reference.
+		//
+		// The IC-7610's command table has a command 12: "12 00 Select/read ANT1
+		// selection" and "12 01 Select/read ANT2 selection", each taking
+		// 00=RX ANT OFF / 01=RX ANT ON (CI-V Reference Guide p. 3). The
+		// IC-7760's has four, ANT1 to ANT4 (p. 3 of its guide). That is a live
+		// switch, not the per-band ANTENNA MEMORY at 1A 05 02 76 through 02 87
+		// which this comment used to point at — the radio has both.
+		//
+		// So this is an unimplemented capability rather than an absent one, and
+		// it is left at 0 only because reading a command table is not the same
+		// as writing and testing a setter: 12's data byte is the receive-antenna
+		// flag rather than the socket, the socket is the SUB-command, and two
+		// of these radios have different numbers of sockets. It wants its own
+		// change. The IC-9700, IC-905 and IC-7300MK2 tables really do have no
+		// selector to offer — the MK2's 12 00 is the receive antenna alone.
 		Antennas: 0,
+
+		// The transmit audio chain: 14 0B the gain into the modulator, 16 44 the
+		// speech compressor, 14 0E its level. Straight from the model table,
+		// because the older radios carry some of these rows and not others.
+		//
+		// None of the three says which connector the gain belongs to. On this
+		// family that is a Set-mode item (1A 05 00 91 and the DATA1/2/3 rows
+		// beside it), so it is persistent configuration remoses will not write
+		// and does not read. See txaudio.go and radio.State.TXAudioGain.
+		TXAudioGainControl: r.model.MicGain,
+		ProcControl:        r.model.Proc,
+		ProcLevelControl:   r.model.ProcLevel,
 
 		// SubReceiver is whether the radio *has* a second receiver;
 		// SubReceiverReadable is whether remoses can report it. They differ on
@@ -592,6 +619,10 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		// The noise processing and the notches, on the same tier and for the
 		// same reason: an operator moves them by hand.
 		reqs = append(reqs, r.noiseReads()...)
+		// And the transmit audio chain, on the same tier and for the same
+		// reason: the mic gain and the compressor are set once for a station's
+		// microphone and then left alone.
+		reqs = append(reqs, r.txAudioReads()...)
 		return r.readAll(ctx, c, reqs...)
 	default:
 		return fmt.Errorf("civ: unknown poll tier %d", tier)

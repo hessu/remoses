@@ -160,6 +160,15 @@ type Rig struct {
 	nr    atomic.Value
 	notch atomic.Value
 
+	// procOut holds PL's second field as an int: the speech processor's OUTPUT
+	// level. It is kept for the same reason the readings above are — it changes
+	// what the next command has to say. A PL set carries the input level and the
+	// output level in one frame, and remoses publishes only the input one, so
+	// writing it means restating an output level that has to be the radio's own
+	// rather than a number this backend chose. Nil until a PL answer has been
+	// decoded; see SetProcLevel, which refuses rather than guess.
+	procOut atomic.Value
+
 	// transmitting is the last PTT reading, from an IF answer or a TX;/RX;
 	// push. It decides two things: whether an SM answer is the S-meter or the
 	// RF power meter, and whether the fast poll asks for RM at all.
@@ -301,6 +310,18 @@ func (k *Rig) Caps() radio.Caps {
 		// be written and never read back. See SetNotchWidth.
 		Antennas:         k.profile.Antennas,
 		RXAntennaControl: k.profile.RXAntenna,
+
+		// The transmit audio chain: MG the gain into the modulator, the speech
+		// processor's switch and PL its level, all three per model because all
+		// three differ across the family. MG and PL count to 100 everywhere but
+		// the TS-990S, where they count to 255, and the switch is PR on the
+		// older pair and PR0 on the newer — where PR1 is the processor's effect
+		// type rather than "processor on". See txaudio.go for the transcription
+		// and for why the single proc_level this publishes is PL's INPUT level.
+		TXAudioGainControl: k.profile.MicGainMax > 0,
+		ProcControl:        k.profile.ProcCmd != "",
+		ProcLevelControl:   k.profile.ProcLevelMax > 0,
+
 		// False even on the TS-990S, which has a second receiver: this backend
 		// reads and writes one of them, so claiming otherwise would promise
 		// control it does not implement.
@@ -589,9 +610,16 @@ func (k *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 	}
 	// The receive front end: preamp, attenuator, RF gain and AGC, all settings
 	// an operator moves by hand and none of them worth a fast tick. Then the
-	// noise processing, the notches and the antenna, on the same tier.
+	// noise processing, the notches and the antenna, and last the transmit
+	// audio chain, all on the same tier for the same reason.
+	//
+	// The transmit-audio reads are unconditional where the model has the
+	// commands, unlike NL and RL above: no reference in this family says MG or
+	// PL is refused in any state, and ProcLevel is meant to be published with
+	// the processor off. See txaudio.go.
 	reads = append(reads, k.frontEndReads()...)
 	reads = append(reads, k.noiseReads()...)
+	reads = append(reads, k.txAudioReads()...)
 	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err

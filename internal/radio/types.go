@@ -638,6 +638,34 @@ type State struct {
 	// Empty where the radio has one receiver, or has two and cannot be asked.
 	SelectedBand Band `json:"selected_band,omitempty"`
 
+	// The transmit audio chain: how loud the audio going into the modulator is,
+	// and whether the speech processor is squeezing it.
+	//
+	// TXAudioGain is the gain on whatever input the radio is currently taking
+	// transmit audio from, and is NOT specifically the microphone socket
+	// despite every manufacturer naming it after one. Which connector feeds the
+	// modulator — mic, USB, ACC, LAN — is a menu item on most of these radios
+	// (menu 069 on a TS-590S), and remoses does not read it on any of them, so
+	// this is honestly "the transmit gain" and no more. A client that promises
+	// the operator it is adjusting the USB input may be adjusting the
+	// microphone.
+	//
+	// Not every radio hides it: a TS-890S and TS-990S answer MS, a live
+	// selector for the transmission audio route. remoses does not model that
+	// yet either, so the caveat above holds for every radio here — but it is a
+	// choice rather than a limit of the protocols.
+	//
+	// Percentages for the same reason RFGain is one: 0-255 on Icom, 0-100 on
+	// Kenwood.
+	//
+	// ProcLevel is reported whether or not the processor is on, where the radio
+	// will answer — the setting is remembered and a client redrawing the
+	// control wants the value it will return to, which is the same reason
+	// DigiSelShift is published with the preselector switched out.
+	TXAudioGain *float64 `json:"tx_audio_gain,omitempty"`
+	Proc        *bool    `json:"proc,omitempty"`
+	ProcLevel   *float64 `json:"proc_level,omitempty"`
+
 	// BreakIn decides whether CW sent from here reaches the air at all. Empty
 	// on a radio remoses cannot ask.
 	BreakIn BreakIn `json:"break_in,omitempty"`
@@ -719,6 +747,11 @@ type Patch struct {
 	Antenna        *int
 	RXAntenna      *bool
 
+	// The transmit audio chain.
+	TXAudioGain *float64
+	Proc        *bool
+	ProcLevel   *float64
+
 	// The dual-VFO fields. VFOA and VFOB are whole-VFO replacements rather than
 	// per-field pointers: the IC-7610's command 26 answers mode, data mode and
 	// filter together and command 25 answers a frequency, so a decoder always
@@ -749,6 +782,7 @@ func (p Patch) Empty() bool {
 		p.NoiseReduction == nil && p.NRLevel == nil &&
 		p.Notch == nil && p.NotchFreq == nil && p.NotchWidth == nil &&
 		p.AutoNotch == nil && p.Antenna == nil && p.RXAntenna == nil &&
+		p.TXAudioGain == nil && p.Proc == nil && p.ProcLevel == nil &&
 		p.VFO == nil && p.VFOA == nil && p.VFOB == nil &&
 		p.Split == nil && p.DualWatch == nil && p.SubSMeter == nil &&
 		p.SelectedBand == nil && p.BreakIn == nil
@@ -869,6 +903,18 @@ func (s State) Apply(p Patch) State {
 	if p.RXAntenna != nil {
 		v := *p.RXAntenna
 		s.RXAntenna = &v
+	}
+	if p.TXAudioGain != nil {
+		v := *p.TXAudioGain
+		s.TXAudioGain = &v
+	}
+	if p.Proc != nil {
+		v := *p.Proc
+		s.Proc = &v
+	}
+	if p.ProcLevel != nil {
+		v := *p.ProcLevel
+		s.ProcLevel = &v
 	}
 	if p.CW != nil {
 		s.CW = *p.CW
@@ -1250,6 +1296,20 @@ type Caps struct {
 	// as a per-band memory rather than a live selector. See State.Antenna.
 	Antennas         int  `json:"antennas"`
 	RXAntennaControl bool `json:"rx_antenna_control"`
+
+	// The transmit audio chain. TXAudioGainControl is the gain into the modulator,
+	// ProcControl the speech processor's switch and ProcLevelControl its level.
+	//
+	// Three flags rather than one because the radios really do split them: a
+	// set may offer the processor's switch over CAT and keep its level in a
+	// menu, and the older sets have neither while still having a mic gain.
+	//
+	// None of them says which connector the gain belongs to. That selection is
+	// a menu setting on all three families and remoses does not read it; see
+	// State.TXAudioGain.
+	TXAudioGainControl bool `json:"tx_audio_gain_control"`
+	ProcControl        bool `json:"proc_control"`
+	ProcLevelControl   bool `json:"proc_level_control"`
 
 	// SubReceiver is a second receiver that can be listened to at the same
 	// time as the first — the IC-7610's dual watch. It is not "the radio has

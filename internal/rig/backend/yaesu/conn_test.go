@@ -72,7 +72,43 @@ func newTestConn(t *testing.T, y *Rig, answers map[string]string) *testConn {
 			answers[req] = answer
 		}
 	}
+	// The transmit audio chain answers by default too, and it cannot be written
+	// out flat the way the front end is: MG and PL are counted against a full
+	// scale that differs by model, and PR answers with one parameter on three
+	// radios and two on the rest. See txAudioAnswers.
+	for req, answer := range txAudioAnswers(y.profile) {
+		if _, ok := answers[req]; !ok {
+			answers[req] = answer
+		}
+	}
 	return &testConn{t: t, y: y, answers: answers}
+}
+
+// txAudioAnswers is a rig with its transmit gain and processor level at about
+// half of whatever this model's own count happens to be, and its speech
+// processor switched on.
+//
+// Half is written as MicGainMax/2 rather than a literal so that the answer is
+// well formed on both scales: MG050 on the eight radios that count to 100 and
+// MG127 on the three that count to 255. A test that wants a specific reading
+// overrides it; what this provides is a rig that does not time out.
+func txAudioAnswers(m Model) map[string]string {
+	a := map[string]string{}
+	if m.MicGain {
+		a[reqMG] = fmt.Sprintf("MG%03d", m.MicGainMax/2)
+	}
+	if m.ProcLevel {
+		a[reqPL] = fmt.Sprintf("PL%03d", m.ProcLevelMax/2)
+	}
+	switch m.Proc {
+	case ProcSingle:
+		a[reqPRSingle] = fmt.Sprintf("PR%c", m.ProcOn)
+	case ProcSelect:
+		// The answer echoes the parameter that names the compressor, exactly as
+		// the set carries it.
+		a[reqPRSelect] = fmt.Sprintf("PR%c%c", procSpeech, m.ProcOn)
+	}
+	return a
 }
 
 // newBusyConn is a rig that answers '?' to every command.

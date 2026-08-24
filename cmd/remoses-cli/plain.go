@@ -201,6 +201,15 @@ func statusFields(v *view) string {
 	if a := st.RXAntenna; a != nil {
 		fmt.Fprintf(&b, " rx_antenna=%t", *a)
 	}
+	if g := st.TXAudioGain; g != nil {
+		fmt.Fprintf(&b, " tx_audio_gain=%g", *g)
+	}
+	if p := st.Proc; p != nil {
+		fmt.Fprintf(&b, " proc=%t", *p)
+	}
+	if l := st.ProcLevel; l != nil {
+		fmt.Fprintf(&b, " proc_level=%g", *l)
+	}
 	fmt.Fprintf(&b, " cw_busy=%t cw_queued=%d wpm=%d", st.CW.Busy, st.CW.Queued, st.CW.WPM)
 	fmt.Fprintf(&b, " seq=%d age_ms=%d stale=%t", st.Seq, v.age().Milliseconds(), v.stale)
 	b.WriteString(optQuoted(" conn_error=", v.connErr))

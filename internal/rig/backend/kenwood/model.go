@@ -147,6 +147,31 @@ type Model struct {
 	Antennas       int
 	RXAntenna      bool
 
+	// The transmit audio chain: MG the gain into the modulator, the speech
+	// processor's switch, and PL its level.
+	//
+	// MicGainMax and ProcLevelMax are the top of a range that begins at 000,
+	// and the family does not agree on where it ends. MG is "000 ~ 100" on the
+	// TS-480, the TS-590S/SG and the TS-890S, and "000 ~ 255 (in steps of 1)"
+	// on the TS-990S; PL's two fields move with it, "000 (minimum) ~ 100
+	// (maximum)" on the first three and 000 ~ 255 on the TS-990S. That is the
+	// RG trap a second time — the same control reported on scales a factor of
+	// two and a half apart — which is why the API publishes a percentage and
+	// each model states its own ceiling here. Zero where the reference has no
+	// row for the command.
+	//
+	// ProcCmd is the switch's command, and the two generations do not spell it
+	// the same way. It is PR on the TS-480 and TS-590S/SG; on the TS-890S and
+	// TS-990S it is PR0, and those two also have a PR1 that sets the
+	// processor's effect type, "0: Soft, 1: Hard". So "PR1;" — the frame that
+	// switches a TS-590's processor ON — is on a TS-890S the read form of an
+	// unrelated setting, and nothing about that goes wrong loudly: the frame is
+	// well formed, the radio answers, and the processor stays off. Empty where
+	// there is no such command.
+	MicGainMax   int
+	ProcCmd      string
+	ProcLevelMax int
+
 	// AGCOnCode is the parameter that turns the AGC back ON, and without it
 	// switching the AGC off is a ONE-WAY TRIP.
 	//
@@ -404,6 +429,14 @@ func md(name, label string, id int) Model {
 		NotchFreq:      true,
 		Antennas:       2,
 		RXAntenna:      true,
+		// The transmit audio chain in its older spelling: MG three digits over
+		// 000-100, PR one digit for the processor's switch, and PL carrying an
+		// input level and an output level in one frame, each three digits over
+		// 000-100. Identical rows in the TS-480 and TS-590S/SG references, so
+		// this is the shape both inherit.
+		MicGainMax:   100,
+		ProcCmd:      "PR",
+		ProcLevelMax: 100,
 	}
 }
 
@@ -445,6 +478,11 @@ func om(name, label string, id int) Model {
 	// TS-590's antenna support. The noise and notch commands are shared.
 	m.Antennas = 0
 	m.RXAntenna = false
+	// And the speech processor's switch moves from PR to PR0, because both of
+	// these radios needed the second digit for PR1, the processor's effect
+	// type. MG and PL keep their letters and their shapes; only the TS-990S
+	// changes what they count in, which it does below.
+	m.ProcCmd = "PR0"
 	return m
 }
 
@@ -481,6 +519,19 @@ var models = map[string]Model{
 		// accepted and not transmitted, which is exactly where every
 		// unidentified radio already stood. Name the model to get the check.
 		m.BreakIn = BreakInNone
+		// The transmit audio chain IS kept, unlike break-in, and the difference
+		// is worth stating because the argument just above looks as though it
+		// should carry over.
+		//
+		// It does not, and the reason is where the fault would appear. VX is
+		// written blind and its consequence surfaces somewhere else entirely:
+		// later, in another mode, as a radio keying on room noise. MG, PR and
+		// PL are each written and then read straight back inside the one
+		// operation, so a dialect that spells them differently shows up as a
+		// rejection, or as a value that does not come back — at the moment of
+		// asking, to the operator who asked. A wrong answer that arrives with
+		// the question is a different kind of thing from one that arrives an
+		// hour later in another mode.
 		return m
 	}(),
 
@@ -568,6 +619,20 @@ var models = map[string]Model{
 		// remoses works the main band, as it does everywhere else on this
 		// radio — see VFOPairMainSub.
 		m.Banded = true
+		// And the only one whose transmit-audio levels count past 100. Its MG
+		// is "000 ~ 255 (in steps of 1)" and both of PL's fields are "000
+		// (minimum) ~ 255 (maximum)", where the TS-480, TS-590 and TS-890S all
+		// stop at 100. A percentage written against the wrong one of those two
+		// ceilings sets roughly two fifths of the audio the operator asked for
+		// and reports it as the figure they typed.
+		//
+		// Banded does NOT reach them, and that is the reference's arrangement
+		// rather than an omission here: PA, RA, GC and RG each carry a main/sub
+		// selector because there are two receivers, but there is one
+		// transmitter, so MG, PR0 and PL take their value with nothing in front
+		// of it.
+		m.MicGainMax = 255
+		m.ProcLevelMax = 255
 		return m
 	}(),
 }
@@ -778,6 +843,43 @@ func (m Model) filterSelectionChar(arg []byte) (byte, bool) {
 		}
 	}
 	return 0, false
+}
+
+// procReq is the request that reads the speech processor's switch, and procSet
+// the frame that writes it. Both are built from ProcCmd because the command is
+// PR on one half of the family and PR0 on the other; see the field's comment
+// for what PR1 means on the half that spells it PR0.
+func (m Model) procReq() string { return m.ProcCmd + ";" }
+
+func (m Model) procSet(on bool) string {
+	if on {
+		return m.ProcCmd + "1;"
+	}
+	return m.ProcCmd + "0;"
+}
+
+// procSwitchChar picks the character carrying the processor's on/off state out
+// of a PR answer's argument.
+//
+// The frame splitter keys on the run of letters, so everything after "PR" is
+// the argument — including the command's own digit on the models whose command
+// is PR0, exactly as it does for FL0:
+//
+//	TS-590   PR1;    arg "1"    -> the switch is at 0
+//	TS-890S  PR01;   arg "01"   -> 0 is PR0's own digit, 1 the switch
+//
+// That digit is CHECKED rather than skipped. On the TS-890S and TS-990S, PR1 is
+// the processor's effect type, so an unsolicited PR11; announcing "Hard" would
+// otherwise be read as the processor having been switched on.
+func (m Model) procSwitchChar(arg []byte) (byte, bool) {
+	if m.ProcCmd == "" {
+		return 0, false
+	}
+	digits := m.ProcCmd[2:] // "" on PR, "0" on PR0
+	if len(arg) < len(digits)+1 || string(arg[:len(digits)]) != digits {
+		return 0, false
+	}
+	return arg[len(digits)], true
 }
 
 // smeterArgLen is how many characters the SM answer's parameter has.

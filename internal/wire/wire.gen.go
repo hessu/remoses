@@ -726,6 +726,14 @@ type Caps struct {
 	// client offers 0 to this number.
 	PreampLevels int `json:"preamp_levels"`
 
+	// ProcControl remoses can switch this radio's speech processor.
+	ProcControl bool `json:"proc_control"`
+
+	// ProcLevelControl remoses can set the processor's level. Separate from
+	// `proc_control` because a radio may offer the switch and keep the
+	// level on its panel or in a menu.
+	ProcLevelControl bool `json:"proc_level_control"`
+
 	// PTTControl remoses can key and unkey the transmitter on this radio.
 	//
 	// False is not exotic: the IC-706 family has no transmitter command in
@@ -771,6 +779,13 @@ type Caps struct {
 	// treat it as a transmit control rather than a settings toggle: it
 	// keys the transmitter, and it is refused without the lock.
 	TunerTune bool `json:"tuner_tune"`
+
+	// TXAudioGainControl remoses can read and set the transmit audio gain, as a percentage.
+	//
+	// It says nothing about which connector that gain belongs to: the
+	// input selection is not read on any radio, and on most of them it is
+	// a menu item rather than a command.
+	TXAudioGainControl bool `json:"tx_audio_gain_control"`
 
 	// VFOAddressing What `state.vfo_a` and `state.vfo_b` name. Absent on a radio with a
 	// single addressable VFO.
@@ -1112,7 +1127,21 @@ type State struct {
 	// same as one with no preamplifier. An IC-910H's are external units
 	// with their own controllers and nothing on the bus to switch them.
 	Preamp *int `json:"preamp,omitempty"`
-	PTT    bool `json:"ptt"`
+
+	// Proc The speech processor — the transmit audio compressor.
+	//
+	// Off is a setting an operator chooses, not an absence, so this is
+	// absent only when remoses has no reading at all.
+	Proc *bool `json:"proc,omitempty"`
+
+	// ProcLevel The processor's level, 0-100%.
+	//
+	// Reported whether or not `proc` is on, where the radio will answer:
+	// the setting is remembered, and a client redrawing the control wants
+	// the value it will return to. Radios that refuse the read while the
+	// processor is off leave this absent instead.
+	ProcLevel *float64 `json:"proc_level,omitempty"`
+	PTT       bool     `json:"ptt"`
 
 	// RFGain The receiver's RF gain, 0-100%.
 	//
@@ -1225,8 +1254,23 @@ type State struct {
 	// `on`, one that fails ends on `off`. That is observed behaviour
 	// rather than something its reference promises, and it has not been
 	// checked on other families.
-	Tuner     *Tuner    `json:"tuner,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Tuner *Tuner `json:"tuner,omitempty"`
+
+	// TXAudioGain Transmit audio gain, 0-100%.
+	//
+	// A percentage for the same reason `rf_gain` is one: the counts
+	// underneath are 0-255 on Icom and 0-100 on Kenwood, and a number
+	// that means a different thing on two radios is a number a client
+	// cannot draw.
+	//
+	// It is the gain on whatever input the radio is currently taking
+	// transmit audio from, NOT specifically the microphone socket. Which
+	// input that is, remoses does not read on any radio — on most of them
+	// it is a menu item rather than a command — so a client showing this
+	// beside a USB-connected rig should say "transmit gain" rather than
+	// promise which connector it belongs to.
+	TXAudioGain *float64  `json:"tx_audio_gain,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
 
 	// VFO Which VFO the fields above describe. Not always switchable: on a
 	// classic single-receiver radio it follows the operator's A/B switch,
@@ -1460,8 +1504,22 @@ type StateFields struct {
 	// Absent on a radio with no preamplifier command — which is not the
 	// same as one with no preamplifier. An IC-910H's are external units
 	// with their own controllers and nothing on the bus to switch them.
-	Preamp *int  `json:"preamp,omitempty"`
-	PTT    *bool `json:"ptt,omitempty"`
+	Preamp *int `json:"preamp,omitempty"`
+
+	// Proc The speech processor — the transmit audio compressor.
+	//
+	// Off is a setting an operator chooses, not an absence, so this is
+	// absent only when remoses has no reading at all.
+	Proc *bool `json:"proc,omitempty"`
+
+	// ProcLevel The processor's level, 0-100%.
+	//
+	// Reported whether or not `proc` is on, where the radio will answer:
+	// the setting is remembered, and a client redrawing the control wants
+	// the value it will return to. Radios that refuse the read while the
+	// processor is off leave this absent instead.
+	ProcLevel *float64 `json:"proc_level,omitempty"`
+	PTT       *bool    `json:"ptt,omitempty"`
 
 	// RFGain The receiver's RF gain, 0-100%.
 	//
@@ -1574,8 +1632,23 @@ type StateFields struct {
 	// `on`, one that fails ends on `off`. That is observed behaviour
 	// rather than something its reference promises, and it has not been
 	// checked on other families.
-	Tuner     *Tuner     `json:"tuner,omitempty"`
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	Tuner *Tuner `json:"tuner,omitempty"`
+
+	// TXAudioGain Transmit audio gain, 0-100%.
+	//
+	// A percentage for the same reason `rf_gain` is one: the counts
+	// underneath are 0-255 on Icom and 0-100 on Kenwood, and a number
+	// that means a different thing on two radios is a number a client
+	// cannot draw.
+	//
+	// It is the gain on whatever input the radio is currently taking
+	// transmit audio from, NOT specifically the microphone socket. Which
+	// input that is, remoses does not read on any radio — on most of them
+	// it is a menu item rather than a command — so a client showing this
+	// beside a USB-connected rig should say "transmit gain" rather than
+	// promise which connector it belongs to.
+	TXAudioGain *float64   `json:"tx_audio_gain,omitempty"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 
 	// VFO Which VFO the fields above describe. Not always switchable: on a
 	// classic single-receiver radio it follows the operator's A/B switch,
@@ -1775,8 +1848,17 @@ type StatePatch struct {
 	// Preamp Select a preamplifier: 0 for off, up to `caps.preamp_levels`. 422
 	// where the radio has no preamplifier command or the level is past
 	// what it offers.
-	Preamp *int  `json:"preamp,omitempty"`
-	PTT    *bool `json:"ptt,omitempty"`
+	Preamp *int `json:"preamp,omitempty"`
+
+	// Proc Switch the speech processor. Needs `caps.proc_control`.
+	Proc *bool `json:"proc,omitempty"`
+
+	// ProcLevel Set the processor's level, 0-100%. Needs `caps.proc_level_control`,
+	// and applied AFTER `proc` in the same request, because a radio that
+	// refuses the level while the processor is off would otherwise reject
+	// a request that switches it on and sets it in one go.
+	ProcLevel *float64 `json:"proc_level,omitempty"`
+	PTT       *bool    `json:"ptt,omitempty"`
 
 	// RFGain Set the receiver RF gain, 0-100%. Needs `caps.rf_gain_control`.
 	RFGain *float64 `json:"rf_gain,omitempty"`
@@ -1808,6 +1890,9 @@ type StatePatch struct {
 	// timer. It returns as soon as the radio accepts the command, not when
 	// the cycle ends; watch `state.tuner` for that.
 	TunerTune *bool `json:"tuner_tune,omitempty"`
+
+	// TXAudioGain Set the transmit audio gain, 0-100%. Needs `caps.tx_audio_gain_control`.
+	TXAudioGain *float64 `json:"tx_audio_gain,omitempty"`
 
 	// VFO `current` is the VFO the radio is operating and works everywhere.
 	// `A`/`B` (and their `main`/`sub` aliases) may be used only where

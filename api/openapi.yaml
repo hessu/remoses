@@ -970,6 +970,40 @@ components:
             The separate receive-only input, where the radio has one and can
             report it. Kenwood's `AN` carries it; no Yaesu or Icom read for this
             backend does.
+        tx_audio_gain:
+          type: number
+          format: double
+          description: |
+            Transmit audio gain, 0-100%.
+
+            A percentage for the same reason `rf_gain` is one: the counts
+            underneath are 0-255 on Icom and 0-100 on Kenwood, and a number
+            that means a different thing on two radios is a number a client
+            cannot draw.
+
+            It is the gain on whatever input the radio is currently taking
+            transmit audio from, NOT specifically the microphone socket. Which
+            input that is, remoses does not read on any radio — on most of them
+            it is a menu item rather than a command — so a client showing this
+            beside a USB-connected rig should say "transmit gain" rather than
+            promise which connector it belongs to.
+        proc:
+          type: boolean
+          description: |
+            The speech processor — the transmit audio compressor.
+
+            Off is a setting an operator chooses, not an absence, so this is
+            absent only when remoses has no reading at all.
+        proc_level:
+          type: number
+          format: double
+          description: |
+            The processor's level, 0-100%.
+
+            Reported whether or not `proc` is on, where the radio will answer:
+            the setting is remembered, and a client redrawing the control wants
+            the value it will return to. Radios that refuse the read while the
+            processor is off leave this absent instead.
         break_in:
           allOf: [{ $ref: "#/components/schemas/BreakIn" }]
           description: |
@@ -1231,6 +1265,23 @@ components:
           type: boolean
           description: |
             Switch the receive-only input. Needs `caps.rx_antenna_control`.
+        tx_audio_gain:
+          type: number
+          format: double
+          description: |
+            Set the transmit audio gain, 0-100%. Needs `caps.tx_audio_gain_control`.
+        proc:
+          type: boolean
+          description: |
+            Switch the speech processor. Needs `caps.proc_control`.
+        proc_level:
+          type: number
+          format: double
+          description: |
+            Set the processor's level, 0-100%. Needs `caps.proc_level_control`,
+            and applied AFTER `proc` in the same request, because a radio that
+            refuses the level while the processor is off would otherwise reject
+            a request that switches it on and sets it in one go.
         tuner:
           allOf: [{ $ref: "#/components/schemas/TunerSet" }]
           description: |
@@ -1308,7 +1359,8 @@ components:
          digi_sel_shift_control, noise_blanker_levels, nb_level_control,
          noise_reduction_levels, nr_level_control, notch_control,
          notch_freq_control, auto_notch_control, notch_exclusive, antennas,
-         rx_antenna_control, sub_receiver, sub_receiver_readable, split,
+         rx_antenna_control, tx_audio_gain_control, proc_control, proc_level_control,
+         sub_receiver, sub_receiver_readable, split,
          dual_watch, band_exchange, per_vfo_mode, break_in_control, cw_method]
       properties:
         modes:
@@ -1481,6 +1533,23 @@ components:
           type: boolean
           description: |
             remoses can switch the separate receive-only input.
+        tx_audio_gain_control:
+          type: boolean
+          description: |
+            remoses can read and set the transmit audio gain, as a percentage.
+
+            It says nothing about which connector that gain belongs to: the
+            input selection is not read on any radio, and on most of them it is
+            a menu item rather than a command.
+        proc_control:
+          type: boolean
+          description: remoses can switch this radio's speech processor.
+        proc_level_control:
+          type: boolean
+          description: |
+            remoses can set the processor's level. Separate from
+            `proc_control` because a radio may offer the switch and keep the
+            level on its panel or in a menu.
         tuner_control:
           type: boolean
           description: |

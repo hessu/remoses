@@ -48,6 +48,13 @@ func newTestConn(t *testing.T, k *Rig, answers map[string]string) *testConn {
 		// off, so a test that does not set it will not see RL asked for at all.
 		reqNB: "NB1", reqNL: "NL005", reqNR: "NR0", reqRL: "RL05",
 		reqNT: "NT00", reqBP: "BP064", reqAN: "AN100",
+		// The transmit audio chain, which the slow poll reads on every model.
+		// PL answers SIX digits — the input level and the output level in one
+		// frame — and the processor's switch is asked for under two different
+		// command spellings depending on the generation, so both are scripted
+		// and whichever one this model uses is the one that gets asked.
+		reqMG: "MG050", reqPL: "PL025075",
+		"PR;": "PR1", "PR0;": "PR01",
 	} {
 		if _, ok := answers[req]; !ok {
 			answers[req] = answer

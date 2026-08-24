@@ -210,6 +210,15 @@ type statePatchBody struct {
 	Antenna   *int  `json:"antenna"`
 	RXAntenna *bool `json:"rx_antenna"`
 
+	// The transmit audio chain. TXAudioGain is the gain into the modulator, on
+	// whatever input the radio is taking audio from rather than the microphone
+	// specifically; Proc switches the speech processor and ProcLevel sets how
+	// hard it squeezes. ProcLevel is applied after Proc, so switching the
+	// processor on and setting its level in one request works.
+	TXAudioGain *float64 `json:"tx_audio_gain"`
+	Proc        *bool    `json:"proc"`
+	ProcLevel   *float64 `json:"proc_level"`
+
 	// Tuner switches the antenna tuner in or out of line: "off" or "on" only.
 	// The state can also read "tuning", but that is not something to ask for.
 	Tuner *radio.Tuner `json:"tuner"`
@@ -273,6 +282,9 @@ func (b statePatchBody) toRequest() (rig.PatchRequest, error) {
 		AutoNotch:      b.AutoNotch,
 		Antenna:        b.Antenna,
 		RXAntenna:      b.RXAntenna,
+		TXAudioGain:    b.TXAudioGain,
+		Proc:           b.Proc,
+		ProcLevel:      b.ProcLevel,
 	}
 	if b.VFO != nil {
 		req.VFO = *b.VFO
@@ -322,7 +334,8 @@ func (b statePatchBody) onlyPowerSwitch() bool {
 		b.NoiseBlanker == nil && b.NBLevel == nil && b.NoiseReduction == nil &&
 		b.NRLevel == nil && b.Notch == nil && b.NotchFreq == nil &&
 		b.NotchWidth == nil && b.AutoNotch == nil &&
-		b.Antenna == nil && b.RXAntenna == nil
+		b.Antenna == nil && b.RXAntenna == nil &&
+		b.TXAudioGain == nil && b.Proc == nil && b.ProcLevel == nil
 }
 
 // auditAttrs names what the request asked for, so the audit line records the

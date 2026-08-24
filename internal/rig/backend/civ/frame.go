@@ -88,6 +88,20 @@ const (
 	subNotchFreq = 0x0D // 14 0D, 0000-0255
 	subNBLevel   = 0x12 // 14 12, 0000-0255
 
+	// The transmit audio chain: the gain into the modulator, the speech
+	// compressor's switch, and how hard it squeezes. Transcribed from the
+	// IC-7610 CI-V Reference Guide's command table (p. 3 for the 14 group,
+	// p. 4 for the 16 group) and confirmed word for word in the IC-9700,
+	// IC-7760, IC-905 and IC-7300MK2 reference guides.
+	//
+	// 16 46 is the VOX switch and is deliberately not sent. It is one row below
+	// the compressor in every one of those tables, and it keys a transmitter
+	// from whatever noise is in the room — not something to switch on for an
+	// operator who cannot see the radio, and there is no state field for it.
+	subMicGain   = 0x0B // 14 0B, 0000-0255, "MIC gain"
+	subProcLevel = 0x0E // 14 0E, 0000-0255
+	subProc      = 0x44 // 16 44: 00 off, 01 on
+
 	subDualWatchOff  = 0xC0 // 07 C0
 	subDualWatchOn   = 0xC1 // 07 C1
 	subDualWatch     = 0xC2 // 07 C2, read/set, 00 off 01 on

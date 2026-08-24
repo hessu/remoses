@@ -126,6 +126,44 @@ undocumented, an SWR that high is a fault either way, and "7.4:1" would be a
 number invented about your antenna. A rigctld radio is the exception: Hamlib
 reports a true ratio, so that one arrives calibrated.
 
+## Transmit audio: gain and the speech processor
+
+`state.tx_audio_gain`, `state.proc` and `state.proc_level`, all settable in the same
+`PATCH` as everything else, gated by `caps.tx_audio_gain_control`,
+`caps.proc_control` and `caps.proc_level_control`.
+
+**`tx_audio_gain` is the gain into the modulator, not the microphone socket.** Every
+manufacturer names the control after a microphone, and on a rig being worked
+over USB it is very often not the microphone that it adjusts. Which connector
+feeds transmit audio — mic, USB, ACC, LAN — is a menu item on most of these
+radios, and remoses reads it on none of them, so the field is honestly "the
+transmit gain" and no more. A client that labels it "USB input gain" is making a
+promise the protocol does not support.
+
+A TS-890S and TS-990S are the exception worth knowing about: they answer `MS`, a
+live selector for the transmission audio route. remoses does not model it yet,
+so the caveat above still applies to every radio — but on those two it is a
+choice rather than a limitation.
+
+It is a percentage, for the same reason `rf_gain` is: the counts underneath are
+0-255 on Icom and 0-100 on Kenwood, and a number that means a different thing on
+two radios is a number nobody can draw.
+
+**The processor's switch is applied before its level** in a request carrying
+both, because a radio that refuses the level while the processor is off would
+otherwise reject `{"proc": true, "proc_level": 60}` — which is the obvious thing
+for a client to send. This is the same ordering the noise blanker needs and for
+the same reason.
+
+`proc_level` is reported whether or not the processor is in, where the radio
+will answer: the setting is remembered, and a client redrawing the control wants
+the value it will return to.
+
+**Nothing here transmits**, but all of it decides what the next over sounds
+like. `remoses test-run` moves the gain only a few percent either side of
+wherever the operator left it and puts it back as its own recorded step, rather
+than sweeping a range and leaving somebody's audio wound up.
+
 ## CW
 
 Two ways to send, and which one a radio can use is a fact about the radio rather

@@ -275,22 +275,32 @@ func TestPollSlow(t *testing.T) {
 		// level, BOTH halves of BP — the switch as BP00; and the position as
 		// BP01;, which is one command carrying two different things — the
 		// automatic notch, and the antenna.
+		// Then the transmit audio chain. PR is read as PR0; on this radio, not
+		// as a bare PR;: the FTdx101 takes the two-parameter form, and the 0
+		// asks about the compressor rather than the parametric equalizer.
 		{name: "CW", mode: "MD03", want: []string{"PC;", "AC;", "NA0;",
 			"PA0;", "RA0;", "RG0;", "GT0;",
-			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;", "SH0;"}},
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;",
+			"MG;", "PR0;", "PL;", "SH0;"}},
 		{name: "USB", mode: "MD02", want: []string{"PC;", "AC;", "NA0;",
 			"PA0;", "RA0;", "RG0;", "GT0;",
-			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;", "SH0;"}},
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;",
+			"MG;", "PR0;", "PL;", "SH0;"}},
 		{name: "USB-DATA", mode: "MD0C", want: []string{"PC;", "AC;", "NA0;",
 			"PA0;", "RA0;", "RG0;", "GT0;",
-			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;", "SH0;"}},
-		// SH has no bandwidth table in AM or FM on any model here.
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;",
+			"MG;", "PR0;", "PL;", "SH0;"}},
+		// SH has no bandwidth table in AM or FM on any model here. The transmit
+		// audio chain is read in every mode: no manual attaches a mode
+		// restriction to MG, PR or PL, where several do to OS.
 		{name: "FM", mode: "MD04", want: []string{"PC;", "AC;", "NA0;",
 			"PA0;", "RA0;", "RG0;", "GT0;",
-			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;"}},
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;",
+			"MG;", "PR0;", "PL;"}},
 		{name: "AM", mode: "MD05", want: []string{"PC;", "AC;", "NA0;",
 			"PA0;", "RA0;", "RG0;", "GT0;",
-			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;"}},
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;",
+			"MG;", "PR0;", "PL;"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -709,8 +719,15 @@ func TestPollSlowFTdx9000(t *testing.T) {
 		// No RA0; and no AN0;: the FTdx9000's command list has neither an
 		// attenuator row nor an antenna one, where the FTdx101 has both. Its
 		// preamp, RF gain, AGC and the whole noise group are present.
+		//
+		// And MG; and PL; but no PR of either spelling. This radio's PR entry
+		// spells the command PC in all three of its rows, so the switch is the
+		// one part of the transmit audio chain remoses will not ask it about —
+		// while the gain and the level, whose rows are clean, are read as
+		// usual. See ProcNone.
 		c.wantSent(t, "PC;", "AC;", "PA0;", "RG0;", "GT0;",
-			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;")
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;",
+			"MG;", "PL;")
 	}
 }
 
@@ -941,7 +958,8 @@ func TestBusyIsNotRemembered(t *testing.T) {
 	}
 	c.wantSent(t, "IF;", "TX;", "SM0;", "PC;", "AC;", "NA0;",
 		"PA0;", "RA0;", "RG0;", "GT0;",
-		"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;", "SH0;")
+		"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;", "AN0;",
+		"MG;", "PR0;", "PL;", "SH0;")
 
 	// Capabilities are untouched too: a busy answer says nothing about what the
 	// radio can do.

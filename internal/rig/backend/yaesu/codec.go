@@ -31,6 +31,10 @@ const (
 	keyBP backend.Key = "BP"
 	keyBC backend.Key = "BC"
 	keyAN backend.Key = "AN"
+	// The transmit audio chain.
+	keyMG backend.Key = "MG"
+	keyPR backend.Key = "PR"
+	keyPL backend.Key = "PL"
 	keyPS backend.Key = "PS"
 	keySH backend.Key = "SH"
 	keyNA backend.Key = "NA"
@@ -333,6 +337,27 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 		u.Key = keyAN
 		if y.profile.Antennas > 0 {
 			y.decodeAN(&u, arg)
+		}
+
+	// The transmit audio chain. Each is gated on the profile for the usual
+	// reason — a model that cannot answer must not have a decoder invent a
+	// reading — but here the gate also carries the dialect, since PR's
+	// parameters mean different things on different radios and MG's digits are
+	// counted against a different full scale.
+	case keyMG:
+		u.Key = keyMG
+		if y.profile.MicGain {
+			y.decodeMG(&u, arg)
+		}
+	case keyPR:
+		u.Key = keyPR
+		if y.profile.Proc != ProcNone {
+			y.decodePR(&u, arg)
+		}
+	case keyPL:
+		u.Key = keyPL
+		if y.profile.ProcLevel {
+			y.decodePL(&u, arg)
 		}
 
 	case keyID:

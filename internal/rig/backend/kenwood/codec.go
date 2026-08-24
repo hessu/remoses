@@ -49,6 +49,13 @@ const (
 	keyNT backend.Key = "NT"
 	keyBP backend.Key = "BP"
 	keyAN backend.Key = "AN"
+	// The transmit audio chain. One key covers PR and PR0 both: splitCommand
+	// takes the run of LETTERS as the command, so a TS-890S's PR01 answer
+	// arrives here under the same key as a TS-590's PR1, with the extra digit
+	// left in the argument. Model.procSwitchChar is what tells the two apart.
+	keyMG backend.Key = "MG"
+	keyPR backend.Key = "PR"
+	keyPL backend.Key = "PL"
 	keyTX backend.Key = "TX"
 	keyRX backend.Key = "RX"
 )
@@ -428,6 +435,27 @@ func (k *Rig) Decode(frame []byte) (backend.Update, error) {
 		u.Key = keyAN
 		if k.profile.Antennas > 0 {
 			k.decodeAN(&u, arg)
+		}
+
+	// The transmit audio chain, gated per model for the same reason the front
+	// end and the noise commands are, and keyed before parsing for the same
+	// reason too. The gate matters more here than most: a TS-890S answering
+	// PR11 — its processor effect type, not its switch — must complete the
+	// transaction and publish nothing rather than report the processor on.
+	case keyMG:
+		u.Key = keyMG
+		if k.profile.MicGainMax > 0 {
+			k.decodeMG(&u, arg)
+		}
+	case keyPR:
+		u.Key = keyPR
+		if k.profile.ProcCmd != "" {
+			k.decodePR(&u, arg)
+		}
+	case keyPL:
+		u.Key = keyPL
+		if k.profile.ProcLevelMax > 0 {
+			k.decodePL(&u, arg)
 		}
 
 	case keyGC, keyGT:

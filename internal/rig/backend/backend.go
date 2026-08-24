@@ -345,6 +345,44 @@ type AntennaSelector interface {
 	SetRXAntenna(ctx context.Context, c Conn, on bool) error
 }
 
+// TXAudioController is implemented by a backend that can work the transmit
+// audio chain: the gain into the modulator, and the speech processor.
+//
+// The two travel together because they are one panel and one job — getting the
+// right amount of audio into the transmitter — but each method may refuse
+// individually with ErrUnsupported. Caps says what a radio has:
+// TXAudioGainControl, ProcControl and ProcLevelControl.
+//
+// What this interface deliberately does NOT model is which connector the audio
+// comes from. On most of these radios it is a menu item rather than a live
+// command — a TS-590S keeps it in menu 069 — and a "mic gain" written while the
+// radio is taking audio from USB adjusts the USB input on some models and the
+// microphone on others. Naming the gain after the socket would be a promise
+// remoses cannot keep, so the field is the transmit gain and no more. See
+// radio.State.MicGain.
+//
+// It is not universally a menu, though, and that is worth knowing before the
+// selection is modelled: the TS-890S and TS-990S carry MS, a live readable and
+// writable selector for the transmission audio route. So the gap here is a
+// decision not to model the selection yet, not an absence of any command
+// anywhere.
+//
+// Reading is not part of the interface, as with the front end: all three are
+// ordinary polled values that arrive as patches from the slow tier.
+type TXAudioController interface {
+	// SetTXAudioGain sets the transmit audio gain, 0-100%. Backends scale to
+	// whatever their radio counts in — 0-255 on Icom, 0-100 on Kenwood.
+	SetTXAudioGain(ctx context.Context, c Conn, pct float64) error
+	// SetProc switches the speech processor.
+	SetProc(ctx context.Context, c Conn, on bool) error
+	// SetProcLevel sets the processor's level, 0-100%.
+	//
+	// The session applies it after SetProc in a request carrying both, because
+	// a radio that refuses the level while the processor is off would other-
+	// wise reject switching it on and setting it in one go.
+	SetProcLevel(ctx context.Context, c Conn, pct float64) error
+}
+
 // BreakInController is implemented by a backend that can read and set the CW
 // break-in setting.
 //

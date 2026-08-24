@@ -27,6 +27,7 @@ func (r *Runner) sequence(ctx context.Context) error {
 		r.frontEnd,
 		r.noise,
 		r.antenna,
+		r.txAudio,
 		r.breakIn,
 		r.deniedControls,
 		r.transmit,
@@ -545,6 +546,75 @@ func (r *Runner) noise(ctx context.Context) error {
 			rig.PatchRequest{Notch: &yes, AutoNotch: &yes})
 	}
 	return nil
+}
+
+// txAudio exercises the transmit gain and the speech processor.
+//
+// Nothing here keys the transmitter, but every one of these settings decides
+// what the NEXT over sounds like, and a run that left somebody's gain wound up
+// or their processor switched in would be discovered on the air by whoever they
+// worked next. So the gain is moved a little either side of wherever the
+// operator left it rather than to fixed values, and it is put back explicitly
+// as its own recorded step — the same reason the power group stays low, and
+// with the same caveat that a crash mid-run cannot honour it.
+func (r *Runner) txAudio(ctx context.Context) error {
+	if r.caps.TXAudioGainControl {
+		was := r.s.State().TXAudioGain
+		// Small offsets around the operator's own setting. A radio that clamps
+		// at either end reports the clamp, which is a real result rather than a
+		// failure, and setAndVerify records it as one.
+		base := 50.0
+		if was != nil {
+			base = *was
+		}
+		for _, off := range []float64{-5, +5} {
+			v := min(max(base+off, 0), 100)
+			r.setAndVerify(ctx, "tx-audio", fmt.Sprintf("mic-gain%+.0f", off),
+				fmt.Sprintf(`{"tx_audio_gain":%.0f}`, v), rig.PatchRequest{TXAudioGain: &v},
+				pctOr(r.s.State().TXAudioGain),
+				func(s radio.State) string { return pctOr(s.TXAudioGain) },
+				fmt.Sprintf("%.0f", v))
+		}
+		if was != nil {
+			v := *was
+			r.setAndVerify(ctx, "tx-audio", "mic-gain-restore",
+				fmt.Sprintf(`{"tx_audio_gain":%.0f}`, v), rig.PatchRequest{TXAudioGain: &v},
+				pctOr(r.s.State().TXAudioGain),
+				func(s radio.State) string { return pctOr(s.TXAudioGain) },
+				fmt.Sprintf("%.0f", v))
+		}
+	} else {
+		r.skip("tx-audio", "mic-gain", "no transmit gain command")
+	}
+
+	r.togglePair(ctx, "tx-audio", "proc", r.caps.ProcControl, func(on bool) rig.PatchRequest {
+		return rig.PatchRequest{Proc: &on}
+	}, func(s radio.State) bool { return s.Proc != nil && *s.Proc })
+
+	if r.caps.ProcLevelControl {
+		was := r.s.State().ProcLevel
+		base := 50.0
+		if was != nil {
+			base = *was
+		}
+		v := min(max(base, 0), 100)
+		r.setAndVerify(ctx, "tx-audio", "proc-level",
+			fmt.Sprintf(`{"proc_level":%.0f}`, v), rig.PatchRequest{ProcLevel: &v},
+			pctOr(r.s.State().ProcLevel),
+			func(s radio.State) string { return pctOr(s.ProcLevel) },
+			fmt.Sprintf("%.0f", v))
+	} else {
+		r.skip("tx-audio", "proc-level", "no processor level command")
+	}
+	return nil
+}
+
+// pctOr renders an optional percentage, or the absence of one.
+func pctOr(p *float64) string {
+	if p == nil {
+		return "absent"
+	}
+	return fmt.Sprintf("%.0f", *p)
 }
 
 func (r *Runner) antenna(ctx context.Context) error {

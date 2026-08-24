@@ -297,7 +297,20 @@ func (y *Rig) Caps() radio.Caps {
 		AutoNotchControl:     y.profile.AutoNotch,
 		// No notch width and no receive antenna: neither has a row in any
 		// command list read for this backend.
-		Antennas:          y.profile.Antennas,
+		Antennas: y.profile.Antennas,
+
+		// The transmit audio chain: MG, PR and PL. Every profiled model has all
+		// three commands and the twelve manuals disagree about two of them, so
+		// none of this is family-wide — see Model.MicGainMax and ProcShape.
+		//
+		// ProcControl is the one that comes out false anywhere, and on exactly
+		// one radio: the FTdx9000, whose PR entry spells the command PC in all
+		// three of its rows. Its MG and PL are transcribed and stay on, which is
+		// what these being three separate flags is for.
+		TXAudioGainControl: y.profile.MicGain,
+		ProcControl:        y.profile.Proc != ProcNone,
+		ProcLevelControl:   y.profile.ProcLevel,
+
 		PowerWattAccurate: !y.profile.PowerRaw,
 		MaxPowerW:         float64(y.maxPowerW()),
 
@@ -486,6 +499,10 @@ func (y *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 	// notches and the antenna, on the same tier.
 	reads = append(reads, y.frontEndReads()...)
 	reads = append(reads, y.noiseReads()...)
+	// Then the transmit audio chain, which belongs on this tier for the same
+	// reason: MG, PR and PL only move when somebody moves them, and unlike the
+	// meters they say nothing about a transmission in progress.
+	reads = append(reads, y.txAudioReads()...)
 	for _, r := range reads {
 		if _, err := do(ctx, c, r.req, r.key); err != nil {
 			return err

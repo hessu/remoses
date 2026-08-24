@@ -249,6 +249,14 @@ type significant struct {
 	antenna     int
 	haveRXAnt   bool
 	rxAntenna   bool
+
+	// The transmit audio chain, flattened for the same reason.
+	haveTXAudioGain bool
+	txAudioGain     float64
+	haveProc        bool
+	proc            bool
+	haveProcLevel   bool
+	procLevel       float64
 }
 
 func (v *view) significant() significant {
@@ -316,6 +324,15 @@ func (v *view) significant() significant {
 	}
 	if a := v.st.RXAntenna; a != nil {
 		s.rxAntenna, s.haveRXAnt = *a, true
+	}
+	if g := v.st.TXAudioGain; g != nil {
+		s.txAudioGain, s.haveTXAudioGain = *g, true
+	}
+	if p := v.st.Proc; p != nil {
+		s.proc, s.haveProc = *p, true
+	}
+	if l := v.st.ProcLevel; l != nil {
+		s.procLevel, s.haveProcLevel = *l, true
 	}
 	return s
 }
@@ -599,6 +616,23 @@ func noiseLine(st wire.State) string {
 		s := fmt.Sprintf("ant %d", *a)
 		if rx := st.RXAntenna; rx != nil && *rx {
 			s += "+rx"
+		}
+		parts = append(parts, s)
+	}
+	// The transmit audio chain rides on the same line: it is short, it is only
+	// ever a few characters, and an operator checking whether the processor is
+	// in wants it beside the rest of the settings rather than on a line of its
+	// own that is blank on most radios.
+	if g := st.TXAudioGain; g != nil {
+		parts = append(parts, fmt.Sprintf("gain %.0f%%", *g))
+	}
+	if p := st.Proc; p != nil {
+		s := "proc off"
+		if *p {
+			s = "proc"
+			if l := st.ProcLevel; l != nil {
+				s += fmt.Sprintf(" %.0f%%", *l)
+			}
 		}
 		parts = append(parts, s)
 	}

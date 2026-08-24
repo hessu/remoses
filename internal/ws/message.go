@@ -260,5 +260,14 @@ func changedFields(p radio.Patch, st radio.State) map[string]any {
 	if p.RXAntenna != nil {
 		m["rx_antenna"] = p.RXAntenna
 	}
+	if p.TXAudioGain != nil {
+		m["tx_audio_gain"] = p.TXAudioGain
+	}
+	if p.Proc != nil {
+		m["proc"] = p.Proc
+	}
+	if p.ProcLevel != nil {
+		m["proc_level"] = p.ProcLevel
+	}
 	return m
 }

@@ -103,6 +103,58 @@ type Model struct {
 	AutoNotch      bool
 	Antennas       int
 
+	// The transmit audio chain: MG the gain into the modulator, PR the speech
+	// processor's switch and PL its level. Every one of these fields is
+	// transcribed from a row this backend has now read, and none of the three
+	// commands is family-wide in anything but its letters.
+	//
+	// MG'S FRAME IS THE ONE THING ALL TWELVE AGREE ON. It is MG<nnn>; — three
+	// digits with nothing between them and the letters — which is not the shape
+	// of the levels next door: AG, RG and SQ all carry a receiver selector in
+	// front of their digits, and it was RG's RG0<nnn>; that made MG0<nnn>; look
+	// equally possible. The FTdx5000 settles it by contrast rather than by
+	// assertion. That radio has a real second receiver and does put a MAIN/SUB
+	// selector on AG, GT, BC and AN, and still prints MIC GAIN as "M G P1 P1 P1
+	// ;" with "P1 000 - 255" (FTdx5000 Series CAT Operation Reference, page 12).
+	// There is one transmitter, so there is nothing for a selector to choose,
+	// and the FTdx101 — same second receiver, same selectors elsewhere — prints
+	// the same six cells (FTDX101MP/D CAT Operation Reference Manual, page 15).
+	//
+	// MG'S SCALE IS NOT AGREED, and the boundary is not the generation boundary
+	// that governs FreqDigits. 000-100 on eight radios; 000-255 on the FT-950
+	// (page 11), FTdx5000 (page 12) and FTdx9000 (page 6) — while the FTdx1200
+	// and FTdx3000, which share the FT-950's eight-digit FA, both print 000-100
+	// (page 11 of each). Reading a 255-scale answer against 100 would report a
+	// radio at half gain as full, so MicGainMax is per model and has no default.
+	MicGain    bool
+	MicGainMax int
+
+	// Proc is how PR is spelled here; see ProcShape. ProcOff and ProcOn are the
+	// two characters that switch it, and they are a per-model pair because the
+	// FT-891 is the odd one out — see the ProcShape doc comment, which is where
+	// the whole PR story is written down.
+	Proc            ProcShape
+	ProcOff, ProcOn byte
+
+	// PL is the processor's level, and unlike PR it is the same six cells
+	// everywhere: PL<nnn>;, no selector. What varies is what the digits mean.
+	//
+	// ProcLevelMax is 100 on nine radios and 255 on the FTdx5000 (page 14) and
+	// FTdx9000 (page 8), which is the same 000-255 level scale those two use for
+	// MG, PC and RG — the one DESIGN.md §5.6 already records.
+	//
+	// ProcLevelMin is 1 on the FT-710 and FTX-1 alone, and it is not a rounding
+	// preference. Those two manuals give 000 a meaning of its own: the FT-710
+	// prints the Set range as "001 -100" and the answer as "000: "OFF", 001
+	// -100" (page 18), and the FTX-1 prints "000: "OFF", 001 -100" (page 22). So
+	// on those radios PL000 does not mean "as little compression as possible",
+	// it switches the processor off — which is PR's job here, and doing it
+	// through the level would leave Proc and ProcLevel disagreeing about the
+	// same radio. Clamping the set at 001 keeps 0% meaning minimum level on all
+	// eleven. A 000 that arrives in an answer still reads back as 0%.
+	ProcLevel                  bool
+	ProcLevelMin, ProcLevelMax int
+
 	// Modes are the operating modes this radio accepts, in display order.
 	Modes []radio.Mode
 	// Codes is this model's whole MD table, keyed by the mode character. The
@@ -192,6 +244,57 @@ const (
 	// FT-710 and FTdx10, the MAIN/SUB selector on the FTdx101 and FTX-1.
 	// remoses addresses MAIN, so both are written SH00<nn>;.
 	FilterFixed
+)
+
+// ProcShape is how a model spells PR, the speech processor's switch.
+//
+// This is the widest per-model split in the backend, and the only one where
+// being wrong makes the radio DO something rather than answer nothing. The
+// three shapes are not a generation split — the FT-950 and the FTdx3000 share a
+// frequency field width and disagree here — so nothing may fall back to a
+// family default.
+//
+// The parametric microphone equalizer is the reason PR is not simply on and
+// off. Every one of these radios carries a mic EQ alongside the compressor, and
+// PR is the command that reaches both. The older manuals fold the two into one
+// parameter; the newer ones give the choice its own parameter. remoses drives
+// the compressor and leaves the equalizer alone, because radio.State has one
+// Proc field and the equalizer is a different control with its own three bands.
+type ProcShape int
+
+const (
+	// ProcNone is a radio this backend will not send PR to at all. It is the
+	// FTdx9000's, and for a documentation defect rather than a missing feature:
+	// the block is headed PR and titled "RF Speech Processor Status", the
+	// command list on page 2 lists PR, and yet all three of its Set, Read and
+	// Answer rows spell the command "P C" — the letters of TX Power Level,
+	// whose own block sits directly above it with an incompatible three-digit
+	// parameter (FTdx9000 Operating Manual, page 8). One of the two statements
+	// in that entry is a misprint and the manual does not say which, so the
+	// frame is not transcribed, and this backend does not guess a command shape.
+	// PL is unaffected and stays on: its rows are clean.
+	ProcNone ProcShape = iota
+	// ProcSingle is PR<n>;, one parameter carrying the choice and the state
+	// together: "0: Speech Processor "OFF", 1: Speech Processor "ON", 2:
+	// Parametric Microphone Equalizer "ON"" on the FT-950 (page 13), and the
+	// same three with "Microphone Equalizer" on the FTdx5000 (page 14). Note
+	// what 2 means for a caller: the compressor is not in circuit, so it reads
+	// back as off. See decodePR.
+	ProcSingle
+	// ProcSelect is PR<sel><state>;, the two-parameter form, read with PR0;.
+	// P1 is "0: Speech Processor, 1: Parametric Microphone Equalizer" and P2 is
+	// the state. Seven radios here take it: the FT-710 (page 18), FT-891 (page
+	// 14), FT-991A (page 14), FTdx10 (page 18), FTdx101 (page 18), FTX-1 (page
+	// 22), FTdx1200 (page 13) and FTdx3000 (page 13).
+	//
+	// AND THE STATE VALUES ARE NOT THE SAME ON ALL OF THEM. Seven print P2 as
+	// "1: "OFF", 2: "ON""; the FT-891 alone prints "0: "OFF", 1: "ON"" (FT-891
+	// CAT Operation Reference Book, page 14, read directly and not inferred from
+	// its neighbours). That is why ProcOff and ProcOn are stored rather than
+	// written into the format string. Getting the pair backwards on an FT-891
+	// would not fail quietly the way a wrong frame does — PR01; would switch the
+	// compressor ON when the operator asked for off, in transmit.
+	ProcSelect
 )
 
 // modesCommon is the set every Yaesu here has. FSK is what the rigs call RTTY.
@@ -292,8 +395,21 @@ func modern(name, label string, id int) Model {
 		NoiseReduction: true,
 		Notch:          true,
 		AutoNotch:      true,
-		MinHz:          30_000,
-		MaxHz:          75_000_000,
+		// The transmit audio chain in its FTdx101 form: MG and PL both 000-100,
+		// and the two-parameter PR whose state is 1 for off and 2 for on. Five
+		// of the seven radios built from this function take it unchanged; the
+		// FT-891 has its own state pair and the FT-710 and FTX-1 their own PL
+		// floor, and both say so below.
+		MicGain:      true,
+		MicGainMax:   100,
+		Proc:         ProcSelect,
+		ProcOff:      '1',
+		ProcOn:       '2',
+		ProcLevel:    true,
+		ProcLevelMin: 0,
+		ProcLevelMax: 100,
+		MinHz:        30_000,
+		MaxHz:        75_000_000,
 	}
 }
 
@@ -369,8 +485,21 @@ func older(name, label string, ids ...int) Model {
 		NoiseReduction: true,
 		Notch:          true,
 		AutoNotch:      true,
-		MinHz:          30_000,
-		MaxHz:          56_000_000,
+		// The transmit audio chain in its FT-950 form: MG on the 000-255 level
+		// scale this generation's older members use for PC and RG too, PL in
+		// plain 000-100, and the single-parameter PR. Only the FT-950 itself
+		// keeps all four — every other radio here overrides at least one, which
+		// is the same story as this generation's mode tables.
+		MicGain:      true,
+		MicGainMax:   255,
+		Proc:         ProcSingle,
+		ProcOff:      '0',
+		ProcOn:       '1',
+		ProcLevel:    true,
+		ProcLevelMin: 0,
+		ProcLevelMax: 100,
+		MinHz:        30_000,
+		MaxHz:        56_000_000,
 	}
 }
 
@@ -391,6 +520,17 @@ var models = map[string]Model{
 	// Its frequency range is the widest any of them has, because refusing a
 	// frequency the radio can tune would be worse than letting the rig ignore
 	// one it cannot.
+	//
+	// The transmit audio chain comes with that shape, and it is the one place
+	// where inheriting it is a real bet rather than a formality. MG's frame is
+	// safe — all twelve manuals print the same six cells — but its 000-100
+	// divisor is wrong on a radio that turns out to be an FT-950 or an FTdx5000,
+	// and PR's "1: OFF, 2: ON" is wrong in the other direction on anything that
+	// speaks the FT-891's or the FT-950's dialect. What makes the bet acceptable
+	// is that generic is not where those radios end up: each has a profile of
+	// its own, and an operator who names it gets the right dialect. An
+	// unprofiled Yaesu new enough not to be in this registry is a newer radio,
+	// and the newer radios agree.
 	"generic": func() Model {
 		m := modern("generic", "generic Yaesu", 0)
 		m.IDs = nil
@@ -443,6 +583,13 @@ var models = map[string]Model{
 		// single pad. Same note on the 12 dB as the FT-991A's.
 		m.Preamp = 1
 		m.Attenuator = []int{12}
+		// And the one radio in the registry whose PR state values are 0 and 1
+		// rather than 1 and 2. Its P2 reads "0: "OFF", 1: "ON"" where the other
+		// seven two-parameter models read "1: "OFF", 2: "ON"" (FT-891 CAT
+		// Operation Reference Book, page 14). The frame is otherwise identical,
+		// which is exactly what makes it dangerous: sending this radio the
+		// family's off value switches the compressor on.
+		m.ProcOff, m.ProcOn = '0', '1'
 		return m
 	}(),
 
@@ -453,6 +600,10 @@ var models = map[string]Model{
 	"ft-710": func() Model {
 		m := modern("ft-710", "Yaesu FT-710", 800)
 		m.Widths = widthsFT710()
+		// Its PL reserves 000 for "OFF" and starts the level at 001, printed as
+		// a Set range of "001 -100" against an answer of "000: "OFF", 001 -100"
+		// (FT-710 CAT Operation Reference Manual, page 18). See ProcLevelMin.
+		m.ProcLevelMin = 1
 		return m
 	}(),
 
@@ -504,6 +655,12 @@ var models = map[string]Model{
 		// (HF/50)" — so the count is the family's two and which of them a given
 		// band offers is the radio's business.
 		m.Attenuator = []int{12}
+		// Its PL reads "000: "OFF", 001 -100" (FTX-1 CAT Operation Reference
+		// Manual, page 22), the FT-710's floor. Note that its MG does NOT take
+		// the head selector its PC does: MIC GAIN is "M G P1 P1 P1 ;" with "P1
+		// 000 - 100" on page 19, where PC is PC<head><nnn>;. The gain into the
+		// modulator is the same whichever head is transmitting.
+		m.ProcLevelMin = 1
 		return m
 	}(),
 
@@ -537,6 +694,13 @@ var models = map[string]Model{
 		delete(m.Codes, 'A') // printed "----": explicitly unused
 		delete(m.Codes, 'D') // no AM-N
 		m.Widths = widthsFTdx1200()
+		// Its transmit audio is the FTdx101's, not the FT-950's, which is the
+		// clearest evidence that this chain does not split on generation: MG is
+		// "000 - 100" (page 11) and PR is the two-parameter form with "P2 1:
+		// "OFF", 2: "ON"" (page 13), on a radio whose FA is eight digits.
+		m.MicGainMax = 100
+		m.Proc = ProcSelect
+		m.ProcOff, m.ProcOn = '1', '2'
 		return m
 	}(),
 
@@ -546,6 +710,16 @@ var models = map[string]Model{
 		m := older("ftdx3000", "Yaesu FTdx3000", 462)
 		m.Widths = widthsFTdx1200()
 		m.MaxHz = 60_000_000
+		// And the FTdx1200's transmit audio too: MG "000 - 100" (page 11) and
+		// the two-parameter PR with "P2 1: "OFF", 2: "ON"" (page 13). Its P1
+		// legend is printed inconsistently — "0: Speech Processor "OFF"" and
+		// "1: Parametric Microphone Equalizer "ON"", carrying states on what is
+		// plainly the selector, while P2 carries the states again. Nothing here
+		// depends on resolving that: remoses always writes 0 into P1 to address
+		// the compressor, which both readings agree is what 0 selects.
+		m.MicGainMax = 100
+		m.Proc = ProcSelect
+		m.ProcOff, m.ProcOn = '1', '2'
 		return m
 	}(),
 
@@ -566,6 +740,11 @@ var models = map[string]Model{
 		m.MaxPowerW = 0
 		m.Widths = widthsFTdx5000()
 		m.MaxHz = 60_000_000
+		// Its PL is on the same 000-255 index as MG, PC and RG (page 14), which
+		// is the list DESIGN.md §5.6 records. Unlike PC, the index needs no
+		// apology: a processor level is a percentage at the API boundary either
+		// way, so there is no watt figure to be wrong about — only the divisor.
+		m.ProcLevelMax = 255
 		return m
 	}(),
 
@@ -601,6 +780,13 @@ var models = map[string]Model{
 		// And no RA either: its command list has no attenuator row, where every
 		// other radio here has one. PA, RG and GT are all present.
 		m.Attenuator = nil
+		// Its MG and PL are clean, and both on the 000-255 scale (pages 6 and
+		// 8). Its PR is not: the entry is headed PR and titled "RF Speech
+		// Processor Status", and spells the command "P C" in all three of its
+		// rows. See ProcNone — the switch is the one control this radio does not
+		// get, and the only thing standing in the way is a misprint.
+		m.ProcLevelMax = 255
+		m.Proc = ProcNone
 		return m
 	}(),
 }

@@ -892,6 +892,71 @@ func (s *Session) antenna() backend.AntennaSelector {
 	return a
 }
 
+// txAudio reports the backend's transmit audio controls, or nil.
+func (s *Session) txAudio() backend.TXAudioController {
+	t, _ := s.rig.(backend.TXAudioController)
+	return t
+}
+
+// validateTXAudio rejects every transmit audio field the radio cannot honour.
+func (s *Session) validateTXAudio(req PatchRequest, caps radio.Caps) error {
+	if !req.txAudioRequested() {
+		return nil
+	}
+	if s.txAudio() == nil {
+		return fmt.Errorf("radio %s: transmit audio: %w", s.id, ErrUnsupported)
+	}
+	if req.TXAudioGain != nil {
+		if !caps.TXAudioGainControl {
+			return fmt.Errorf("radio %s: transmit gain: %w", s.id, ErrUnsupported)
+		}
+		if err := percentInRange("transmit gain", *req.TXAudioGain); err != nil {
+			return fmt.Errorf("radio %s: %w", s.id, err)
+		}
+	}
+	if req.Proc != nil && !caps.ProcControl {
+		return fmt.Errorf("radio %s: speech processor: %w", s.id, ErrUnsupported)
+	}
+	if req.ProcLevel != nil {
+		if !caps.ProcLevelControl {
+			return fmt.Errorf("radio %s: speech processor level: %w", s.id, ErrUnsupported)
+		}
+		if err := percentInRange("speech processor level", *req.ProcLevel); err != nil {
+			return fmt.Errorf("radio %s: %w", s.id, err)
+		}
+	}
+	return nil
+}
+
+// applyTXAudio writes the transmit audio fields a request carries.
+//
+// The processor's switch goes before its level, for the same reason the noise
+// switches go before theirs: a radio that refuses the level while the circuit
+// is off would fail a request that switches it on and sets it in one go, which
+// is the obvious thing for a client to send.
+func (s *Session) applyTXAudio(ctx context.Context, req PatchRequest) error {
+	if !req.txAudioRequested() {
+		return nil
+	}
+	t := s.txAudio()
+	if req.TXAudioGain != nil {
+		if err := t.SetTXAudioGain(ctx, s, *req.TXAudioGain); err != nil {
+			return err
+		}
+	}
+	if req.Proc != nil {
+		if err := t.SetProc(ctx, s, *req.Proc); err != nil {
+			return err
+		}
+	}
+	if req.ProcLevel != nil {
+		if err := t.SetProcLevel(ctx, s, *req.ProcLevel); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // validateNoise rejects every noise, notch and antenna field the radio cannot
 // honour, before any of them reaches the wire.
 func (s *Session) validateNoise(req PatchRequest, caps radio.Caps) error {
@@ -1330,6 +1395,11 @@ type PatchRequest struct {
 	AutoNotch      *bool
 	Antenna        *int
 	RXAntenna      *bool
+
+	// The transmit audio chain.
+	TXAudioGain *float64
+	Proc        *bool
+	ProcLevel   *float64
 }
 
 // Empty reports whether the request would change nothing.
@@ -1340,7 +1410,8 @@ func (r PatchRequest) Empty() bool {
 		r.Tuner == nil && r.TunerTune == nil && r.ExchangeBands == nil &&
 		r.Preamp == nil && r.AttenuatorDB == nil && r.RFGain == nil &&
 		r.AGC == nil && r.IPPlus == nil && r.DigiSel == nil && r.DigiSelShift == nil &&
-		!r.noiseRequested() && r.Antenna == nil && r.RXAntenna == nil
+		!r.noiseRequested() && r.Antenna == nil && r.RXAntenna == nil &&
+		!r.txAudioRequested()
 }
 
 // frontEndRequested reports whether this request touches the receive front end.
@@ -1356,6 +1427,12 @@ func (r PatchRequest) noiseRequested() bool {
 		r.NoiseReduction != nil || r.NRLevel != nil ||
 		r.Notch != nil || r.NotchFreq != nil || r.NotchWidth != nil ||
 		r.AutoNotch != nil
+}
+
+// txAudioRequested reports whether this request touches the transmit audio
+// chain.
+func (r PatchRequest) txAudioRequested() bool {
+	return r.TXAudioGain != nil || r.Proc != nil || r.ProcLevel != nil
 }
 
 // vfoState is the cached state of one named VFO, for filling in the half of a
@@ -1534,6 +1611,9 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 	if err := s.validateNoise(req, caps); err != nil {
 		return s.State(), err
 	}
+	if err := s.validateTXAudio(req, caps); err != nil {
+		return s.State(), err
+	}
 	var power radio.PowerSet
 	if req.Power != nil {
 		p, err := s.clampPower(*req.Power)
@@ -1561,7 +1641,8 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		req.VFOMode != nil || req.BreakIn != nil || req.ExchangeBands != nil ||
 		req.Tuner != nil || req.TunerTune != nil ||
 		req.frontEndRequested() || req.noiseRequested() ||
-		req.Antenna != nil || req.RXAntenna != nil
+		req.Antenna != nil || req.RXAntenna != nil ||
+		req.txAudioRequested()
 
 	// Before everything, because it changes what "the radio" is: after an
 	// exchange the receiver every command below addresses is on a different
@@ -1672,6 +1753,13 @@ func (s *Session) ApplyPatch(ctx context.Context, req PatchRequest) (radio.State
 		return s.State(), err
 	}
 	if err := s.applyNoise(ctx, req); err != nil {
+		return s.State(), err
+	}
+	// The transmit audio chain, before PTT for the same reason as everything
+	// above it: setting the gain the transmitter will use is part of preparing
+	// to transmit, and doing it after the carrier is up would put the first
+	// moment of the over out at whatever the previous setting was.
+	if err := s.applyTXAudio(ctx, req); err != nil {
 		return s.State(), err
 	}
 	// Break-in before PTT and before anything that might key: a request that
