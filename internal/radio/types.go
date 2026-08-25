@@ -647,19 +647,30 @@ type State struct {
 	// The transmit audio chain: how loud the audio going into the modulator is,
 	// and whether the speech processor is squeezing it.
 	//
-	// TXAudioGain is the gain on whatever input the radio is currently taking
-	// transmit audio from, and is NOT specifically the microphone socket
-	// despite every manufacturer naming it after one. Which connector feeds the
-	// modulator — mic, USB, ACC, LAN — is a menu item on most of these radios
-	// (menu 069 on a TS-590S), and remoses does not read it on any of them, so
-	// this is honestly "the transmit gain" and no more. A client that promises
-	// the operator it is adjusting the USB input may be adjusting the
-	// microphone.
+	// TXAudioGain is the gain the radio's own gain command reads and writes,
+	// and it is NOT specifically the microphone socket despite every
+	// manufacturer naming it after one.
 	//
-	// Not every radio hides it: a TS-890S and TS-990S answer MS, a live
-	// selector for the transmission audio route. remoses does not model that
-	// yet either, so the caveat above holds for every radio here — but it is a
-	// choice rather than a limit of the protocols.
+	// The caveat is sharper than "remoses does not know which connector this
+	// belongs to", which was the first version of this comment and is too kind
+	// on the newer sets. On several radios the gain is not one setting applied
+	// to a routed input at all: the rig holds SEVERAL AT ONCE and the reference
+	// does not say which one the command reaches. An FT-710 has MIC GAIN
+	// alongside per-mode USB MOD GAIN and REAR MOD GAIN; an FT-891 has eight
+	// per-mode gains; an FTdx1200 and FTdx3000 each keep a separate DATA MIC
+	// GAIN with its own "follow the front-panel knob" value. So on an FT-710
+	// running a USB digital mode, this may be moving a control that is not in
+	// circuit, and no manual read for this project resolves it.
+	//
+	// Which connector feeds the modulator is a menu item on most of these
+	// radios (menu 069 on a TS-590S) and remoses reads it on none of them. Not
+	// every radio hides it — a TS-890S and TS-990S answer MS, a live selector
+	// for the transmission audio route — so the gap is a choice rather than a
+	// limit of the protocols.
+	//
+	// A client should therefore label this "transmit gain", offer it as the
+	// control the radio offers, and promise nothing about which audio path it
+	// lands on.
 	//
 	// Percentages for the same reason RFGain is one: 0-255 on Icom, 0-100 on
 	// Kenwood.

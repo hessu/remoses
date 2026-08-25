@@ -132,18 +132,26 @@ reports a true ratio, so that one arrives calibrated.
 `PATCH` as everything else, gated by `caps.tx_audio_gain_control`,
 `caps.proc_control` and `caps.proc_level_control`.
 
-**`tx_audio_gain` is the gain into the modulator, not the microphone socket.** Every
-manufacturer names the control after a microphone, and on a rig being worked
-over USB it is very often not the microphone that it adjusts. Which connector
-feeds transmit audio — mic, USB, ACC, LAN — is a menu item on most of these
-radios, and remoses reads it on none of them, so the field is honestly "the
-transmit gain" and no more. A client that labels it "USB input gain" is making a
-promise the protocol does not support.
+**`tx_audio_gain` is the gain the radio's own gain command reaches, not the
+microphone socket.** Every manufacturer names the control after a microphone,
+and on a rig being worked over USB it is very often not the microphone that it
+adjusts. Which connector feeds transmit audio — mic, USB, ACC, LAN — is a menu
+item on most of these radios and remoses reads it on none of them, so a client
+labelling this "USB input gain" is making a promise the protocol does not
+support.
 
-A TS-890S and TS-990S are the exception worth knowing about: they answer `MS`, a
-live selector for the transmission audio route. remoses does not model it yet,
-so the caveat above still applies to every radio — but on those two it is a
-choice rather than a limitation.
+**On the newer Yaesus it is sharper than unknown routing: the radio holds
+several gains at once.** An FT-710 has MIC GAIN alongside per-mode `USB MOD
+GAIN` and `REAR MOD GAIN`; an FT-891 has eight per-mode gains; the FTdx1200 and
+FTdx3000 each keep a separate `DATA MIC GAIN`. Which of them `MG` writes is not
+stated in any of their manuals. So on an FT-710 running a USB digital mode, this
+control may be moving something that is not in circuit — worth knowing before
+you reach for it to fix your audio.
+
+A TS-890S and TS-990S are the other side of it: they answer `MS`, a live
+selector for the transmission audio route. remoses does not model it yet, so
+the caveat applies to every radio — but on those two it is a choice rather than
+a limitation.
 
 It is a percentage, for the same reason `rf_gain` is: the counts underneath are
 0-255 on Icom and 0-100 on Kenwood, and a number that means a different thing on

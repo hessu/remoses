@@ -785,9 +785,9 @@ type Caps struct {
 
 	// TXAudioGainControl remoses can read and set the transmit audio gain, as a percentage.
 	//
-	// It says nothing about which connector that gain belongs to: the
-	// input selection is not read on any radio, and on most of them it is
-	// a menu item rather than a command.
+	// It says nothing about which connector that gain belongs to, nor —
+	// on radios that hold several gains at once — about which of them the
+	// command reaches. See the state field.
 	TXAudioGainControl bool `json:"tx_audio_gain_control"`
 
 	// VFOAddressing What `state.vfo_a` and `state.vfo_b` name. Absent on a radio with a
@@ -1271,12 +1271,20 @@ type State struct {
 	// that means a different thing on two radios is a number a client
 	// cannot draw.
 	//
-	// It is the gain on whatever input the radio is currently taking
-	// transmit audio from, NOT specifically the microphone socket. Which
-	// input that is, remoses does not read on any radio — on most of them
-	// it is a menu item rather than a command — so a client showing this
-	// beside a USB-connected rig should say "transmit gain" rather than
-	// promise which connector it belongs to.
+	// It is the gain the radio's own gain command reads and writes, NOT
+	// specifically the microphone socket.
+	//
+	// The caveat is sharper than "remoses does not know which connector
+	// this belongs to". On several radios the gain is not one setting
+	// applied to a routed input at all — the rig holds SEVERAL AT ONCE
+	// and the reference does not say which one the command reaches. An
+	// FT-710 has MIC GAIN alongside per-mode USB MOD GAIN and REAR MOD
+	// GAIN; an FT-891 has eight per-mode gains. So on an FT-710 running a
+	// USB digital mode this may be moving a control that is not in
+	// circuit.
+	//
+	// Label it "transmit gain", offer it as the control the radio offers,
+	// and promise nothing about which audio path it lands on.
 	TXAudioGain *float64  `json:"tx_audio_gain,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at"`
 
@@ -1654,12 +1662,20 @@ type StateFields struct {
 	// that means a different thing on two radios is a number a client
 	// cannot draw.
 	//
-	// It is the gain on whatever input the radio is currently taking
-	// transmit audio from, NOT specifically the microphone socket. Which
-	// input that is, remoses does not read on any radio — on most of them
-	// it is a menu item rather than a command — so a client showing this
-	// beside a USB-connected rig should say "transmit gain" rather than
-	// promise which connector it belongs to.
+	// It is the gain the radio's own gain command reads and writes, NOT
+	// specifically the microphone socket.
+	//
+	// The caveat is sharper than "remoses does not know which connector
+	// this belongs to". On several radios the gain is not one setting
+	// applied to a routed input at all — the rig holds SEVERAL AT ONCE
+	// and the reference does not say which one the command reaches. An
+	// FT-710 has MIC GAIN alongside per-mode USB MOD GAIN and REAR MOD
+	// GAIN; an FT-891 has eight per-mode gains. So on an FT-710 running a
+	// USB digital mode this may be moving a control that is not in
+	// circuit.
+	//
+	// Label it "transmit gain", offer it as the control the radio offers,
+	// and promise nothing about which audio path it lands on.
 	TXAudioGain *float64   `json:"tx_audio_gain,omitempty"`
 	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 

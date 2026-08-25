@@ -367,11 +367,15 @@ type AntennaSelector interface {
 //
 // What this interface deliberately does NOT model is which connector the audio
 // comes from. On most of these radios it is a menu item rather than a live
-// command — a TS-590S keeps it in menu 069 — and a "mic gain" written while the
-// radio is taking audio from USB adjusts the USB input on some models and the
-// microphone on others. Naming the gain after the socket would be a promise
-// remoses cannot keep, so the field is the transmit gain and no more. See
-// radio.State.MicGain.
+// command — a TS-590S keeps it in menu 069 — so naming the gain after the
+// socket would be a promise remoses cannot keep.
+//
+// On the newer Yaesus it is worse than unknown routing: the rig holds SEVERAL
+// GAINS AT ONCE. An FT-710 has MIC GAIN beside per-mode USB MOD GAIN and REAR
+// MOD GAIN, an FT-891 has eight per-mode gains, and no manual read for this
+// project says which of them the gain command reaches. A backend implementing
+// this sends the command its own reference documents and claims nothing beyond
+// that. See radio.State.TXAudioGain.
 //
 // It is not universally a menu, though, and that is worth knowing before the
 // selection is modelled: the TS-890S and TS-990S carry MS, a live readable and
