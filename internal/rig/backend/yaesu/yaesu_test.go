@@ -136,12 +136,12 @@ func TestInitPerModel(t *testing.T) {
 	// The order is load-bearing at the end: MD0; settles the mode and NA0; the
 	// narrow setting, and neither SH; answer means anything without both.
 	want := []string{"AI1;", "ID;", "FA;", "MD0;", "PC;", "TX;", "NA0;", "SH0;"}
-	// The FTdx9000 has no ID and no NA command, and no bandwidth table for SH
-	// to index, so three of the eight are simply not sent. Asking anyway would
-	// cost a full per-command timeout each — and the ID; read would then fail
-	// the connect outright. AI it does have, so push updates are enabled there
-	// like everywhere else.
-	wantFTdx9000 := []string{"AI1;", "FA;", "MD0;", "PC;", "TX;"}
+	// The FTdx9000 has no AI, no ID and no NA command, and no bandwidth table
+	// for SH to index, so four of the eight are simply not sent. Asking anyway
+	// would cost a full per-command timeout each — and the ID; read would then
+	// fail the connect outright. With no AI there is nothing to enable either:
+	// that radio is the one profiled model that is poll-only.
+	wantFTdx9000 := []string{"FA;", "MD0;", "PC;", "TX;"}
 
 	for _, name := range ModelNames() {
 		t.Run(name, func(t *testing.T) {
@@ -180,32 +180,50 @@ func TestInitAutoInformationOff(t *testing.T) {
 	}
 }
 
-// TestInitFTdx9000UsesAIButNotIDOrNA covers that radio's capability list where
-// it differs from the family: it takes AI, so it pushes changes and is not
-// poll-only, and it has neither ID nor NA, so neither may ever reach the wire —
-// a Yaesu answers a command it does not implement with silence, and the ID;
-// read would fail the connect after a full per-command timeout.
-func TestInitFTdx9000UsesAIButNotIDOrNA(t *testing.T) {
-	for _, tt := range []struct {
-		ai   bool
-		want string
-	}{
-		{true, "AI1;"},
-		{false, "AI0;"},
-	} {
+// TestInitFTdx9000IsPollOnly covers that radio's Init where it differs from the
+// family: no AI, no ID and no NA, so none of the three may ever reach the wire.
+// A Yaesu answers a command it does not implement with silence, so each would
+// cost the session's full per-command timeout, and the ID; read would fail the
+// connect outright.
+//
+// The AI half is the one an operator feels. Its command list has no AI row and,
+// alone among the twelve documents, no AI column either — that column is how the
+// other manuals mark which commands report themselves unasked. So this is the
+// one profiled radio that is poll-only, and `yaesu.auto_information` in the
+// configuration is simply inert on it rather than being obeyed with AI0;.
+func TestInitFTdx9000IsPollOnly(t *testing.T) {
+	for _, ai := range []bool{true, false} {
 		y := newModelRig(t, "ftdx9000")
-		y.ai = tt.ai
+		y.ai = ai
 		c := newTestConn(t, y, answersFor(y.profile))
 		if err := y.Init(context.Background(), c); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
-		if len(c.sent) == 0 || c.sent[0] != tt.want {
-			t.Errorf("Init(ai=%v) sent %q, want %q first", tt.ai, c.sent, tt.want)
+		if len(c.sent) == 0 || c.sent[0] != reqFA {
+			t.Errorf("Init(ai=%v) sent %q, want %q first — FA; is this radio's link check",
+				ai, c.sent, reqFA)
 		}
 		for _, req := range c.sent {
-			if strings.HasPrefix(req, "ID") || strings.HasPrefix(req, "NA") {
-				t.Errorf("Init(ai=%v) sent %q; the FTdx9000 has no such command", tt.ai, req)
+			for _, absent := range []string{"AI", "ID", "NA"} {
+				if strings.HasPrefix(req, absent) {
+					t.Errorf("Init(ai=%v) sent %q; the FTdx9000 has no %s command",
+						ai, req, absent)
+				}
 			}
+		}
+	}
+	// Every other model does write AI, in whichever direction was configured.
+	for _, name := range ModelNames() {
+		if name == "ftdx9000" {
+			continue
+		}
+		y := newModelRig(t, name)
+		c := newTestConn(t, y, answersFor(y.profile))
+		if err := y.Init(context.Background(), c); err != nil {
+			t.Fatalf("%s: Init: %v", name, err)
+		}
+		if len(c.sent) == 0 || c.sent[0] != "AI1;" {
+			t.Errorf("%s: Init sent %q, want AI1; first", name, c.sent)
 		}
 	}
 }
@@ -716,17 +734,24 @@ func TestPollSlowFTdx9000(t *testing.T) {
 		if err := y.Poll(context.Background(), c, backend.PollSlow); err != nil {
 			t.Fatalf("Poll: %v", err)
 		}
-		// No RA0; and no AN0;: the FTdx9000's command list has neither an
-		// attenuator row nor an antenna one, where the FTdx101 has both. Its
-		// preamp, RF gain, AGC and the whole noise group are present.
+		// No RA0;: the FTdx9000's command list has no attenuator row. No AC;
+		// either — its antenna tuner command is one parameter with no "Tuner ON"
+		// value and an answering 0 that means either off or engaged-and-idle, so
+		// there is nothing to publish from it. Its preamp, RF gain, AGC and the
+		// whole noise group are present, and it DOES have an antenna: four
+		// sockets plus an ANT RX, which this file used to say it had none of.
+		//
+		// One BP; rather than BP00; and BP01;, because this radio's manual notch
+		// carries its switch and its position in one three-digit parameter with
+		// no sub-command selector.
 		//
 		// And MG; and PL; but no PR of either spelling. This radio's PR entry
 		// spells the command PC in all three of its rows, so the switch is the
 		// one part of the transmit audio chain remoses will not ask it about —
 		// while the gain and the level, whose rows are clean, are read as
 		// usual. See ProcNone.
-		c.wantSent(t, "PC;", "AC;", "PA0;", "RG0;", "GT0;",
-			"NB0;", "NL0;", "NR0;", "RL0;", "BP00;", "BP01;", "BC0;",
+		c.wantSent(t, "PC;", "PA0;", "RG0;", "GT0;",
+			"NB0;", "NL0;", "NR0;", "RL0;", "BP;", "BC0;", "AN0;",
 			"MG;", "PL;")
 	}
 }

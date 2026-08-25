@@ -185,6 +185,13 @@ type Rig struct {
 	// pcHead is the FTX-1's PC head selector as last reported: 1 the field
 	// head, 2 the SPA-1 amplifier. Zero until PC; has been read.
 	pcHead atomic.Uint32
+	// notchPos is the last manual notch position the rig reported or was asked
+	// for, in tens of Hz, and zero until one is known. It exists for the
+	// FTdx9000 alone: that radio's BP carries the notch switch and the notch
+	// position in one parameter, so "switch the notch in" has to name a
+	// frequency, and the only frequency remoses is entitled to name is the one
+	// the radio last said it was using. See setNotchCombined.
+	notchPos atomic.Uint32
 	// id is the numeric ID; answer, e.g. 670 for an FT-991A. See ModelForID.
 	id atomic.Uint32
 }
@@ -262,21 +269,27 @@ func (y *Rig) Caps() radio.Caps {
 		// fields say so — MaxPowerW is left unset rather than filled in with
 		// the nameplate rating, which would invite a client to read the index
 		// as watts.
-		// TX and PC are family-wide here, and so is RM: it is in every command
-		// list read for this backend, with the same meter numbers in both
-		// generations.
+		// TX and PC are family-wide here. RM is not: it is in eleven of the
+		// twelve command lists with the same meter numbers in both generations,
+		// and absent from the FTdx9000's altogether. That radio's SM reads the
+		// S-meter and nothing else, and it has no MS either, so there is no
+		// second way in — three false flags rather than three bars that would
+		// never move. See Model.HasMeters.
 		PTTControl:   true,
 		PowerControl: true,
-		PowerMeter:   true,
-		SWRMeter:     true,
-		ALCMeter:     true,
-		// AC is in every command list read for this backend. Starting a cycle
-		// needs the per-generation parameter, so it is offered only where that
-		// has been transcribed.
-		TunerControl: true,
-		TunerTune:    y.profile.TunerTuneParam != 0,
-		// PS is in every command list read for this backend, both generations.
-		PowerSwitch: true,
+		PowerMeter:   y.profile.HasMeters,
+		SWRMeter:     y.profile.HasMeters,
+		ALCMeter:     y.profile.HasMeters,
+		// AC is in every command list read for this backend, but the FTdx9000's
+		// is one parameter with no "Tuner ON" value in it, so both halves of the
+		// tuner are declined there. Starting a cycle also needs the
+		// per-generation parameter, so it is offered only where that has been
+		// transcribed.
+		TunerControl: y.profile.HasTuner,
+		TunerTune:    y.profile.HasTuner && y.profile.TunerTuneParam != 0,
+		// PS is in eleven of the twelve command lists; the FTdx9000 has no row
+		// for it, so that radio cannot be switched on or off over CAT at all.
+		PowerSwitch: y.profile.HasPowerSwitch,
 		// The receive front end, per model: the FT-891 has one preamplifier
 		// where the family has two, three radios have a single pad where the
 		// family has three steps, and the FTdx9000 has no attenuator at all.
@@ -285,19 +298,31 @@ func (y *Rig) Caps() radio.Caps {
 		RFGainControl: y.profile.RFGain,
 		AGCSettings:   agcSettings(y.profile.AGC),
 
-		// The noise processing and the notches. One blanker and one reducer,
-		// and the two notches are separate commands — BP and BC — so they can
-		// both be on and NotchExclusive stays false.
-		NoiseBlankerLevels:   boolCount(y.profile.NoiseBlanker),
-		NBLevelControl:       y.profile.NoiseBlanker,
-		NoiseReductionLevels: boolCount(y.profile.NoiseReduction),
-		NRLevelControl:       y.profile.NoiseReduction,
+		// The noise processing and the notches, and the counts are per model in
+		// both directions. The FT-950 generation's NB has a second circuit —
+		// "2: Noise Blanker (Wide) "ON"" — where the FTdx101 generation has one,
+		// and the FTX-1 has no NB and no NR command at all, only their levels,
+		// so it reports no switch and two working sliders.
+		//
+		// The two notches are separate commands — BP and BC — so they can both
+		// be on and NotchExclusive stays false.
+		NoiseBlankerLevels:   y.profile.NBCircuits,
+		NBLevelControl:       y.profile.NBLevelMax > 0,
+		NoiseReductionLevels: y.profile.NRCircuits,
+		NRLevelControl:       y.profile.NRLevelMax > 0,
 		NotchControl:         y.profile.Notch,
 		NotchFreqControl:     y.profile.Notch,
 		AutoNotchControl:     y.profile.AutoNotch,
-		// No notch width and no receive antenna: neither has a row in any
-		// command list read for this backend.
-		Antennas: y.profile.Antennas,
+		// No notch width: no command list read for this backend has one.
+		//
+		// Antennas counts TRANSMIT sockets, and six models have them — two on
+		// the FT-950 and FTdx1200, three on the FTdx3000 and FTdx101D/MP, four
+		// on the FTdx5000 and FTdx9000. RXAntennaControl is false on all twelve
+		// even though two of them report a receive antenna, because neither
+		// manual gives a value that switches one out; the reading is published
+		// and the switch is not. See SetRXAntenna, which says so per model.
+		Antennas:         y.profile.Antennas,
+		RXAntennaControl: false,
 
 		// The transmit audio chain: MG, PR and PL. Every profiled model has all
 		// three commands and the twelve manuals disagree about two of them, so
@@ -353,11 +378,14 @@ type read struct {
 // notes it reverts to off when the transceiver is switched off — so it does not
 // permanently alter the operator's settings.
 //
-// Two of the reads are conditional, and both are the FTdx9000, which has no ID
-// and no NA. Skipping them is not an optimisation: a Yaesu answers a command it
-// does not implement with silence, so ID; there would burn the session's full
-// per-command timeout and then fail the connect. That radio's link check is
-// FA; instead, which every model has.
+// AI itself is conditional, and so are two of the reads, and all three are the
+// FTdx9000: its command list has no AI, no ID and no NA row. Skipping them is
+// not an optimisation. A Yaesu answers a command it does not implement with
+// silence, so ID; there would burn the session's full per-command timeout and
+// then fail the connect, and AI0;/AI1; would be a write to a command that does
+// not exist. That radio's link check is FA; instead, which every model has, and
+// it is the one profiled radio that is poll-only: with no AI there is nothing
+// to enable, so every reading arrives on a poll tick and none arrives between.
 //
 // The order matters at the end: MD0; settles the mode and its DATA flag and
 // NA0; the narrow setting, and SH; cannot be turned into a bandwidth in Hz
@@ -474,7 +502,7 @@ func (y *Rig) pollFast(ctx context.Context, c backend.Conn) error {
 	// A tuning cycle lasts a second or two, so while one runs it belongs here
 	// rather than on the slow tier, where a whole cycle could pass between two
 	// reads. It drops back by itself once the cycle ends.
-	if y.Tuner() == radio.TunerTuning {
+	if y.profile.HasTuner && y.Tuner() == radio.TunerTuning {
 		reads = append(reads, read{reqAC, keyAC})
 	}
 	for _, r := range reads {
@@ -490,7 +518,13 @@ func (y *Rig) pollSlow(ctx context.Context, c backend.Conn) error {
 	// is read against on the FT-991A, FT-891 and the whole FT-950 generation.
 	// The FTdx9000 has no NA command, and no bandwidth table for it to choose a
 	// column of either.
-	reads := []read{{reqPC, keyPC}, {reqAC, keyAC}}
+	reads := []read{{reqPC, keyPC}}
+	// AC is skipped on the FTdx9000: its answer's 0 means either "tuner off" or
+	// "tuner engaged and not tuning", so there is nothing here that can be
+	// published from it. See Model.HasTuner.
+	if y.profile.HasTuner {
+		reads = append(reads, read{reqAC, keyAC})
+	}
 	if y.profile.HasNarrow {
 		reads = append(reads, read{reqNA, keyNA})
 	}

@@ -29,6 +29,24 @@ import (
 // a motor rather than a matching network, and whose P3 values mean different
 // things again; a station with one is not served by pretending it is the same
 // device.
+//
+// AND THE FTdx9000'S AC IS NOT THIS COMMAND. It is one parameter — "A C P1 ;",
+// read with a bare AC; — and its legend is "0: Tuner "OFF" or Tuning Stop
+// (While Tuner is engaged) / 1: Start Antenna Tuning (While Tuner is engaged) /
+// 2: Tuning has failed (Answer only)" (FTdx9000 Operating Manual, page 3).
+// There is no "Tuner ON" value anywhere in it. So there is nothing to send that
+// switches that radio's tuner into line, and — the half that decides it — a 0
+// in an answer means EITHER the tuner is off OR it is engaged and not tuning,
+// with nothing to say which. Publishing TunerOff for that would be a confident
+// wrong reading half the time, which is the failure DESIGN.md §5.4 puts above
+// every other consideration here.
+//
+// So on that one model the whole control is declined: Caps reports TunerControl
+// and TunerTune false, both setters refuse naming the radio, AC is not polled,
+// and its answer is not decoded. The three-parameter sets this file writes were
+// malformed there in any case — AC000; on a radio expecting AC0; — so what is
+// lost is a control that never worked, and what is gained is one fewer silent
+// read per slow tick. See Model.HasTuner.
 const (
 	acInternal = '0'
 	acFixed    = '0'
@@ -58,6 +76,9 @@ func (y *Rig) tunerFromAC(arg []byte) (radio.Tuner, bool) {
 
 // SetTuner switches the internal tuner in or out of line.
 func (y *Rig) SetTuner(ctx context.Context, c backend.Conn, on bool) error {
+	if err := y.tunerLegal(); err != nil {
+		return err
+	}
 	v := byte(acOff)
 	if on {
 		v = acOn
@@ -74,6 +95,9 @@ func (y *Rig) SetTuner(ctx context.Context, c backend.Conn, on bool) error {
 // It does not wait for the cycle to finish: the rig decides how long it takes
 // and reports it in the same field, which the poller follows.
 func (y *Rig) StartTune(ctx context.Context, c backend.Conn) error {
+	if err := y.tunerLegal(); err != nil {
+		return err
+	}
 	p := y.profile.TunerTuneParam
 	if p == 0 {
 		return fmt.Errorf("yaesu: no tuning-start parameter is recorded for the %s: %w",
@@ -84,6 +108,24 @@ func (y *Rig) StartTune(ctx context.Context, c backend.Conn) error {
 	}
 	_, err := do(ctx, c, reqAC, keyAC)
 	return err
+}
+
+// tunerLegal reports why this radio's tuner cannot be worked over CAT, or nil.
+//
+// One model, and the reason is in the file comment above: the FTdx9000's AC has
+// no value that means "tuner on" and an answer whose 0 conflates "off" with
+// "engaged and idle". Refusing here as well as in Caps is the second line of
+// defence the session's cap check already provides — worth having because a set
+// on this protocol is answered by silence, so a malformed one is indis-
+// tinguishable from a rig that is simply not listening.
+func (y *Rig) tunerLegal() error {
+	if y.profile.HasTuner {
+		return nil
+	}
+	return fmt.Errorf("yaesu: the %s's AC takes one parameter with no \"Tuner ON\" value in it — "+
+		"0 is off or tuning stop, 1 starts a cycle while the tuner is already engaged, 2 reports a "+
+		"failure — so remoses cannot switch its tuner in, and cannot tell an answering 0 from a "+
+		"tuner that is engaged and idle: %w", y.profile.Label, backend.ErrUnsupported)
 }
 
 // Tuner is the last reading, which the poller consults to decide whether a

@@ -128,7 +128,12 @@ func (y *Rig) SetAttenuator(ctx context.Context, c backend.Conn, db int) error {
 	return err
 }
 
-// SetRFGain sets the receiver RF gain, 0-100%.
+// SetRFGain sets the receiver RF gain, 0-100% of this radio's own count.
+//
+// The count comes from the profile because it is not the same on all twelve:
+// see Model.RFGainMax and the FT-891, whose RG is "000 - 030". A request for
+// full gain sent as RG0255; there would be an out-of-range parameter, which on
+// this protocol is answered with silence and a full per-command timeout.
 func (y *Rig) SetRFGain(ctx context.Context, c backend.Conn, pct float64) error {
 	if !y.profile.RFGain {
 		return fmt.Errorf("yaesu: the %s has no RF gain command: %w",
@@ -138,7 +143,7 @@ func (y *Rig) SetRFGain(ctx context.Context, c backend.Conn, pct float64) error 
 		return fmt.Errorf("yaesu: RF gain %.1f%% is outside 0-100%%: %w",
 			pct, backend.ErrUnsupported)
 	}
-	n := int(pct/100*rfGainMax + 0.5)
+	n := scaleTo(pct, 0, y.profile.RFGainMax)
 	if err := send(ctx, c, fmt.Sprintf("RG%c%03d;", mainRX, n)); err != nil {
 		return err
 	}
@@ -164,16 +169,29 @@ func (y *Rig) SetAGC(ctx context.Context, c backend.Conn, v radio.AGC) error {
 	return err
 }
 
-// rfGainMax is the top of the RG range, which is 000-255 on every profiled
-// model. Unlike Kenwood, Yaesu does not vary it across generations.
+// rfGainMax is the top of the RG range on eleven of the twelve models, and the
+// default the two builders in model.go start from. It is NOT a family constant:
+// the FT-891 counts to 30, which is why every read and write of RG goes through
+// Model.RFGainMax rather than through this.
 const rfGainMax = 255
 
 // decodePA reads the preamplifier answer: PA0<n>, the fixed 0 first.
+//
+// The FTdx5000 is the reason this is not a plain range check. Its PA has four
+// values — "0: IPO 1, 1: AMP 1, 2: AMP 2, 3: IPO 2" — and the fourth is a
+// second bypass path rather than a third amplifier, so it is published as
+// preamp 0, which is exactly what is true of the amplifier. Dropping it, which
+// is what a check against Preamp does on its own, would leave the previous
+// reading standing in the cache for as long as the operator sat in IPO 2:
+// silently stale rather than merely absent. See Model.PreampIPO2.
 func (y *Rig) decodePA(u *backend.Update, arg []byte) {
 	if len(arg) < 2 {
 		return
 	}
 	n := int(arg[1] - '0')
+	if y.profile.PreampIPO2 && n == y.profile.Preamp+1 {
+		n = 0
+	}
 	if n < 0 || n > y.profile.Preamp {
 		return
 	}
@@ -190,7 +208,10 @@ func (y *Rig) decodeRA(u *backend.Update, arg []byte) {
 	}
 }
 
-// decodeRG reads the RF gain answer: RG0<nnn>.
+// decodeRG reads the RF gain answer: RG0<nnn>, against this model's own count.
+//
+// RG0030 is 11.8% on eleven of these radios and full gain on an FT-891, and
+// nothing in the frame says which — only the profile does.
 func (y *Rig) decodeRG(u *backend.Update, arg []byte) {
 	if len(arg) < 4 {
 		return
@@ -199,10 +220,7 @@ func (y *Rig) decodeRG(u *backend.Update, arg []byte) {
 	if err != nil {
 		return
 	}
-	pct := float64(n) / rfGainMax * 100
-	if pct > 100 {
-		pct = 100
-	}
+	pct := scaleFrom(n, 0, y.profile.RFGainMax)
 	u.Patch.RFGain = &pct
 }
 

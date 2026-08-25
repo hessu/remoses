@@ -132,8 +132,10 @@ func TestAttenuatorLadderPerModel(t *testing.T) {
 	}
 }
 
-// TestPreampCountPerModel: the FT-891 has one amplifier past IPO where the rest
-// of the family has two.
+// TestPreampCountPerModel: two amplifiers past IPO on most of the family, one
+// on the FT-891 ("0: IPO, 1: AMP") and one on the FTdx9000, whose PA is titled
+// IPO Status and reads "0: IPO "ON" (Pre-Amp Disable), 1: IPO "OFF" (Pre-Amp
+// Enable)" — the same two states named from the other end.
 func TestPreampCountPerModel(t *testing.T) {
 	for _, tt := range []struct {
 		model string
@@ -142,7 +144,8 @@ func TestPreampCountPerModel(t *testing.T) {
 		{"ft-891", 1},
 		{"ft-991a", 2},
 		{"ftdx101d", 2},
-		{"ftdx9000", 2},
+		{"ftdx5000", 2},
+		{"ftdx9000", 1},
 	} {
 		y := newModelRig(t, tt.model)
 		if got := y.Caps().PreampLevels; got != tt.want {
@@ -154,5 +157,88 @@ func TestPreampCountPerModel(t *testing.T) {
 	c := newTestConn(t, y, answersFor(y.profile))
 	if err := y.SetPreamp(context.Background(), c, 2); err == nil {
 		t.Error("FT-891 accepted preamp 2, which its PA table does not list")
+	}
+	// So does the FTdx9000, whose PA has the same two values.
+	y = newModelRig(t, "ftdx9000")
+	c = newTestConn(t, y, answersFor(y.profile))
+	if err := y.SetPreamp(context.Background(), c, 2); err == nil {
+		t.Error("FTdx9000 accepted preamp 2; its PA is a two-value IPO Status")
+	}
+}
+
+// TestFTdx5000IPO2IsNotAThirdAmplifier. Its PA answers "0: IPO 1, 1: AMP 1, 2:
+// AMP 2, 3: IPO 2" — four values, of which two are bypass paths. A 3 means the
+// amplifier is out, so it publishes 0; discarding it, which is what a plain
+// range check does, would leave the previous reading standing in the cache for
+// as long as the operator sat in IPO 2.
+func TestFTdx5000IPO2IsNotAThirdAmplifier(t *testing.T) {
+	y := newModelRig(t, "ftdx5000")
+	for _, tt := range []struct {
+		answer string
+		want   int
+	}{
+		{"PA00", 0}, // IPO 1
+		{"PA01", 1}, // AMP 1
+		{"PA02", 2}, // AMP 2
+		{"PA03", 0}, // IPO 2 — a second bypass, not a third amplifier
+	} {
+		u := mustDecode(t, y, tt.answer)
+		if u.Patch.Preamp == nil {
+			t.Fatalf("%s published no preamplifier reading", tt.answer)
+		}
+		if got := *u.Patch.Preamp; got != tt.want {
+			t.Errorf("%s decoded as preamp %d, want %d", tt.answer, got, tt.want)
+		}
+	}
+	// The count Caps publishes is still two: remoses never writes a 3, because
+	// the API has one "off" and no way to say which bypass a client is looking at.
+	if got := y.Caps().PreampLevels; got != 2 {
+		t.Errorf("ftdx5000 preamp_levels = %d, want 2", got)
+	}
+	c := newTestConn(t, y, answersFor(y.profile))
+	if err := y.SetPreamp(context.Background(), c, 3); err == nil {
+		t.Error("SetPreamp(3) was accepted; IPO 2 is not a preamplifier to select")
+	}
+	// And no other model decodes a 3, because no other manual has one.
+	for _, name := range []string{"ftdx101d", "ft-991a", "ft-950"} {
+		u := mustDecode(t, newModelRig(t, name), "PA03")
+		if u.Patch.Preamp != nil {
+			t.Errorf("%s decoded PA03 as preamp %d; its PA table stops at 2",
+				name, *u.Patch.Preamp)
+		}
+	}
+}
+
+// TestRFGainScaleIsPerModel. RG is "000 - 255" on eleven of the twelve and "000
+// - 030" on the FT-891, and the frames are identical — so RG0030 is 11.8% on an
+// FT-991A and full gain on an FT-891, and a request for full gain sent as
+// RG0255; to the FT-891 would be an out-of-range parameter answered with
+// silence and a full per-command timeout.
+func TestRFGainScaleIsPerModel(t *testing.T) {
+	for _, tt := range []struct {
+		model string
+		set   string
+		read  string
+		pct   float64
+	}{
+		{"ft-891", "RG0030;", "RG0030", 100},
+		{"ft-991a", "RG0255;", "RG0030", 100.0 * 30 / 255},
+		{"ftdx9000", "RG0255;", "RG0255", 100},
+	} {
+		y := newModelRig(t, tt.model)
+		c := newTestConn(t, y, answersFor(y.profile))
+		if err := y.SetRFGain(context.Background(), c, 100); err != nil {
+			t.Fatalf("%s: SetRFGain(100): %v", tt.model, err)
+		}
+		if c.sent[0] != tt.set {
+			t.Errorf("%s: SetRFGain(100) sent %q, want %q", tt.model, c.sent[0], tt.set)
+		}
+		u := mustDecode(t, y, tt.read)
+		if u.Patch.RFGain == nil {
+			t.Fatalf("%s: %s published no RF gain", tt.model, tt.read)
+		}
+		if got := *u.Patch.RFGain; got < tt.pct-0.1 || got > tt.pct+0.1 {
+			t.Errorf("%s: %s decoded as %.1f%%, want %.1f%%", tt.model, tt.read, got, tt.pct)
+		}
 	}
 }

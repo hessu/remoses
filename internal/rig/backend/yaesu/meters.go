@@ -10,10 +10,19 @@ import (
 // The transmit meters, all on one command: RM, READ METER, whose parameter
 // picks which meter to read.
 //
-// RM appears in the command list of every Yaesu reference read for this
-// backend, both generations of it, and the parameter table is the same in each:
-// the FT-950's and the FT-710's agree meter for meter. That is why this is
-// family-wide rather than per model, unlike most of what this backend records.
+// RM appears in eleven of the twelve command lists read for this backend, both
+// generations of it, and the parameter table is the same in each: the FT-950's,
+// the FT-710's and the FTX-1's agree meter for meter on the three remoses
+// publishes. That is why the numbering below is family-wide rather than per
+// model, unlike most of what this backend records.
+//
+// WHAT IS PER MODEL IS WHETHER THE COMMAND EXISTS. The FTdx9000's list (page 2)
+// has no RM row at all, and no MS either — so there is no READ METER and no
+// front-panel meter selector to follow instead, and its SM reads the S-meter and
+// nothing else. On that radio Caps reports PowerMeter, SWRMeter and ALCMeter
+// false and this file sends nothing: three reads a tick, each answered with
+// silence and each costing the session's full per-command timeout, in exchange
+// for three bars that would never move. See Model.HasMeters.
 //
 // The answer is not quite the same on both, and the difference is silent rather
 // than an error: the older generation answers RM<meter><nnn>; and the newer
@@ -77,7 +86,7 @@ func (y *Rig) decodeRM(u *backend.Update, arg []byte) {
 // is per model — a TS-590S does and an IC-7610 does not — so the rig's own PTT
 // is followed rather than second-guessed. See radio.State.Apply.
 func (y *Rig) txMeterReads() []read {
-	if !y.transmitting.Load() {
+	if !y.profile.HasMeters || !y.transmitting.Load() {
 		return nil
 	}
 	return []read{

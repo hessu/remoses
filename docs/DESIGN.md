@@ -1197,19 +1197,37 @@ needed for twelve radios; the FTdx1200 and FTdx3000 share one to the digit, and 
 differs from theirs in three places, one of which is an index its manual prints `- - - -` and
 defines for no width at all.
 
-**The FTdx9000 is missing three things the rest of the family has**, and they are capability gaps
-worth stating plainly rather than implementation gaps:
+**The FTdx9000 is the outlier of the family, and by a wider margin than it first appeared.**
+These are capability gaps worth stating plainly rather than implementation gaps. On a protocol
+with no error response an unimplemented command answers with silence, so every one of these
+would have cost the session's full per-command timeout and then reported nothing:
 
 - **No `ID`.** Its command list has no row for it, so there is no identity cross-check to make
-  on that radio at all. remoses does not send it: on a protocol with no error response an
-  unimplemented command answers with silence, so asking would burn the session's full
-  per-command timeout and then fail the connect. `FA;` is its link check instead.
+  on that radio at all. `FA;` is its link check instead.
 - **No `NA`.** Nothing is lost, because it also has no bandwidth table for `NA` to choose a
   column of.
+- **No `AI`** — and, uniquely among the twelve documents, its command list has no *AI column*
+  either, which is the column the other manuals use to mark the self-reporting commands. It is
+  the family's one poll-only radio: nothing is pushed, so nothing is written to ask for pushes.
+- **No `RM`, `PS` or `RA`.** So no transmit meters, no power switch and no attenuator:
+  `power_meter`, `swr_meter`, `alc_meter` and `power_switch` are all false there, and `PowerOn`
+  and `PowerOff` refuse naming the model.
 - **`SH` is not a bandwidth.** Its parameter is the position of the WIDTH knob — `00` fully
   anticlockwise to `31` fully clockwise, `16` centred — and no table in the manual converts that
   to Hz. `filter_width` is false there and `SetFilterWidth` refuses, rather than sending a number
   that would move the knob to an arbitrary place.
+- **`AC` has no "tuner on" value at all.** It is one parameter — `0` off or tuning stopped, `1`
+  start tuning, `2` tuning failed, answer only — so a `0` coming back means *either* switched out
+  *or* engaged and idle, two states remoses cannot tell apart. `tuner_control` and `tuner_tune`
+  are false, `AC` is not polled, and its answer is not decoded.
+- **`BP` has neither a receiver selector nor a sub-command selector**, where the rest of the
+  family has both: one bare `BP;` reads it, and the same answer carries the notch's switch and
+  its position together. `000` is the manual notch switched out and `001`-`300` is the frequency.
+  Because there is no separate "switch on" to send there, `SetNotch(true)` writes back the last
+  position the radio itself reported, and refuses when none is known.
+
+Its `PA` is a two-value IPO status rather than the family's three, so it has one amplifier, and
+`PA02;` was out of range on it.
 
 Its `TX` answer also has a fourth value the others lack, `3`, for keyed at the rig and by CAT at
 once. It decodes as transmitting, like `1` and `2`.

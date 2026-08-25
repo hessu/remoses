@@ -29,9 +29,17 @@ import (
 //   - The FTX-1's PC carries a head selector, so the plain three-digit form is
 //     malformed there — and on the FTdx5000 and FTdx9000 the three digits are
 //     an uncalibrated 000-255 index rather than watts.
-//   - The FTdx9000 has no ID and no NA command at all, so two reads the rest of
-//     the family makes unconditionally would cost it a full per-command timeout
-//     each.
+//   - The FTdx9000's command list is the shortest here by a wide margin: no AI,
+//     ID, NA, RM, PS or RA at all, so six reads the rest of the family makes
+//     unconditionally would cost it a full per-command timeout each. Its BP is
+//     a different shape from everyone else's too.
+//   - The FTX-1's list has no NB and no NR, only their levels, so on that one
+//     radio the level command carries the switch.
+//   - The ranges of the level commands are per model even where the frames
+//     agree. NL counts to 010, 100 or 255; RG to 255 or 030; BP's notch
+//     position to 300, 320 or 400. A percentage taken against the wrong ceiling
+//     is a confidently wrong number, which is the failure DESIGN.md §5.4 puts
+//     above every other consideration here.
 //
 // What is deliberately NOT per-model:
 //
@@ -53,55 +61,181 @@ type Model struct {
 	// HasID, which is the flag that decides whether the command is sent.
 	IDs []int
 
-	// HasID and HasNarrow are the two commands the FTdx9000 does not have. They
-	// are recorded rather than probed because a Yaesu answers a command it does
-	// not implement with silence, so asking costs the session's full
-	// per-command timeout and returns nothing.
+	// The commands a profiled radio may simply not have. They are recorded
+	// rather than probed because a Yaesu answers a command it does not implement
+	// with silence, so asking costs the session's full per-command timeout and
+	// returns nothing at all.
 	//
-	// Missing ID means there is no identity cross-check to make on that radio.
-	// Missing NA means nothing here, since the same radio has no bandwidth
-	// table for NA to choose a column of.
+	// Every one of these is false on the FTdx9000 and true everywhere else, and
+	// that is not a coincidence: the FTdx9000 Operating Manual's Control Command
+	// List (page 2) is much shorter than any other reference read for this
+	// backend. It has no AI row — and, alone among these documents, no AI column
+	// in the list either — no ID, no NA, no RM, no PS and no RA, nor EX, MS, RS
+	// or BI. Only the ones this backend would otherwise send have a field.
 	//
-	// HasAI is true on every profiled model, the FTdx9000 included, so no radio
-	// here is poll-only. It stays a per-model field rather than becoming a
-	// constant because push updates are the one capability an operator feels
-	// directly, and a model that lacked AI would have to be able to say so.
-	HasID     bool
-	HasAI     bool
-	HasNarrow bool
+	//   - HasAI false makes that radio poll-only, and it is worth being explicit
+	//     because push updates are the one capability an operator feels directly.
+	//     Init writes no AI on it, since AI0; and AI1; are equally unknown there.
+	//   - HasID false means there is no identity to cross-check the
+	//     configuration against, so FA; is the link check at Init instead.
+	//   - HasNarrow false costs nothing beyond the read, since the same radio has
+	//     no bandwidth table for NA to choose a column of.
+	//   - HasMeters false is why Caps reports no power, SWR or ALC meter there.
+	//     RM (READ METER) is the only command any of these radios has for them,
+	//     and the FTdx9000's SM reads the S-meter and nothing else; MS, the
+	//     front-panel meter selector, is absent too, so there is nothing to
+	//     follow instead.
+	//   - HasPowerSwitch false is why PowerOn and PowerOff refuse there. A
+	//     station that wants that radio woken remotely needs a switched outlet.
+	//
+	// The attenuator is recorded the same way, as an empty Attenuator, and the
+	// tuner as HasTuner — see those fields.
+	HasID          bool
+	HasAI          bool
+	HasNarrow      bool
+	HasMeters      bool
+	HasPowerSwitch bool
+
+	// HasTuner is whether AC has the three-parameter shape this backend drives:
+	// "AC P1 P2 P3 ;" with P3 carrying off, on and tuning start.
+	//
+	// False on the FTdx9000 alone, and not because that radio lacks a tuner or
+	// an AC command. Its AC is one parameter — "A C P1 ;" — and P1's legend is
+	// "0: Tuner "OFF" or Tuning Stop (While Tuner is engaged) / 1: Start Antenna
+	// Tuning (While Tuner is engaged) / 2: Tuning has failed (Answer only)"
+	// (FTdx9000 Operating Manual, page 3). There is no "Tuner ON" value at all,
+	// which is the problem: nothing in that legend switches the tuner into line,
+	// and a 0 in an answer means either "tuner off" OR "tuner engaged and not
+	// tuning" without saying which. Publishing TunerOff for it would be a
+	// confident wrong reading half the time, and there is no value to send for
+	// "in line", so the whole control is declined on that model and AC is not
+	// polled there. See tuner.go.
+	HasTuner bool
 
 	// The receive front end: PA the preamplifier (which Yaesu calls IPO when it
 	// is switched out), RA the attenuator, RG the RF gain, GT the AGC.
 	//
 	// Preamp is how many amplifiers PA offers past IPO: two nearly everywhere,
 	// one on the FT-891, whose parameter is "0: IPO, 1: AMP" with no second
-	// stage.
+	// stage, and one on the FTdx9000, whose PA is titled "IPO Status" and reads
+	// "0: IPO "ON" (Pre-Amp Disable), 1: IPO "OFF" (Pre-Amp Enable)" (FTdx9000
+	// Operating Manual, page 7). Same two states as the FT-891's, named from the
+	// other end.
 	Preamp int
+	// PreampIPO2 marks the FTdx5000, the one radio here whose PA answer carries a
+	// value that is not an amplifier at all. Its parameter is "0: IPO 1, 1: AMP
+	// 1, 2: AMP 2, 3: IPO 2" (FTdx5000 Series CAT Operation Reference, page 14):
+	// two amplifiers and TWO bypass paths, not three amplifiers.
+	//
+	// A 3 therefore decodes as preamp 0, which is what is true of the amplifier —
+	// it is out of circuit — rather than being discarded, which is what a plain
+	// range check does and which would leave a stale reading standing for as long
+	// as the operator sat in IPO 2. remoses never writes a 3: a request for 0
+	// writes IPO 1, because the API has one "off" and the manual gives no way to
+	// tell a client which bypass it is looking at.
+	PreampIPO2 bool
 	// Attenuator lists the RA steps in dB. Three on the FT-950 generation and
 	// the FTdx sets, which print "1: 6 dB, 2: 12 dB, 3: 18 dB"; one on the
 	// FT-891, FT-991A and FTX-1, whose RA is "0: OFF, 1: ON" with the depth
 	// unstated — see the registry entries for where that dB figure comes from.
 	// Empty on the FTdx9000, which has no RA command at all.
 	Attenuator []int
-	// AGC is the GT map. The same five settings across the family, and worth
-	// stating per model anyway because the FTdx9000 is the one radio here whose
-	// reference this backend has not read for it.
+	// AGC is the GT map, and it really is the same five settable values across
+	// the family, the FTdx9000's included ("P2 0: AGC "OFF", 1: AGC "FAST", 2:
+	// AGC "MID", 3: AGC "SLOW", 4: AGC "AUTO"", page 5). It stays per model
+	// because it is the sort of table that has to be able to differ, and because
+	// the ANSWER side is not the same everywhere: the newer manuals also print 5
+	// and 6 for auto having settled on mid or slow, where the FTdx9000's legend
+	// stops at 4. agcReading accepts all seven on every model, which costs
+	// nothing — a value that radio never sends is a branch it never takes.
 	AGC map[radio.AGC]byte
-	// RFGain is true when RG reads and sets the receiver RF gain, 000-255.
-	RFGain bool
-
-	// The noise processing, the notches and the antenna. NoiseBlanker covers
-	// NB and its NL level together, NoiseReduction covers NR and RL, Notch is
-	// BP (which carries both the switch and the position) and AutoNotch is BC.
+	// RFGain is true when RG reads and sets the receiver RF gain, and RFGainMax
+	// is what its three digits count up to.
 	//
-	// Antennas is AN's socket count, and it is NOT family-wide: the FTdx101
-	// generation has "AN ANTENNA NUMBER" with three sockets, and the FT-891's
-	// command list has no AN row at all.
-	NoiseBlanker   bool
-	NoiseReduction bool
-	Notch          bool
-	AutoNotch      bool
-	Antennas       int
+	// 255 on eleven of the twelve — and 030 on the FT-891, whose RG prints "P2
+	// 000 - 030" (FT-891 CAT Operation Reference Book, page 15). That is not a
+	// misprint to be argued away: this family varies the full scale of PC, MG,
+	// PL and NL the same way, and reading an FT-891 sitting at full gain against
+	// 255 would publish 11.8%, while a request for 100% would go out as RG0255;
+	// — out of range, and answered with silence.
+	RFGain    bool
+	RFGainMax int
+
+	// The noise processing, the notches and the antenna, and almost nothing here
+	// is family-wide. Every count and every ceiling below is transcribed per
+	// model because the frames agree and the parameters do not.
+	//
+	// NBCircuits is how many blanker settings NB offers PAST off, and the count
+	// is not a strength: the whole FT-950 generation — FT-950, FTdx1200,
+	// FTdx3000, FTdx5000 and FTdx9000 — prints "0: Noise Blanker "OFF", 1: Noise
+	// Blanker "ON", 2: Noise Blanker (Wide) "ON"", where the FTdx101 generation
+	// stops at 1. The wide blanker is a second circuit for a longer pulse, the
+	// way a Kenwood's NB1 and NB2 are different algorithms, so it is published as
+	// a second level rather than being rejected on the way out and ignored on the
+	// way in — which is what left a rig in wide-blanker mode reading back as
+	// having no blanker at all.
+	//
+	// Zero on the FTX-1, whose command list (page 5) has no NB row: see
+	// NBLevelIsSwitch.
+	NBCircuits int
+	// NBLevelMin and NBLevelMax bound NL, and this is the widest numeric
+	// disagreement in the backend. 000-010 on the FTdx101 generation (FTdx10
+	// page 17, FTdx101 page 17, FT-710 page 17, FT-991A page 13, FT-891 page 13),
+	// 000-100 on the FTdx1200 and FTdx3000 (page 12 of each), and 000-255 on the
+	// FT-950 (page 12), FTdx5000 (page 13) and FTdx9000 (page 7). Against the
+	// wrong ceiling remoses could reach only the bottom 4% of an FT-950's
+	// blanker and would report the top of it as 4%.
+	NBLevelMin, NBLevelMax int
+	// NBLevelIsSwitch marks the FTX-1, where NL is the ONLY noise-blanker
+	// command there is. Its list has no NB, and its NL prints "P2 000: OFF /
+	// 001 - 010: (NB Level)" (FTX-1 CAT Operation Reference Manual, page 21). So
+	// on that radio the level carries the switch: 0% really is off, and the
+	// answer publishes the switch as well as the level. Sending it NB0; every
+	// slow poll, which is what a family-wide blanker flag did, bought a
+	// per-command timeout a tick and told nobody anything.
+	NBLevelIsSwitch bool
+
+	// NRCircuits, NRLevelMin and NRLevelMax are the same three facts about NR
+	// and RL. The reducer is plainer than the blanker: one circuit on ten
+	// models, and RL is "01 - 15" on all of them.
+	//
+	// The FTX-1 is the exception again and in both halves. It has no NR row
+	// either, and its RL prints "P2 00: "OFF", 01 -10" (page 23) — a shorter
+	// ladder than the rest of the family and, like its NL, an off value of its
+	// own. See NRLevelIsSwitch.
+	NRCircuits             int
+	NRLevelMin, NRLevelMax int
+	NRLevelIsSwitch        bool
+
+	// Notch is BP, which carries the manual notch's switch and its position on
+	// one command; NotchShape is how this radio spells that (see the type) and
+	// NotchFreqMax is the top of the position range in tens of Hz.
+	//
+	// NotchFreqMax is three different numbers and they do not follow the
+	// generation boundary: 300 on the FT-950 (page 5) and FTdx9000 (page 3), 320
+	// on the whole FTdx101 generation and the FT-991A and FT-891 (FTdx101 page 7,
+	// FTdx10 page 7, FT-710 page 7, FTX-1 page 7, FT-991A page 5, FT-891 page 5),
+	// and 400 on the FTdx1200, FTdx3000 and FTdx5000 (page 5 of each). So the
+	// notch tops out at 3000, 3200 or 4000 Hz, and 320 sent to an FT-950 is an
+	// out-of-range parameter answered with silence.
+	Notch        bool
+	NotchShape   NotchShape
+	NotchFreqMax int
+	// AutoNotch is BC, the one command in this group that is the same everywhere.
+	AutoNotch bool
+
+	// Antennas is how many TRANSMIT sockets AN selects between, and AntennaShape
+	// is how that radio's answer is laid out — see the type, which is where the
+	// receive antenna is dealt with.
+	//
+	// AN is not the FTdx101-only command this file used to claim. Six profiles
+	// have one: the FT-950 with two sockets (page 4), the FTdx1200 with two
+	// (page 4), the FTdx3000 with three (page 4), the FTdx5000 with four plus an
+	// ANT RX (page 4), the FTdx9000 with four plus an ANT RX (page 3) and the
+	// FTdx101D/MP with three (page 6). The FT-991A, FT-891, FT-710, FTdx10 and
+	// FTX-1 command lists genuinely have no AN row, checked in each index.
+	Antennas     int
+	AntennaShape AntennaShape
 
 	// The transmit audio chain: MG the gain into the modulator, PR the speech
 	// processor's switch and PL its level. Every one of these fields is
@@ -246,6 +380,69 @@ const (
 	FilterFixed
 )
 
+// NotchShape is how a model spells BP, the manual notch.
+//
+// One command carries two different controls on every radio here — the switch
+// and the position — and the two generations disagree about how to tell them
+// apart, which is the sort of difference that produces a malformed command
+// rather than a wrong answer. A malformed command on this protocol is answered
+// with silence and costs the session's whole per-command timeout.
+type NotchShape int
+
+const (
+	// NotchSelect is the shape eleven of the twelve take: "B P P1 P2 P3 P3 P3 ;",
+	// read as BP0<sel>;, where P1 is the receiver, P2 chooses between the two
+	// controls — "0: Manual NOTCH "ON/OFF", 1: Manual NOTCH LEVEL" — and P3 is
+	// then either 000/001 or the position in tens of Hz. Both halves answer with
+	// the same two letters and are told apart by the P2 they echo.
+	NotchSelect NotchShape = iota
+	// NotchCombined is the FTdx9000's, and it is the whole command in three
+	// digits: "B P P1 P1 P1 ;" with "P1 000: Manual NOTCH "OFF" / 001 - 300:
+	// NOTCH Frequency (x10 Hz)", read with a bare BP; and answered BP<nnn>
+	// (FTdx9000 Operating Manual, page 3). There is no receiver selector and no
+	// sub-command selector, so BP00<nnn>; and BP01<nnn>; are both malformed
+	// there and BP00; and BP01; are two silent reads per slow poll.
+	//
+	// What the shape costs a caller is one thing: the radio has no value meaning
+	// "on, where it was". 000 switches the notch out and 001-300 switches it in
+	// AT a position, so SetNotch(true) has to name one. It sends back the last
+	// position the rig itself reported, and refuses when the notch has been out
+	// for the whole session and there is none — the same conditional shape
+	// SetFilterWidth already has in a mode with no bandwidth table.
+	NotchCombined
+)
+
+// AntennaShape is how a model's AN answer is laid out, and — because the two
+// radios with a receive antenna disagree about what one IS — where that reading
+// comes from.
+//
+// The set is the same on all six: AN<rx><n>;, the socket counting from 1. It is
+// the answer that varies.
+type AntennaShape int
+
+const (
+	// AntennaPlain is "A N P1 P3 P4 ;" with P4 a documented fixed 0: the FT-950
+	// (page 4), FTdx1200 (page 4), FTdx3000 (page 4) and FTdx101D/MP (page 6).
+	// The socket is the second character of the argument and nothing else in the
+	// answer means anything.
+	AntennaPlain AntennaShape = iota
+	// AntennaRXFlag is the FTdx5000's: the same "A N P1 P3 P4 ;", but P4 is real
+	// — "0: ANT "RX" "OFF", 1: ANT "RX" "ON"" — so one answer reports both which
+	// of the four transmit sockets is selected and whether the receive-only
+	// input is additionally in circuit (FTdx5000 Series CAT Operation Reference,
+	// page 4).
+	AntennaRXFlag
+	// AntennaRXSlot is the FTdx9000's: "A N P1 P2 ;", one selector with five
+	// positions, "1: Antenna "1" ... 4: Antenna "4", 5: Antenna "RX"" (FTdx9000
+	// Operating Manual, page 3). The receive antenna is not an overlay there but
+	// the fifth position, so a 5 means the receive antenna is in AND that the
+	// answer is not naming a transmit socket at all.
+	//
+	// Its P2 also has a "0: No Change", which remoses never sends: a set that
+	// does nothing is not a way to select an antenna.
+	AntennaRXSlot
+)
+
 // ProcShape is how a model spells PR, the speech processor's switch.
 //
 // This is the widest per-model split in the backend, and the only one where
@@ -366,15 +563,18 @@ func codesOlder() map[byte]modeCode {
 // after building.
 func modern(name, label string, id int) Model {
 	return Model{
-		Name:       name,
-		Label:      label,
-		IDs:        []int{id},
-		HasID:      true,
-		HasAI:      true,
-		HasNarrow:  true,
-		Modes:      withModes(modesCommon(), radio.ModePSK),
-		Codes:      codesModern(),
-		FreqDigits: 9,
+		Name:           name,
+		Label:          label,
+		IDs:            []int{id},
+		HasID:          true,
+		HasAI:          true,
+		HasNarrow:      true,
+		HasMeters:      true,
+		HasPowerSwitch: true,
+		HasTuner:       true,
+		Modes:          withModes(modesCommon(), radio.ModePSK),
+		Codes:          codesModern(),
+		FreqDigits:     9,
 		// This generation's AC has "2: -" where the older one has Tuning Start,
 		// and puts the start on 3.
 		TunerTuneParam: '3',
@@ -387,14 +587,24 @@ func modern(name, label string, id int) Model {
 		Preamp:     2,
 		Attenuator: []int{6, 12, 18},
 		RFGain:     true,
+		RFGainMax:  rfGainMax,
 		AGC:        agcYaesu(),
-		// The noise and notch group, which every profiled model has: NB with
-		// NL, NR with RL, BP for the manual notch and BC for the automatic one.
-		// The antenna is per model and set in the registry below.
-		NoiseBlanker:   true,
-		NoiseReduction: true,
-		Notch:          true,
-		AutoNotch:      true,
+		// The noise and notch group in its FTdx101-generation form: one blanker
+		// with a 000-010 level, one reducer with an 01-15 level, the
+		// two-parameter BP whose position runs to 320 tens of Hz, and BC. The
+		// FTX-1 is the one radio built from this function that overrides any of
+		// it, and it overrides four of the six. The antenna is per model and set
+		// in the registry below, because most of this generation has no AN at all.
+		NBCircuits:   1,
+		NBLevelMin:   0,
+		NBLevelMax:   10,
+		NRCircuits:   1,
+		NRLevelMin:   1,
+		NRLevelMax:   15,
+		Notch:        true,
+		NotchShape:   NotchSelect,
+		NotchFreqMax: 320,
+		AutoNotch:    true,
 		// The transmit audio chain in its FTdx101 form: MG and PL both 000-100,
 		// and the two-parameter PR whose state is 1 for off and 2 for on. Five
 		// of the seven radios built from this function take it unchanged; the
@@ -458,15 +668,18 @@ func agcReading(b byte) (radio.AGC, bool) {
 // cleared there.
 func older(name, label string, ids ...int) Model {
 	return Model{
-		Name:       name,
-		Label:      label,
-		IDs:        ids,
-		HasID:      true,
-		HasAI:      true,
-		HasNarrow:  true,
-		Modes:      modesCommon(),
-		Codes:      codesOlder(),
-		FreqDigits: 8,
+		Name:           name,
+		Label:          label,
+		IDs:            ids,
+		HasID:          true,
+		HasAI:          true,
+		HasNarrow:      true,
+		HasMeters:      true,
+		HasPowerSwitch: true,
+		HasTuner:       true,
+		Modes:          modesCommon(),
+		Codes:          codesOlder(),
+		FreqDigits:     8,
 		// The FT-950 generation starts a tuning cycle with 2, not 3.
 		TunerTuneParam: '2',
 		MaxPowerW:      100,
@@ -477,14 +690,23 @@ func older(name, label string, ids ...int) Model {
 		Preamp:     2,
 		Attenuator: []int{6, 12, 18},
 		RFGain:     true,
+		RFGainMax:  rfGainMax,
 		AGC:        agcYaesu(),
-		// The noise and notch group, which every profiled model has: NB with
-		// NL, NR with RL, BP for the manual notch and BC for the automatic one.
-		// The antenna is per model and set in the registry below.
-		NoiseBlanker:   true,
-		NoiseReduction: true,
-		Notch:          true,
-		AutoNotch:      true,
+		// The noise and notch group in its FT-950-generation form, and the one
+		// thing all five of these radios agree on is the part the newer ones do
+		// not have: NB's third value, "2: Noise Blanker (Wide) "ON"". They
+		// disagree with each other about everything else here — NL's ceiling is
+		// 255 on three of them and 100 on two, BP's position tops out at 300 on
+		// one and 400 on three — so only the wide blanker and the 01-15 reducer
+		// are set here and the rest is per model below.
+		NBCircuits: 2,
+		NBLevelMin: 0,
+		NRCircuits: 1,
+		NRLevelMin: 1,
+		NRLevelMax: 15,
+		Notch:      true,
+		NotchShape: NotchSelect,
+		AutoNotch:  true,
 		// The transmit audio chain in its FT-950 form: MG on the 000-255 level
 		// scale this generation's older members use for PC and RG too, PL in
 		// plain 000-100, and the single-parameter PR. Only the FT-950 itself
@@ -520,6 +742,14 @@ var models = map[string]Model{
 	// Its frequency range is the widest any of them has, because refusing a
 	// frequency the radio can tune would be worse than letting the rig ignore
 	// one it cannot.
+	//
+	// The noise group comes with that shape too, and its numbers are bets of the
+	// same kind: NL counted to 010 rather than the FT-950's 255, BP's notch
+	// reaching 320 rather than the FTdx1200's 400, one blanker circuit rather
+	// than the FT-950 generation's two, and no antenna selector. Each is wrong
+	// on some older radio and right on every newer one, and each fails the safe
+	// way — a level short of the top of a range, a notch that stops before 4 kHz,
+	// a wide blanker that reads back as nothing rather than as the wrong thing.
 	//
 	// The transmit audio chain comes with that shape, and it is the one place
 	// where inheriting it is a real bet rather than a formality. MG's frame is
@@ -583,6 +813,12 @@ var models = map[string]Model{
 		// single pad. Same note on the 12 dB as the FT-991A's.
 		m.Preamp = 1
 		m.Attenuator = []int{12}
+		// And the only radio in the registry whose RF gain is not counted to
+		// 255: its RG prints "P2 000 - 030" (FT-891 CAT Operation Reference
+		// Book, page 15), where every other model here prints 000 - 255. The
+		// frame is identical, so nothing on the wire distinguishes them —
+		// RG0030 is 11.8% of an FT-991A's scale and full gain on this one.
+		m.RFGainMax = 30
 		// And the one radio in the registry whose PR state values are 0 and 1
 		// rather than 1 and 2. Its P2 reads "0: "OFF", 1: "ON"" where the other
 		// seven two-parameter models read "1: "OFF", 2: "ON"" (FT-891 CAT
@@ -618,9 +854,12 @@ var models = map[string]Model{
 	// sharing a bus address they are distinguishable at runtime: 0681 and 0682.
 	// Both have a real sub receiver, reached with the 1 selector on MD, SM, SH
 	// and NA; remoses addresses MAIN only and reports SubReceiver false.
-	// They are also the only Yaesus here with an antenna selector on the bus:
-	// "AN ANTENNA NUMBER", three sockets. No other command list read for this
-	// backend has an AN row, the FTdx9000's included.
+	// They are also the only radios of their generation with an antenna selector
+	// on the bus: "AN ANTENNA NUMBER", three sockets, "P2 1: ANT1, 2: ANT2, 3:
+	// ANT3" with a fixed 0 in the answer's P4 (FTDX101MP/D CAT Operation
+	// Reference Manual, page 6). The FT-710, FTdx10 and FTX-1 indexes have no AN
+	// row at all; the FT-950 generation is where the rest of this family's
+	// antenna switching lives.
 	"ftdx101d": func() Model {
 		m := modern("ftdx101d", "Yaesu FTdx101D", 681)
 		m.Antennas = 3
@@ -655,6 +894,18 @@ var models = map[string]Model{
 		// (HF/50)" — so the count is the family's two and which of them a given
 		// band offers is the radio's business.
 		m.Attenuator = []int{12}
+		// And the one radio here with no NB and no NR command. Its CAT Control
+		// Command List (page 5) runs NA, NL, OI — no NOISE BLANKER STATUS row
+		// between them — and reaches RL with no NOISE REDUCTION row either. Both
+		// levels carry their own off value instead: NL is "000: OFF / 001 - 010:
+		// (NB Level)" (page 21) and RL is "00: "OFF", 01 -10" (page 23), so on
+		// this radio the level IS the switch and the reducer's ladder is ten
+		// steps rather than the family's fifteen. Asking it NB0; and NR0; every
+		// slow poll, which a family-wide flag did, bought two per-command
+		// timeouts a tick and told nobody anything.
+		m.NBCircuits, m.NBLevelIsSwitch = 0, true
+		m.NRCircuits, m.NRLevelIsSwitch = 0, true
+		m.NRLevelMin, m.NRLevelMax = 0, 10
 		// Its PL reads "000: "OFF", 001 -100" (FTX-1 CAT Operation Reference
 		// Manual, page 22), the FT-710's floor. Note that its MG does NOT take
 		// the head selector its PC does: MIC GAIN is "M G P1 P1 P1 ;" with "P1
@@ -675,6 +926,18 @@ var models = map[string]Model{
 	"ft-950": func() Model {
 		m := older("ft-950", "Yaesu FT-950", 310)
 		m.Widths = widthsFT950()
+		// Its NL is "P2 000 - 255" (FT-950 CAT Operation Reference Book, page
+		// 12), the same 000-255 level scale this radio uses for MG. Read against
+		// the FTdx101's 010 remoses could reach only the bottom 4% of the
+		// blanker threshold and would publish the top of it as 4%.
+		m.NBLevelMax = 255
+		// And its notch stops at 300 tens of Hz — "001 - 300 (NOTCH Frequency :
+		// x10 Hz)" (page 5) — where the FTdx101 generation reaches 320 and the
+		// three radios in between reach 400. So 3000 Hz is full scale here.
+		m.NotchFreqMax = 300
+		// Two antenna sockets: "P2 1: ANT "1", 2: ANT "2"" (page 4). The answer
+		// is AN0<n>0, with a documented fixed 0 behind the socket number.
+		m.Antennas = 2
 		return m
 	}(),
 
@@ -701,6 +964,16 @@ var models = map[string]Model{
 		m.MicGainMax = 100
 		m.Proc = ProcSelect
 		m.ProcOff, m.ProcOn = '1', '2'
+		// Its noise blanker level is a third scale again — "P2 000 - 100" (page
+		// 12) — where the FT-950 next to it counts to 255 and the FTdx101
+		// generation to 10. Three ceilings across twelve radios, on one command
+		// whose frame never changes.
+		m.NBLevelMax = 100
+		// Its notch reaches 400 tens of Hz, "001 - 400 (NOTCH Frequency : x 10
+		// Hz )" (page 5), which is 4000 Hz — higher than any other radio here.
+		m.NotchFreqMax = 400
+		// Two antenna sockets, "P2 1: ANT "1", 2: ANT "2"" (page 4).
+		m.Antennas = 2
 		return m
 	}(),
 
@@ -720,6 +993,13 @@ var models = map[string]Model{
 		m.MicGainMax = 100
 		m.Proc = ProcSelect
 		m.ProcOff, m.ProcOn = '1', '2'
+		// And the FTdx1200's noise blanker level and notch range too: NL "P2 000
+		// - 100" and BP "001 - 400" (pages 12 and 5).
+		m.NBLevelMax = 100
+		m.NotchFreqMax = 400
+		// Three antenna sockets where the FTdx1200 has two: "P2 1: ANT "1", 2:
+		// ANT "2", 3: ANT "3"" (page 4).
+		m.Antennas = 3
 		return m
 	}(),
 
@@ -745,30 +1025,67 @@ var models = map[string]Model{
 		// apology: a processor level is a percentage at the API boundary either
 		// way, so there is no watt figure to be wrong about — only the divisor.
 		m.ProcLevelMax = 255
+		// Its PA is the one in the registry with four values rather than three:
+		// "0: IPO 1, 1: AMP 1, 2: AMP 2, 3: IPO 2" (page 14). Two amplifiers,
+		// which is the family's count, and two bypass paths. See PreampIPO2.
+		m.PreampIPO2 = true
+		// NL on the FT-950's 000-255 scale (page 13), and a notch reaching 400
+		// tens of Hz like the FTdx1200's and FTdx3000's (page 5).
+		m.NBLevelMax = 255
+		m.NotchFreqMax = 400
+		// Four antenna sockets, and the first receive antenna in the registry.
+		// The set is "P2 1: ANT "1" ... 4: ANT "4", 5: ANT "RX"" and the answer
+		// carries the two separately — "P3 1: ANT "1" ... 4: ANT "4"" and "P4 0:
+		// ANT "RX" "OFF", 1: ANT "RX" "ON"" (page 4). The reading is published;
+		// the switch is not, because the set has one value that reaches ANT RX
+		// and none that clears it. See SetRXAntenna.
+		m.Antennas = 4
+		m.AntennaShape = AntennaRXFlag
 		return m
 	}(),
 
-	// The FTdx9000 is the only radio in the registry that cannot be identified.
-	// It has no ID command — its manual's command list has no row for one — so
-	// there is nothing to cross-check the configuration against, and Init does
-	// not send it: a Yaesu answers a command it does not implement with
-	// silence, so ID; would cost a full per-command timeout and then fail the
-	// connect. FA; is its link check. It does have AI, so it pushes changes
-	// like the rest of the family.
+	// The FTdx9000 is the flagship of this generation and the radio this backend
+	// can say least to, because its Control Command List (FTdx9000 Operating
+	// Manual, page 2) is far shorter than any other reference read here — about
+	// sixty commands where the FT-950 has ninety and the FTdx101 a hundred and
+	// twenty. Six of the missing ones are commands this backend would otherwise
+	// send unconditionally, and each would cost a full per-command timeout and
+	// answer nothing, because a Yaesu refuses in silence:
 	//
-	// It has no NA either, and its SH is not a bandwidth at all: the parameter
-	// is the WIDTH knob's position, 00 fully anticlockwise to 31 fully
-	// clockwise with 16 centred, which no table in the manual converts to Hz.
-	// So Widths is empty, Caps reports FilterWidth false, and SetFilterWidth
-	// refuses rather than sending a number that would move the knob to an
-	// arbitrary place.
+	//   - No AI. There is no row for it and, uniquely among these documents, no
+	//     AI column in the command list either — that column is how the other
+	//     manuals mark which commands report themselves unasked, and this one
+	//     does not have the concept. So this is the one profiled radio that is
+	//     poll-only: nothing arrives between poll ticks, and Init writes no AI.
+	//   - No ID, so nothing to cross-check the configuration against. FA; is the
+	//     link check at Init instead.
+	//   - No NA, which costs nothing beyond the read: the same radio has no
+	//     bandwidth table for NA to choose a column of.
+	//   - No RM, so no power, SWR or ALC meter. The transmit meters are RM's
+	//     alone on every one of these radios; SM here reads the S-meter and
+	//     nothing else, and there is no MS to follow the front-panel selector.
+	//     Caps reports all three false rather than three needle-less bars.
+	//   - No PS, so it cannot be switched on or off over CAT.
+	//   - No RA, where every other radio here has an attenuator command.
+	//
+	// Its SH is not a bandwidth either: the parameter is the WIDTH knob's
+	// position, 00 fully anticlockwise to 31 fully clockwise with 16 centred,
+	// which no table in the manual converts to Hz. So Widths is empty, Caps
+	// reports FilterWidth false, and SetFilterWidth refuses rather than sending
+	// a number that would move the knob to an arbitrary place.
 	//
 	// Its TX answer has a fourth value the others lack — 3, meaning keyed at
 	// the rig and by CAT at once — which decodes as transmitting like 1 and 2.
 	"ftdx9000": func() Model {
 		m := older("ftdx9000", "Yaesu FTdx9000")
 		m.HasID = false
+		m.HasAI = false
 		m.HasNarrow = false
+		m.HasMeters = false
+		m.HasPowerSwitch = false
+		// Its AC is one parameter with no "Tuner ON" value in it, so the tuner
+		// is declined outright rather than half-driven. See Model.HasTuner.
+		m.HasTuner = false
 		delete(m.Codes, 'D') // no AM-N
 		m.PowerRaw = true
 		// This one is sold as a 200 W radio and as a 400 W one, and with no ID
@@ -777,9 +1094,31 @@ var models = map[string]Model{
 		m.MaxPowerW = 0
 		m.Widths = widths{}
 		m.MaxHz = 60_000_000
-		// And no RA either: its command list has no attenuator row, where every
-		// other radio here has one. PA, RG and GT are all present.
+		// No RA, so no attenuator, where every other radio here has one. PA, RG
+		// and GT are all present — but its PA is titled "IPO Status" and offers
+		// one amplifier rather than the family's two: "P2 0: IPO "ON" (Pre-Amp
+		// Disable), 1: IPO "OFF" (Pre-Amp Enable)" (page 7). PA02; there is an
+		// out-of-range parameter, answered by silence like everything else.
 		m.Attenuator = nil
+		m.Preamp = 1
+		// NL is "P2 000 - 255" (page 7), the FT-950's scale rather than the
+		// FTdx101's 010 — so a threshold read against 10 would report a radio at
+		// full blanking as 4%.
+		m.NBLevelMax = 255
+		// And its BP is the one manual notch in the registry with no sub-command
+		// selector and no receiver selector: "B P P1 P1 P1 ;" set, a bare "B P ;"
+		// read, with "P1 000: Manual NOTCH "OFF" / 001 - 300: NOTCH Frequency
+		// (x10 Hz)" (page 3). Every other model takes the P2 that chooses between
+		// the switch and the position, so BP00; and BP01; are two malformed reads
+		// per slow poll here and BP00001; is a malformed set. See NotchCombined.
+		m.NotchShape = NotchCombined
+		m.NotchFreqMax = 300
+		// Four antenna sockets and a receive antenna, but arranged unlike the
+		// FTdx5000's: one selector with five positions, "P2 0: No Change, 1:
+		// Antenna "1" ... 4: Antenna "4", 5: Antenna "RX"", answered as "A N P1
+		// P2 ;" with no P4 at all (page 3). See AntennaRXSlot.
+		m.Antennas = 4
+		m.AntennaShape = AntennaRXSlot
 		// Its MG and PL are clean, and both on the 000-255 scale (pages 6 and
 		// 8). Its PR is not: the entry is headed PR and titled "RF Speech
 		// Processor Status", and spells the command "P C" in all three of its

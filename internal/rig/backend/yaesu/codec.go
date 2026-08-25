@@ -261,7 +261,12 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 
 	case keyRM:
 		u.Key = keyRM
-		y.decodeRM(&u, arg)
+		// Gated like the rest of the per-model commands. The FTdx9000 has no RM
+		// row, so a frame arriving under those letters there is not something to
+		// build a meter reading out of.
+		if y.profile.HasMeters {
+			y.decodeRM(&u, arg)
+		}
 
 	case keyPS:
 		// The power switch. Nothing to publish: a radio that answers is on,
@@ -271,9 +276,14 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 
 	case keyAC:
 		u.Key = keyAC
-		if v, ok := y.tunerFromAC(arg); ok {
-			u.Patch.Tuner = &v
-			y.tuner.Store(v)
+		// Gated like the rest: the FTdx9000's AC is one parameter whose 0 means
+		// either "tuner off" or "tuner engaged and idle", so nothing there can
+		// be turned into a state without inventing which. See Model.HasTuner.
+		if y.profile.HasTuner {
+			if v, ok := y.tunerFromAC(arg); ok {
+				u.Patch.Tuner = &v
+				y.tuner.Store(v)
+			}
 		}
 
 	// The receive front end. Each sets its key before parsing, so that a value
@@ -304,22 +314,22 @@ func (y *Rig) Decode(frame []byte) (backend.Update, error) {
 	// The noise processing, the notches and the antenna.
 	case keyNB:
 		u.Key = keyNB
-		if y.profile.NoiseBlanker {
+		if y.profile.NBCircuits > 0 {
 			y.decodeNB(&u, arg)
 		}
 	case keyNL:
 		u.Key = keyNL
-		if y.profile.NoiseBlanker {
+		if y.profile.NBLevelMax > 0 {
 			y.decodeNL(&u, arg)
 		}
 	case keyNR:
 		u.Key = keyNR
-		if y.profile.NoiseReduction {
+		if y.profile.NRCircuits > 0 {
 			y.decodeNR(&u, arg)
 		}
 	case keyRL:
 		u.Key = keyRL
-		if y.profile.NoiseReduction {
+		if y.profile.NRLevelMax > 0 {
 			y.decodeRL(&u, arg)
 		}
 	case keyBP:

@@ -47,9 +47,18 @@ Still open:
   scale is built from the family's `0000=SWR1.0 … 0120=SWR3.0`. Enabling them
   would pin that radio's bar from about half deflection on; a per-model SWR
   scale would settle it.
-- **Yaesu:** the FTdx9000's command list has no `AI`, `RM`, `PS`, `RA` or `NA`
-  row though the profile sets `HasAI: true`; the FTX-1 has no `NB` or `NR`
-  though `noiseReads()` polls both; `NL` is 000-255 on the FT-950 and FTdx9000
-  rather than 000-010; and `AN` exists on four more models than `model.go`
-  claims, including a real RX-antenna selector that `SetRXAntenna` currently
-  refuses as nonexistent.
+- ~~**Yaesu:**~~ all of the Yaesu items were fixed, and re-reading the manuals
+  found five more defects and widened three of the recorded ones. Section 9 of
+  [tx-audio-yaesu.md](tx-audio-yaesu.md) understates the spread in items 1, 4
+  and 6: `NL` is 000-100 on the FTdx1200 and FTdx3000 as well, those two also
+  have `AN`, and the wide noise blanker is on all five of the older radios
+  rather than some of them. Items 2, 3, 5, 7 and 8 are accurate as written.
+
+  One thing there could NOT be fixed and remains open: **`AN`'s receive-antenna
+  position is readable on the FTdx5000 and FTdx9000 and is not written.** The
+  FTdx5000's set has one value that reaches ANT RX and none that clears it, and
+  whether that value sets or toggles is not printed; the FTdx9000's is a
+  five-position selector where clearing means naming a transmit antenna, and
+  while ANT RX is selected the answer does not say which one it would return
+  to. Two radios, two incompatible meanings, no documented "off". Sending
+  `AN05;` twice to a real FTdx5000 would settle it in one session.

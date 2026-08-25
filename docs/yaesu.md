@@ -133,7 +133,7 @@ three.
 | FTdx1200 | `ftdx1200` | 8-digit; two `ID` values; no PSK, no DATA-FM, no AM-N | — |
 | FTdx3000 | `ftdx3000` | 8-digit; no PSK | — |
 | FTdx5000 | `ftdx5000` | 8-digit; `PC` is a `000`–`255` index, **not watts** | — |
-| FTdx9000 | `ftdx9000` | 8-digit; **no `ID`** — cannot be identified; `SH` is not a bandwidth; `PC` is an index | — |
+| FTdx9000 | `ftdx9000` | 8-digit; **the family outlier** — no `ID`, `AI`, `RM`, `PS`, `RA` or `NA`; `SH` is not a bandwidth; `PC` is an index; no tuner control | — |
 | FT-891 | `ft-891` | No PSK and no DATA-FM; narrow flag inside `SH` | — |
 | FT-991A | `ft-991a` | Mode code `E` is **C4FM**, not PSK; six-byte `SH` | — |
 | FT-710 | `ft-710` | | — |
@@ -147,12 +147,33 @@ three.
 watts** — the FTdx5000 and FTdx9000 — so remoses shows a percentage and refuses
 a request in watts on them. Use `max_power_pct` there.
 
-**The FTdx9000 has no `ID` command**, so remoses cannot cross-check that the
-configuration names the right radio; it says which command set it is using and
-carries on. Its `SH` is the position of the WIDTH knob rather than a bandwidth
-in Hz, so remoses reports no filter width for it and refuses to set one. It is
-also the one radio here with **no attenuator command** at all, while keeping the
-preamplifier, RF gain and AGC.
+**The FTdx9000 is missing a good deal more than one command**, and the shape of
+its control list is different enough to be worth reading before configuring one.
+
+It has **no `ID`**, so remoses cannot cross-check that the configuration names
+the right radio; it says which command set it is using and carries on. Its `SH`
+is the position of the WIDTH knob rather than a bandwidth in Hz, so remoses
+reports no filter width and refuses to set one. It has **no attenuator** while
+keeping the preamplifier, RF gain and AGC — and its preamplifier is a two-value
+IPO status, so one amplifier rather than the family's two.
+
+It is also **the one radio here that pushes nothing**: its list has no `AI` row,
+and uniquely among these twelve documents no AI *column* either. remoses polls
+it and never asks it to self-report. With **no `RM`, `PS` or `RA`** it publishes
+no transmit meters and no power switch, and `power_switch` requests are refused.
+
+Its **antenna tuner cannot be controlled**, and that one is worth understanding
+rather than just noting: `AC` there takes a single parameter — off or
+tuning-stopped, start tuning, or tuning-failed — with no "tuner on" value at
+all. So a `0` coming back means either switched out or engaged and idle, and
+remoses will not publish a tuner state it cannot tell apart. `caps.tuner_control`
+and `caps.tuner_tune` are false.
+
+Its **manual notch is one value rather than two**: a bare `BP;` answers with
+`000` for switched out or `001`–`300` for the frequency, carrying the switch and
+the position together, where the rest of the family separates them. Switching
+the notch on therefore restores the last position the radio itself reported, and
+is refused if remoses has not seen one yet.
 
 ### The FT-857 / FT-897 binary protocol
 

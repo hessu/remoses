@@ -2,6 +2,7 @@ package yaesu
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/hessu/remoses/internal/config"
 	"github.com/hessu/remoses/internal/radio"
+	"github.com/hessu/remoses/internal/rig/backend"
 	"github.com/hessu/remoses/internal/rig/backend/yaesubin"
 )
 
@@ -170,39 +172,270 @@ func TestModelIDs(t *testing.T) {
 	}
 }
 
-// TestFTdx9000MissingCommands pins the two commands that radio does not have,
-// and the one it does. They are capability gaps rather than omissions here: a
-// Yaesu answers a command it does not implement with silence, so asking would
-// cost the session's full per-command timeout and return nothing.
+// TestFTdx9000MissingCommands pins the commands that radio does not have.
+//
+// They are capability gaps rather than omissions here: a Yaesu answers a
+// command it does not implement with silence, so asking would cost the
+// session's full per-command timeout and return nothing. Its Control Command
+// List (FTdx9000 Operating Manual, page 2) has no AI, ID, NA, RM, PS or RA row,
+// and no AI column in the list at all — the column every other manual here uses
+// to mark which commands report themselves unasked.
 func TestFTdx9000MissingCommands(t *testing.T) {
 	m := modelNamed(t, "ftdx9000")
-	if m.HasID || m.HasNarrow {
-		t.Errorf("the FTdx9000 claims ID=%v NA=%v; it has neither command",
-			m.HasID, m.HasNarrow)
+	if m.HasID || m.HasNarrow || m.HasAI || m.HasMeters || m.HasPowerSwitch {
+		t.Errorf("the FTdx9000 claims ID=%v NA=%v AI=%v RM=%v PS=%v; its command list has none of them",
+			m.HasID, m.HasNarrow, m.HasAI, m.HasMeters, m.HasPowerSwitch)
+	}
+	if len(m.Attenuator) != 0 {
+		t.Errorf("the FTdx9000 claims an attenuator ladder %v; it has no RA row", m.Attenuator)
 	}
 	// AI is the difference between a radio that reports a front-panel knob
-	// movement and one that is poll-only, so it is pinned in its own right.
-	if !m.HasAI {
-		t.Error("the FTdx9000 claims no AI; it pushes changes like the rest of the family")
-	}
+	// movement and one that is poll-only, so it is pinned in its own right — and
+	// it is the ONLY profiled radio here that is poll-only.
 	// Its SH is the WIDTH knob's position, 00-31 with 16 centred, and no table
 	// in its manual turns that into Hz.
 	if m.hasFilterWidth() {
 		t.Error("the FTdx9000 claims a bandwidth table; its SH is a knob position")
 	}
-	// Everybody else has all four, and every model has AI.
+	// Everybody else has all of them.
 	for _, other := range allModels(t) {
-		if !other.HasAI {
-			t.Errorf("%s claims no AI; every profiled radio here has it", other.Name)
-		}
 		if other.Name == "ftdx9000" {
 			continue
+		}
+		if !other.HasAI {
+			t.Errorf("%s claims no AI; the FTdx9000 is the only profiled radio without it", other.Name)
+		}
+		if !other.HasMeters || !other.HasPowerSwitch || !other.HasTuner {
+			t.Errorf("%s: RM=%v PS=%v AC=%v, want all true — the FTdx9000 is the only radio here "+
+				"missing any of them", other.Name, other.HasMeters, other.HasPowerSwitch, other.HasTuner)
 		}
 		if !other.HasID || !other.HasNarrow || !other.hasFilterWidth() {
 			t.Errorf("%s: ID=%v NA=%v width=%v, want all true",
 				other.Name, other.HasID, other.HasNarrow, other.hasFilterWidth())
 		}
+		if len(other.Attenuator) == 0 {
+			t.Errorf("%s has no attenuator ladder; only the FTdx9000 lacks RA", other.Name)
+		}
 	}
+}
+
+// TestFTdx9000IsNeverAskedForACommandItLacks is the invariant behind the
+// profile fields, and it is worth more than any table assertion: it drives every
+// entry point this backend has against the one radio with a short command list
+// and proves that not one of the six missing commands reaches the wire.
+//
+// The cost of getting this wrong is not a wrong answer, it is a stall. Each of
+// these would be answered with silence and burn the session's whole per-command
+// timeout, every poll tick, for as long as the station was up.
+func TestFTdx9000IsNeverAskedForACommandItLacks(t *testing.T) {
+	y := newModelRig(t, "ftdx9000")
+	c := newTestConn(t, y, answersFor(y.profile))
+	ctx := context.Background()
+
+	if err := y.Init(ctx, c); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := y.Poll(ctx, c, backend.PollFast); err != nil {
+		t.Fatalf("PollFast: %v", err)
+	}
+	// Once transmitting, which is when the meters would otherwise be read.
+	mustDecode(t, y, "TX1")
+	if err := y.Poll(ctx, c, backend.PollFast); err != nil {
+		t.Fatalf("PollFast transmitting: %v", err)
+	}
+	if err := y.Poll(ctx, c, backend.PollSlow); err != nil {
+		t.Fatalf("PollSlow: %v", err)
+	}
+	// And every setter that might reach for one of them, refused or not.
+	_ = y.SetNoiseBlanker(ctx, c, 1)
+	_ = y.SetNBLevel(ctx, c, 50)
+	_ = y.SetNotch(ctx, c, false)
+	_ = y.SetNotchFreq(ctx, c, 50)
+	_ = y.SetAntenna(ctx, c, 2)
+	_ = y.SetRXAntenna(ctx, c, true)
+	_ = y.SetAttenuator(ctx, c, 6)
+	_ = y.SetTuner(ctx, c, true)
+	_ = y.StartTune(ctx, c)
+	_ = y.PowerOn(ctx, c)
+	_ = y.PowerOff(ctx, c, false)
+
+	for _, req := range c.sent {
+		for _, absent := range []string{"AI", "ID", "NA", "RM", "PS", "RA", "AC"} {
+			if strings.HasPrefix(req, absent) {
+				t.Errorf("sent %q; the FTdx9000's command list has no %s row (or, for AC, "+
+					"not in a shape remoses can drive), so it answers with silence and costs "+
+					"a full per-command timeout", req, absent)
+			}
+		}
+	}
+}
+
+// TestFTdx9000CapsMatchItsCommandList is the other half: what the client is
+// told. A meter that cannot be read must not be advertised, or a UI draws three
+// bars that never move and an operator concludes the radio is broken.
+func TestFTdx9000CapsMatchItsCommandList(t *testing.T) {
+	caps := newModelRig(t, "ftdx9000").Caps()
+	for _, tt := range []struct {
+		name string
+		got  bool
+	}{
+		{"power_meter", caps.PowerMeter},
+		{"swr_meter", caps.SWRMeter},
+		{"alc_meter", caps.ALCMeter},
+		{"power_switch", caps.PowerSwitch},
+		{"tuner_control", caps.TunerControl},
+		{"tuner_tune", caps.TunerTune},
+	} {
+		if tt.got {
+			t.Errorf("ftdx9000 claims %s; its command list has no command behind it", tt.name)
+		}
+	}
+	// And every other model does claim them, so the gate is per model and not a
+	// family-wide retreat.
+	for _, name := range ModelNames() {
+		if name == "ftdx9000" {
+			continue
+		}
+		caps := newModelRig(t, name).Caps()
+		if !caps.PowerMeter || !caps.SWRMeter || !caps.ALCMeter {
+			t.Errorf("%s claims no transmit meters; RM is in its command list", name)
+		}
+		if !caps.PowerSwitch || !caps.TunerControl {
+			t.Errorf("%s claims no PS or AC; both are in its command list", name)
+		}
+	}
+}
+
+// TestEveryLevelHasACeiling is the drift guard behind the per-model ranges.
+//
+// Five of the twelve profiles are built by older(), which deliberately leaves
+// NL's and BP's ceilings unset because its five radios disagree about both —
+// so a new entry that forgot to fill them in would compile, poll, and publish
+// every reading as 0% while sending 000 for full scale. scaleFrom returns 0
+// when its range is empty, which is exactly the confident wrong number this
+// backend exists to avoid, and it would look like a radio nobody had touched.
+func TestEveryLevelHasACeiling(t *testing.T) {
+	for _, m := range allModels(t) {
+		if m.NBLevelMax <= m.NBLevelMin {
+			t.Errorf("%s: NL range %d-%d is empty; every model here has a blanker level",
+				m.Name, m.NBLevelMin, m.NBLevelMax)
+		}
+		if m.NRLevelMax <= m.NRLevelMin {
+			t.Errorf("%s: RL range %d-%d is empty", m.Name, m.NRLevelMin, m.NRLevelMax)
+		}
+		if m.Notch && m.NotchFreqMax <= notchFreqLo {
+			t.Errorf("%s: BP position range 1-%d is empty", m.Name, m.NotchFreqMax)
+		}
+		if m.RFGain && m.RFGainMax == 0 {
+			t.Errorf("%s: RG counts to 0", m.Name)
+		}
+		if m.MicGain && m.MicGainMax == 0 {
+			t.Errorf("%s: MG counts to 0", m.Name)
+		}
+		if m.ProcLevel && m.ProcLevelMax <= m.ProcLevelMin {
+			t.Errorf("%s: PL range %d-%d is empty", m.Name, m.ProcLevelMin, m.ProcLevelMax)
+		}
+		// And a shape that names a receive antenna has to have sockets for the
+		// fifth position to be past, or decodeAN would read a socket as one.
+		if m.AntennaShape != AntennaPlain && m.Antennas == 0 {
+			t.Errorf("%s: claims a receive-antenna answer shape with no AN sockets", m.Name)
+		}
+	}
+}
+
+// TestPowerSwitchIsNotFamilyWide. PS is in eleven of the twelve command lists
+// and absent from the FTdx9000's, so that radio cannot be switched on or off
+// over CAT at all — and PowerOn in particular must refuse rather than run its
+// escalation, which would spend two per-command timeouts plus the documented
+// one-to-two-second wake window on a command the rig has never heard of.
+func TestPowerSwitchIsNotFamilyWide(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range ModelNames() {
+		y := newModelRig(t, name)
+		c := newTestConn(t, y, map[string]string{reqPS: "PS1"})
+		if name == "ftdx9000" {
+			for _, tt := range []struct {
+				call string
+				err  error
+			}{
+				{"PowerOn", y.PowerOn(ctx, c)},
+				{"PowerOff", y.PowerOff(ctx, c, false)},
+			} {
+				if tt.err == nil {
+					t.Errorf("%s was accepted on a radio with no PS command", tt.call)
+					continue
+				}
+				if !errors.Is(tt.err, backend.ErrUnsupported) ||
+					!strings.Contains(tt.err.Error(), y.profile.Label) {
+					t.Errorf("%s refusal %q should wrap ErrUnsupported and name the radio",
+						tt.call, tt.err)
+				}
+			}
+			if len(c.sent) != 0 {
+				t.Errorf("wrote %q despite refusing", c.sent)
+			}
+			continue
+		}
+		if err := y.PowerOff(ctx, c, false); err != nil {
+			t.Fatalf("%s: PowerOff: %v", name, err)
+		}
+		c.wantSent(t, reqPowerOff)
+	}
+}
+
+// TestTunerIsDeclinedOnTheFTdx9000. Its AC is one parameter, not three, and the
+// legend has no "Tuner ON" value in it: "0: Tuner "OFF" or Tuning Stop (While
+// Tuner is engaged) / 1: Start Antenna Tuning (While Tuner is engaged) / 2:
+// Tuning has failed (Answer only)".
+//
+// So there is nothing to send that switches the tuner in, and an answering 0
+// means EITHER off OR engaged and idle — publishing TunerOff for it would be a
+// confident wrong reading half the time. The whole control is declined rather
+// than half-driven, which also stops a malformed AC000; going out and an AC;
+// being polled for an answer nothing can be made of.
+func TestTunerIsDeclinedOnTheFTdx9000(t *testing.T) {
+	y := newModelRig(t, "ftdx9000")
+	ctx := context.Background()
+	c := newTestConn(t, y, answersFor(y.profile))
+	for _, tt := range []struct {
+		call string
+		err  error
+	}{
+		{"SetTuner", y.SetTuner(ctx, c, true)},
+		{"StartTune", y.StartTune(ctx, c)},
+	} {
+		if tt.err == nil {
+			t.Errorf("%s was accepted; the FTdx9000's AC has no Tuner ON value", tt.call)
+			continue
+		}
+		if !errors.Is(tt.err, backend.ErrUnsupported) ||
+			!strings.Contains(tt.err.Error(), y.profile.Label) {
+			t.Errorf("%s refusal %q should wrap ErrUnsupported and name the radio", tt.call, tt.err)
+		}
+	}
+	if len(c.sent) != 0 {
+		t.Errorf("wrote %q despite refusing", c.sent)
+	}
+	// And its AC answer is not decoded into a state, in either of the two forms
+	// that could arrive: its own one-character one and the three-character one
+	// the rest of the family sends.
+	for _, frame := range []string{"AC0", "AC1", "AC001", "AC002"} {
+		u := mustDecode(t, y, frame)
+		if u.Key != keyAC {
+			t.Errorf("%s keyed %q, want %q so a read still completes", frame, u.Key, keyAC)
+		}
+		if u.Patch.Tuner != nil {
+			t.Errorf("%s published tuner %q; a 0 there means either off or engaged and idle",
+				frame, *u.Patch.Tuner)
+		}
+	}
+	// Everybody else drives it as before.
+	other := newModelRig(t, "ft-710")
+	c = newTestConn(t, other, answersFor(other.profile))
+	if err := other.SetTuner(ctx, c, true); err != nil {
+		t.Fatalf("ft-710: SetTuner: %v", err)
+	}
+	c.wantSent(t, "AC001;", reqAC)
 }
 
 // TestFrequencyWidthPerModel is the structural split between the two

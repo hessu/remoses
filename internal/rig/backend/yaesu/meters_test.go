@@ -89,6 +89,39 @@ func TestYaesuTXMeterReadsOnlyWhileTransmitting(t *testing.T) {
 	}
 }
 
+// TestFTdx9000HasNoTransmitMeters. RM is the only command any radio here has
+// for forward power, SWR and ALC, and the FTdx9000's command list has no row for
+// it — nor for MS, the front-panel meter selector, so there is nothing to read
+// instead. Its SM reads the S-meter and stops there.
+//
+// The cost of getting this wrong is three transactions per fast tick for the
+// whole of every transmission, each answered with silence and each burning the
+// session's full per-command timeout, in exchange for three bars that would
+// never move.
+func TestFTdx9000HasNoTransmitMeters(t *testing.T) {
+	y := newModelRig(t, "ftdx9000")
+	y.transmitting.Store(true)
+	if got := y.txMeterReads(); len(got) != 0 {
+		t.Errorf("txMeterReads() = %v while transmitting, want none: the FTdx9000 has no RM", got)
+	}
+	// And a frame arriving under those letters is not turned into a reading.
+	u := mustDecode(t, y, "RM5100")
+	if !u.Patch.Empty() {
+		t.Errorf("RM5100 decoded to %+v on a radio with no RM command", u.Patch)
+	}
+	// Every other model reads all three.
+	for _, name := range ModelNames() {
+		if name == "ftdx9000" {
+			continue
+		}
+		other := newModelRig(t, name)
+		other.transmitting.Store(true)
+		if got := other.txMeterReads(); len(got) != 3 {
+			t.Errorf("%s: txMeterReads() = %v, want power, SWR and ALC", name, got)
+		}
+	}
+}
+
 // The flag follows the TX answer, so a transmission started with a foot switch
 // or MOX is metered exactly like one remoses keyed.
 func TestYaesuTransmittingFollowsTX(t *testing.T) {

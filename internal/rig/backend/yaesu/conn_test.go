@@ -61,13 +61,17 @@ func newTestConn(t *testing.T, y *Rig, answers map[string]string) *testConn {
 	// GT04 is worth noticing: 4 is AUTO-FAST as a READING, and there is no
 	// reading that means plain "auto" — see agcReading.
 	for req, answer := range map[string]string{
-		reqPA: "PA01", reqRA: "RA01", reqRG: "RG0200", reqGT: "GT04",
-		// The noise processing and the notches. Both halves of BP answer with
-		// the same two letters and are told apart by their own P2.
-		reqNB: "NB01", reqNL: "NL0005", reqNR: "NR00", reqRL: "RL008",
-		reqBPSwitch: "BP00001", reqBPFreq: "BP01150",
-		reqBC: "BC00", reqAN: "AN010",
+		reqPA: "PA01", reqRA: "RA01", reqRG: "RG0020", reqGT: "GT04",
 	} {
+		if _, ok := answers[req]; !ok {
+			answers[req] = answer
+		}
+	}
+	// The noise processing, the notches and the antenna cannot be written out
+	// flat: the FTX-1 has no NB or NR command at all, the FTdx9000's BP is one
+	// parameter rather than three, NL counts to 10, 100 or 255 depending on the
+	// radio, and the antenna answer has three shapes. See noiseAnswers.
+	for req, answer := range noiseAnswers(y.profile) {
 		if _, ok := answers[req]; !ok {
 			answers[req] = answer
 		}
@@ -107,6 +111,54 @@ func txAudioAnswers(m Model) map[string]string {
 		// The answer echoes the parameter that names the compressor, exactly as
 		// the set carries it.
 		a[reqPRSelect] = fmt.Sprintf("PR%c%c", procSpeech, m.ProcOn)
+	}
+	return a
+}
+
+// noiseAnswers is a rig with its blanker and reducer switched on at about half
+// strength, its manual notch parked in the middle of whatever range this radio
+// has, its automatic notch off and antenna 1 selected.
+//
+// Every value is derived from the profile rather than written out, because the
+// well-formed answer is genuinely different per model: NL is three digits
+// counting to 010, 100 or 255; the FTX-1 has no NB and no NR row to answer at
+// all; the FTdx9000's BP answers a bare BP; with three digits where everyone
+// else answers BP00; and BP01; with five; and the antenna answer is AN0<n><rx>
+// on one radio, AN0<n>0 on four and AN0<n> on the FTdx9000.
+func noiseAnswers(m Model) map[string]string {
+	a := map[string]string{}
+	if m.NBCircuits > 0 {
+		a[reqNB] = "NB01"
+	}
+	if m.NBLevelMax > 0 {
+		a[reqNL] = fmt.Sprintf("NL0%03d", m.NBLevelMax/2)
+	}
+	if m.NRCircuits > 0 {
+		a[reqNR] = "NR01"
+	}
+	if m.NRLevelMax > 0 {
+		a[reqRL] = fmt.Sprintf("RL0%02d", m.NRLevelMax/2)
+	}
+	if m.Notch {
+		if m.NotchShape == NotchCombined {
+			a[reqBPCombined] = fmt.Sprintf("BP%03d", m.NotchFreqMax/2)
+		} else {
+			a[reqBPSwitch] = "BP00001"
+			a[reqBPFreq] = fmt.Sprintf("BP01%03d", m.NotchFreqMax/2)
+		}
+	}
+	if m.AutoNotch {
+		a[reqBC] = "BC00"
+	}
+	if m.Antennas > 0 {
+		switch m.AntennaShape {
+		case AntennaRXSlot:
+			a[reqAN] = "AN01" // no trailing parameter on the FTdx9000
+		case AntennaRXFlag:
+			a[reqAN] = "AN010" // socket 1, ANT RX out
+		default:
+			a[reqAN] = "AN010" // socket 1, and a documented fixed 0 behind it
+		}
 	}
 	return a
 }
