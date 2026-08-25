@@ -568,11 +568,17 @@ type State struct {
 	// Antenna is which socket is selected, counting from 1, and RXAntenna is
 	// the separate receive-only input where a radio has one.
 	//
-	// Absent on every Icom here, and that is not an omission: those radios have
-	// no live antenna selector on the bus. The antenna is a per-band MEMORY —
-	// an IC-7610 keeps one entry per band range in its Set menu — so switching
-	// it would mean writing a stored setting rather than throwing a switch, and
-	// remoses does not write band memories.
+	// Absent on a radio with no selector remoses can work, which is most of the
+	// small sets in every family. The big Icoms do have one — command 12 on an
+	// IC-7610, IC-7600, IC-7700, IC-7760, IC-7850 and IC-9100 — and it is a
+	// live switch rather than the per-band MEMORY those radios also keep in
+	// their Set menu. remoses reads and writes the switch and still does not
+	// touch the memory, which is stored configuration.
+	//
+	// On Icom the two fields are one frame: the socket is the sub-command and
+	// the data byte is that socket's receive-antenna flag, so RXAntenna is a
+	// property OF the selected socket there rather than an independent switch.
+	// Selecting a different socket can therefore change RXAntenna with it.
 	Antenna   *int  `json:"antenna,omitempty"`
 	RXAntenna *bool `json:"rx_antenna,omitempty"`
 
@@ -1292,8 +1298,10 @@ type Caps struct {
 	// Antennas is how many antenna sockets remoses can select between, 0 where
 	// it cannot. RXAntennaControl is the separate receive-only input.
 	//
-	// Zero on every Icom here, and deliberately: those radios keep the antenna
-	// as a per-band memory rather than a live selector. See State.Antenna.
+	// The two are independent: an IC-9100 selects between two sockets and has
+	// no receive antenna, while an IC-7300MK2 has a receive antenna and no
+	// socket to choose. Read each rather than inferring one from the other.
+	// See State.Antenna.
 	Antennas         int  `json:"antennas"`
 	RXAntennaControl bool `json:"rx_antenna_control"`
 

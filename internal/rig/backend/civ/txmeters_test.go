@@ -108,15 +108,29 @@ func TestDecodeTXMeters(t *testing.T) {
 	})
 }
 
-// The IC-9700's PO meter reaches 100% at 213, not the IC-7610's 255. Against
-// the wrong scale a radio at full power reads 84%.
+// TestPOScaleIsPerModel is one line per calibration line, because these are
+// transcriptions rather than a formula and nine of them were wrong.
+//
+// The IC-7610's 255 was the family default, and it is the outlier: every other
+// reference here tops 15 11 out at 212, 213 or 215. Against the wrong scale a
+// radio at full power reads 84%, which looks exactly like a radio that is not
+// making its rated output — the failure mode is a plausible number, not an
+// error. Each figure below is quoted in Model.POScale with its page.
 func TestPOScaleIsPerModel(t *testing.T) {
 	for _, tc := range []struct {
 		model string
 		want  int
 	}{
-		{"ic-7610", 255},
-		{"ic-9700", 213},
+		{"ic-7610", 255},    // Ref. Guide p. 3, the only 255 in the family
+		{"ic-9700", 213},    // Ref. Guide p. 4
+		{"ic-905", 213},     // Ref. Guide p. 4
+		{"ic-7300mk2", 213}, // Ref. Guide p. 5
+		{"ic-7300", 213},    // printed p. 19-3
+		{"ic-7600", 213},    // printed p. 160
+		{"ic-9100", 215},    // printed p. 185, and the only 215
+		{"ic-7760", 212},    // Ref. Guide p. 4, in watts: 02 12 = 200 W
+		{"ic-7700", 212},    // printed p. 14-4, also 200 W
+		{"ic-7850", 213},    // printed p. 18-4, ALSO 200 W, one count apart
 	} {
 		r, err := New(&config.Radio{CIV: &config.CIV{Model: tc.model}})
 		if err != nil {
@@ -129,6 +143,57 @@ func TestPOScaleIsPerModel(t *testing.T) {
 		if u.Patch.PowerMeter == nil || u.Patch.PowerMeter.Scale != tc.want {
 			t.Errorf("%s power meter = %+v, want scale %d", tc.model, u.Patch.PowerMeter, tc.want)
 		}
+	}
+}
+
+// TestPOScaleAtFullDeflection is the same fact stated as the operator would see
+// it, and it is why the table above is worth having.
+//
+// An IC-7600 at its rated output answers 15 11 with 0213. Read against 255 that
+// is 84% — a plausible-looking number, and the one this backend published for
+// every radio but two.
+func TestPOScaleAtFullDeflection(t *testing.T) {
+	r, err := New(&config.Radio{CIV: &config.CIV{Model: "ic-7600"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := r.Decode(meterFrame(r, subPOMeter, 213))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Patch.PowerMeter == nil {
+		t.Fatal("no power meter published")
+	}
+	if f := u.Patch.PowerMeter.Fraction(); f != 1 {
+		t.Errorf("an IC-7600 at full power reads %v of full scale, want 1", f)
+	}
+}
+
+// The IC-718's scale is transcribed and deliberately not yet spent: its 15 group
+// carries all three meters, but its SWR row calibrates two points over the full
+// 255 where swrScale is built from 0000=SWR1.0 to 0120=SWR3.0. Claiming the
+// group would pin this radio's SWR bar from about half deflection on. So the
+// figure is recorded against the day the meters are claimed, and TXMeters says
+// what remoses can honestly publish today.
+func TestIC718POScaleIsRecordedButTheMetersAreNot(t *testing.T) {
+	m, err := LookupModel("ic-718")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.POScale != 231 {
+		t.Errorf("POScale = %d, want 231 from \"02 31=100 W\" on printed p. 5-3", m.POScale)
+	}
+	if m.TXMeters {
+		t.Error("TXMeters is true; its 15 12 runs to 255 with a different meaning " +
+			"from the scale this backend publishes SWR against")
+	}
+	r, err := New(&config.Radio{CIV: &config.CIV{Model: "ic-718"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := r.Caps(); c.PowerMeter || c.SWRMeter || c.ALCMeter {
+		t.Errorf("caps offer transmit meters (po=%v swr=%v alc=%v) the backend does not read",
+			c.PowerMeter, c.SWRMeter, c.ALCMeter)
 	}
 }
 

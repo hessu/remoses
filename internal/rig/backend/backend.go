@@ -334,10 +334,22 @@ type NoiseController interface {
 // AntennaSelector is implemented by a backend that can choose which antenna
 // socket the radio is using.
 //
-// No Icom implements it, and that is a statement about those radios rather
-// than a gap here: they keep the antenna as a per-band MEMORY in the Set menu
-// instead of offering a live selector, so switching would mean writing a stored
-// setting. See radio.State.Antenna.
+// Which radios have one is genuinely uneven, and the shape differs as much as
+// the presence. Kenwood spells it AN. On Icom it is command 12, where the
+// socket is the SUB-command and the data byte is that socket's receive-antenna
+// flag — so the two fields here share one frame and a set of either has to
+// carry the other across. Plenty of radios in every family have no selector at
+// all, and Caps.Antennas is what says so.
+//
+// This doc used to assert that no Icom implemented it, on the reasoning that
+// those radios keep the antenna as a per-band memory in the Set menu. That is
+// true of the small sets and false of the big ones: an IC-7610, IC-7600,
+// IC-7700, IC-7760, IC-7850 and IC-9100 all answer command 12, and the
+// IC-7300MK2 answers it for a receive antenna with no socket to choose. The
+// per-band memory is real and is a different thing, which is why remoses reads
+// the live selector and still does not write the memory.
+//
+// See radio.State.Antenna.
 type AntennaSelector interface {
 	// SetAntenna selects a socket, counting from 1 to Caps.Antennas.
 	SetAntenna(ctx context.Context, c Conn, n int) error

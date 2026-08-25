@@ -299,24 +299,25 @@ func (r *Rig) Caps() radio.Caps {
 		NotchFreqControl:     r.model.NotchFreq,
 		NotchWidths:          r.model.notchWidths(),
 		AutoNotchControl:     r.model.AutoNotch,
-		// No antenna selector — but NOT because these radios have none, which
-		// is what this said until somebody opened the reference.
+		// The antenna socket and the receive-only input, both on command 12 and
+		// both per model — because six of these radios have a live selector, and
+		// this backend spent a long time saying none of them did.
 		//
-		// The IC-7610's command table has a command 12: "12 00 Select/read ANT1
-		// selection" and "12 01 Select/read ANT2 selection", each taking
-		// 00=RX ANT OFF / 01=RX ANT ON (CI-V Reference Guide p. 3). The
-		// IC-7760's has four, ANT1 to ANT4 (p. 3 of its guide). That is a live
-		// switch, not the per-band ANTENNA MEMORY at 1A 05 02 76 through 02 87
-		// which this comment used to point at — the radio has both.
+		// Two sockets on the IC-7610, IC-7600 and IC-9100 and four on the
+		// IC-7760, IC-7700 and IC-7850, against nothing at all on the IC-9700,
+		// IC-905, IC-7300, IC-718, IC-703 and IC-910H, whose tables step 11
+		// straight to 13, or on the IC-706 family, whose tables stop at 10.
 		//
-		// So this is an unimplemented capability rather than an absent one, and
-		// it is left at 0 only because reading a command table is not the same
-		// as writing and testing a setter: 12's data byte is the receive-antenna
-		// flag rather than the socket, the socket is the SUB-command, and two
-		// of these radios have different numbers of sockets. It wants its own
-		// change. The IC-9700, IC-905 and IC-7300MK2 tables really do have no
-		// selector to offer — the MK2's 12 00 is the receive antenna alone.
-		Antennas: 0,
+		// The per-band ANTENNA MEMORY the old comment here pointed at is real —
+		// 1A 05 02 76 through 02 87 on an IC-7610 — and was never the only
+		// route; the radio has both, and remoses uses the one that is not
+		// persistent configuration.
+		//
+		// The two flags are independent, which the IC-7300MK2 is here to prove:
+		// its single command-12 row is a receive antenna with no socket
+		// selection behind it. See antenna.go.
+		Antennas:         r.model.Antennas,
+		RXAntennaControl: r.model.RXAntenna,
 
 		// The transmit audio chain: 14 0B the gain into the modulator, 16 44 the
 		// speech compressor, 14 0E its level. Straight from the model table,
@@ -595,6 +596,14 @@ func (r *Rig) Poll(ctx context.Context, c backend.Conn, tier backend.PollTier) e
 		// The receive front end. All of it is slow-tier: these are settings an
 		// operator changes by hand, and each is one more transaction per tick on
 		// a bus that also has to carry the fast poll.
+		//
+		// The antenna leads it, in signal order and because one bare command 12
+		// answers both the socket and its receive-antenna flag. It has to be
+		// read at all for the same reason data mode does: nothing else reports
+		// it, so without this state.antenna would only ever hold what remoses
+		// last wrote — and on a radio with the [ANT] switch in Auto it moves by
+		// itself as the operator changes band.
+		reqs = append(reqs, r.antennaReads()...)
 		if r.model.Preamp > 0 {
 			reqs = append(reqs, request{KeyPreamp, r.frame(cmdFunc, subPreamp)})
 		}

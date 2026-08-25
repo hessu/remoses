@@ -52,8 +52,15 @@ const (
 	// CW message being transmitted and being accepted and discarded.
 	KeyBreakIn backend.Key = "16/47"
 
-	// The receive front end. Command 11 has no sub-command, so its key is the
-	// bare command; the rest are the usual cmd/sub.
+	// The receive front end, and the antenna ahead of it. Commands 11 and 12
+	// have no sub-command, so their keys are the bare command; the rest are the
+	// usual cmd/sub.
+	//
+	// 12 is bare for a stronger reason than 11 is. Its first byte is the antenna
+	// SOCKET, so a key of "12/00" would file an answer about ANT1 separately
+	// from one about ANT2 and neither would match a pending read that does not
+	// know which will come back. One key, and the socket is in the reply's body.
+	KeyAntenna      backend.Key = "12"
 	KeyAttenuator   backend.Key = "11"
 	KeyPreamp       backend.Key = "16/02"
 	KeyAGC          backend.Key = "16/12"
@@ -200,6 +207,13 @@ func (r *Rig) Decode(frame []byte) (backend.Update, error) {
 				u.Patch.AttenuatorDB = &db
 			}
 		}
+		return u, nil
+
+	case cmdAntenna:
+		// 12 answers the socket and, where the radio has one, that socket's
+		// receive-antenna flag. Length driven, because the flag byte is simply
+		// absent on the IC-9100 rather than sent as a zero.
+		r.decodeAntenna(&u, body)
 		return u, nil
 
 	case cmdFunc:

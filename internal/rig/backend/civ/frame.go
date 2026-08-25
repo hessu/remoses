@@ -68,6 +68,13 @@ const (
 	cmdAttenuator = 0x11
 	attenuatorOff = 0x00
 
+	// cmdAntenna is 12, the antenna socket and its receive-only input. Its
+	// operands are a socket index counting from zero and, on the radios whose
+	// tables print one, that socket's RX-ANT flag — no BCD anywhere, since the
+	// values never leave 00 to 03. Which radios have it, how many sockets, and
+	// whether the second byte exists are all in the model table; see antenna.go.
+	cmdAntenna = 0x12
+
 	subPreamp  = 0x02 // 16 02: 00 off, 01 preamp 1, 02 preamp 2
 	subAGC     = 0x12 // 16 12: the speeds, per Model.AGC
 	subDigiSel = 0x4E // 16 4E: 00 off, 01 on

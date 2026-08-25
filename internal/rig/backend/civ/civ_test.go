@@ -31,6 +31,16 @@ type simRig struct {
 	ptt    byte
 	tuner  byte
 
+	// The antenna socket and its receive-antenna flag, command 12, held as the
+	// two operand bytes the wire carries: socket counting from zero, then the
+	// flag. antennaBytes is how many of them this radio's table prints — two on
+	// an IC-7610, one on an IC-9100, whose command 12 has no flag at all — so a
+	// set of the wrong width is refused here rather than silently accepted, and
+	// a test can put either shape on the bus.
+	antenna      byte
+	rxAntenna    byte
+	antennaBytes int
+
 	// The receive front end. att holds whatever byte command 11 was given, so
 	// that a test can assert on the encoding — BCD dB against the IC-718's
 	// index — rather than only on what the decoder made of it.
@@ -122,6 +132,13 @@ func newSim(t *testing.T) *simRig {
 		speed:   [2]byte{0x01, 0x28},
 		width:   0x10,
 		backend: testRig(t),
+
+		// ANT2 with its receive antenna switched in, so that a setter which
+		// drops either field is visible: a socket byte of 00 and a flag of 00
+		// are both exactly what a dropped byte looks like.
+		antenna:      0x01,
+		rxAntenna:    0x01,
+		antennaBytes: 2,
 
 		// The front end, set to values that are legal on the default model
 		// rather than to zero. The AGC byte especially: 00 is not one of the
@@ -380,6 +397,26 @@ func (s *simRig) handle(req []byte) ([][]byte, error) {
 		*dst = body[1]
 		return ok, nil
 
+	case cmdAntenna:
+		// 12 takes no sub-command either: its first operand is the socket. A
+		// bare frame reads both fields back, and a set carries exactly as many
+		// operands as this radio's table prints — a trailing flag byte sent to a
+		// radio without one is a parameter its parser is not expecting, so it is
+		// an NG here.
+		switch {
+		case len(body) == 0 && s.antennaBytes == 1:
+			return [][]byte{fromRig(cmdAntenna, s.antenna)}, nil
+		case len(body) == 0:
+			return [][]byte{fromRig(cmdAntenna, s.antenna, s.rxAntenna)}, nil
+		case len(body) == s.antennaBytes:
+			s.antenna = body[0]
+			if s.antennaBytes > 1 {
+				s.rxAntenna = body[1]
+			}
+			return ok, nil
+		}
+		return ng, nil
+
 	case cmdAttenuator:
 		// 11 takes no sub-command: a bare read, or one data byte to set.
 		if len(body) == 0 {
@@ -598,17 +635,19 @@ func TestPoll(t *testing.T) {
 		// client showing a tuner button wants its state as soon as there is
 		// one. While a tuning cycle is running it moves to the fast tier
 		// instead; see TestTunerIsWatchedWhileTuning.
-		// And the receive front end brings up the rear: 16 02 the preamp, 11 the
+		// And the receive front end brings up the rear, in signal order: 12 the
+		// antenna socket with its receive-antenna flag, 16 02 the preamp, 11 the
 		// attenuator, 14 02 the RF gain, then 16 12 AGC, 16 65 IP+, 16 4E
 		// DIGI-SEL and 14 13 its shift. All settings an operator moves by hand,
-		// so all of them slow-tier.
+		// so all of them slow-tier. One bare 12 answers both antenna fields,
+		// which is why the six radios that have it pay a single transaction.
 		// And after the front end, the noise processing and the notches: 16 22
 		// and 14 12 for the blanker, 16 40 and 14 06 for the reducer, then the
 		// manual notch, its position and width, and the automatic one.
 		// And last the transmit audio chain: 14 0B the gain into the modulator,
 		// 16 44 the speech compressor, 14 0E its level.
 		{"slow", backend.PollSlow, []string{"1C/01", "14/0A", "1A/03",
-			"25", "25", "26", "26", "0F", "07", "16", "1A/06",
+			"25", "25", "26", "26", "0F", "07", "16", "1A/06", "12",
 			"16", "11", "14/02", "16", "16", "16", "14/13",
 			"16", "14/12", "16", "14/06", "16", "14/0D", "16", "16",
 			"14/0B", "16", "14/0E"}},
@@ -936,9 +975,12 @@ func TestSlowPollSkipsWhatAModelLacks(t *testing.T) {
 	//
 	// The IC-718 has a preamp, a pad, an RF gain and no AGC; a blanker, a
 	// reducer with a level, and an automatic notch with no manual one.
-	// The IC-910H has a preamp, a pad and an AGC; a blanker, and no reducer at
-	// all — its 16 40 carries the switch and the level together, which is not
-	// the family's form.
+	// The IC-910H has a preamp, a pad, an RF gain and an AGC; a blanker, and no
+	// reducer at all — its 16 40 carries the switch and the level together,
+	// which is not the family's form.
+	//
+	// Neither has a command 12, so neither asks about an antenna: both tables
+	// step 11 straight to 13.
 	//
 	// The transmit audio chain splits them again, and asymmetrically. The
 	// IC-718 ends with 14 0B and 16 44 — its mic gain and its compressor — and
@@ -947,7 +989,7 @@ func TestSlowPollSkipsWhatAModelLacks(t *testing.T) {
 	// better-equipped radio.
 	for model, want := range map[string][]string{
 		"ic-718":  {"14/0A", "16", "11", "14/02", "16", "16", "14/06", "16", "14/0B", "16"},
-		"ic-910h": {"14/0A", "16", "16", "11", "16", "16", "14/0B", "16", "14/0E"},
+		"ic-910h": {"14/0A", "16", "16", "11", "14/02", "16", "16", "14/0B", "16", "14/0E"},
 	} {
 		t.Run(model, func(t *testing.T) {
 			s := newSim(t)

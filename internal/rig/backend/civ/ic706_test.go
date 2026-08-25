@@ -1,6 +1,7 @@
 package civ
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -67,6 +68,94 @@ func TestIC706FamilyCaps(t *testing.T) {
 				t.Error("claims split; only the two set forms of 0F are documented")
 			}
 		})
+	}
+}
+
+// TestIC706AndMKIIHaveNoCommand16 is a correction rather than a new feature,
+// and the whole of it is in the two oldest tables in this backend.
+//
+// The IC-706's and IC-706MKII's command tables run 05, 06, 07, 08, 09, 0A, 0B,
+// 0E, 0F, 10 — and stop (instruction manuals §6, printed p. 39 and p. 41). No
+// 11 and no 16 at any sub-command. The model profile nonetheless gave all three
+// generations a noise blanker (16 22), a preamplifier (16 02) and a 20 dB pad
+// (11), taken from the MKIIG's table alone, under a comment claiming the earlier
+// two "cannot be read at all". They can, and they say no.
+//
+// The cost of the old shape was not an error message: it was three commands on
+// the slow poll of every connect, each drawing an NG from a radio that has never
+// heard of them, and three controls offered to a client that could only fail.
+func TestIC706AndMKIIHaveNoCommand16(t *testing.T) {
+	for _, model := range []string{"ic-706", "ic-706mkii"} {
+		t.Run(model, func(t *testing.T) {
+			r, s := modelRig(t, model)
+			c := r.Caps()
+			if c.PreampLevels != 0 {
+				t.Errorf("preamp_levels = %d; there is no 16 02 in this table", c.PreampLevels)
+			}
+			if len(c.AttenuatorDB) != 0 {
+				t.Errorf("attenuator = %v; there is no 11 in this table", c.AttenuatorDB)
+			}
+			if c.NoiseBlankerLevels != 0 {
+				t.Errorf("noise_blanker_levels = %d; there is no 16 22 in this table",
+					c.NoiseBlankerLevels)
+			}
+
+			// And nothing may reach the wire for any of them.
+			ctx := context.Background()
+			for _, tc := range []struct {
+				what string
+				err  error
+			}{
+				{"preamp", r.SetPreamp(ctx, s, 1)},
+				{"attenuator", r.SetAttenuator(ctx, s, 20)},
+				{"noise blanker", r.SetNoiseBlanker(ctx, s, 1)},
+			} {
+				if !errors.Is(tc.err, backend.ErrUnsupported) {
+					t.Errorf("%s = %v, want ErrUnsupported", tc.what, tc.err)
+				}
+			}
+			if len(s.log) != 0 {
+				t.Errorf("refused requests still put %d frames on the wire", len(s.log))
+			}
+
+			// The slow poll must not ask either, or every tick would carry three
+			// rejections for values that can never arrive.
+			_ = r.Poll(ctx, s, backend.PollSlow)
+			for _, f := range s.log {
+				if len(f) < 5 {
+					continue
+				}
+				if f[4] == cmdFunc || f[4] == cmdAttenuator {
+					t.Errorf("the slow tier sent % X to a radio with no 11 and no 16", f)
+				}
+			}
+		})
+	}
+}
+
+// The MKIIG is the one that has them, from its own table (printed p. 46): "11 xx
+// ATT ON/OFF; 00=OFF; 20=ON", "16 02 Preamp setting", "16 22 NB setting". That
+// is where the three used to be claimed from for all three radios; here they are
+// claimed for the radio that prints them.
+func TestIC706MKIIGHasThePreampPadAndBlanker(t *testing.T) {
+	r, s := modelRig(t, "ic-706mkiig")
+	c := r.Caps()
+	if c.PreampLevels != 1 {
+		t.Errorf("preamp_levels = %d, want 1", c.PreampLevels)
+	}
+	if len(c.AttenuatorDB) != 1 || c.AttenuatorDB[0] != 20 {
+		t.Errorf("attenuator = %v, want [20]", c.AttenuatorDB)
+	}
+	if c.NoiseBlankerLevels != 1 {
+		t.Errorf("noise_blanker_levels = %d, want 1", c.NoiseBlankerLevels)
+	}
+	// "00=OFF; 20=ON" is as explicit as the IC-703's, so the byte is the depth
+	// in BCD rather than the IC-718's index.
+	if err := r.SetAttenuator(context.Background(), s, 20); err != nil {
+		t.Fatalf("SetAttenuator(20): %v", err)
+	}
+	if s.att != 0x20 {
+		t.Errorf("SetAttenuator(20) put %#02x on the wire, want 20 as BCD", s.att)
 	}
 }
 

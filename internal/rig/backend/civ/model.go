@@ -97,6 +97,43 @@ type Model struct {
 	// slow tick, and would have shown an operator a Tune button that could only
 	// ever fail. So it is claimed per model, like everything else here.
 	Tuner bool
+	// Antennas is how many antenna sockets command 12 selects between, and 0 on
+	// a radio whose table has no command 12 — or has one that is not a selector.
+	//
+	// This backend asserted for a long time that no Icom had a live antenna
+	// selector at all, because the antenna is also a per-band MEMORY on this
+	// family: an IC-7610 keeps one entry per band range at 1A 05 02 76 through
+	// 02 87, and remoses writes no stored setting. The memories are real, and
+	// they were never the only route — six of the radios below have command 12
+	// as well, and the radio has both.
+	//
+	// Two sockets on the IC-7610, IC-7600 and IC-9100; four on the IC-7760,
+	// IC-7700 and IC-7850. The frame is the same on all six and is printed three
+	// different ways; see antenna.go.
+	Antennas int
+	// RXAntenna says command 12 carries a second byte, which is the selected
+	// socket's receive-antenna flag: "00=RX ANT OFF, 01=RX ANT ON".
+	//
+	// False on the IC-9100, whose data column against "12 00 Send/read ANT1
+	// selection" is empty (instruction manual §18, printed p. 184) — a bare
+	// socket selector with no separate receive input behind it.
+	//
+	// True on the IC-7300MK2, which has this byte and NOT the selector: its
+	// single row is "12 00 Sets or reads the ON/OFF status of a receiving
+	// antenna. (00=OFF, 01=ON)" (CI-V Reference Guide p. 4). So that radio has
+	// Antennas 0 and this true, and the two really are independent.
+	RXAntenna bool
+	// RXAntennaSockets is how many of those sockets accept 01.
+	//
+	// It is the whole socket count on most of them, and one less on the IC-7700
+	// and IC-7850, whose ANT4 row prints a data column of "00" alone followed by
+	// the word "fix" (IC-7700 printed p. 14-3, IC-7850 printed p. 18-3). That
+	// socket has no receive antenna behind it, so 01 there would be an
+	// out-of-range byte for a distinction the radio does not make.
+	//
+	// Zero where Antennas is zero, and not consulted there: on a radio with no
+	// socket selection there is nothing for it to count.
+	RXAntennaSockets int
 	// Preamp is how many preamplifiers command 16 02 offers, 0 for a radio
 	// whose table has no 16 02 row — the IC-910H, whose preamps are external
 	// units with their own controllers.
@@ -217,10 +254,34 @@ type Model struct {
 	SWRCal bool
 	// POScale is the raw 15 11 reading that means 100% output.
 	//
-	// It is not the same everywhere and the difference is not cosmetic: the
-	// IC-7610's table reads "0000=0% ~ 0143=50% ~ 0255=100%" and the IC-9700's
-	// "0000=0% to 0143=50% to 0213=100%". Publishing 213 against a scale of 255
-	// would show 84% for a radio at full power.
+	// It is not the same everywhere and the difference is not cosmetic: against
+	// the wrong scale a radio at full power reads 84%. Every reference here
+	// prints its own calibration line and five different tops come out of them:
+	//
+	//	255  IC-7610      "00 00=0% ~ 01 43=50% ~ 02 55=100%"   (Ref. Guide p. 3)
+	//	213  IC-9700      "0000=0% to 0143=50% to 0213=100%"    (Ref. Guide p. 4)
+	//	213  IC-905       "00 00=0% ~ 01 43=50% ~ 02 13=100%"   (Ref. Guide p. 4)
+	//	213  IC-7300MK2   "00 00=0% ~ 01 43=50% ~ 02 13=100%"   (Ref. Guide p. 5)
+	//	213  IC-7300      "00 00=0%, 01 43=50%, 02 13=100%"     (printed p. 19-3)
+	//	213  IC-7600      "0000=0%, 0143=50%, 0213=100%"        (printed p. 160)
+	//	215  IC-9100      "0000=0%, 0141=50%, 0215=100%"        (printed p. 185)
+	//	212  IC-7760      "00 00=0W ~ 01 43=100W ~ 02 12=200W"  (Ref. Guide p. 4)
+	//	212  IC-7700      "0000=0 W, 0143=100 W, 0212=200 W"    (printed p. 14-4)
+	//	213  IC-7850      "0000=0 W, 0143=100 W, 0213=200 W"    (printed p. 18-4)
+	//	231  IC-718       "00 00=no transmission, 02 31=100 W"  (printed p. 5-3)
+	//
+	// The IC-7610 is the outlier, not the norm, and this field defaulted to its
+	// 255 for the whole family until the tables above were read: eight profiles
+	// were publishing a full-power radio at 83 or 84%, and the IC-718 carried no
+	// figure at all. Nothing about that looks like a fault — 84% is exactly what
+	// a transmitter down on output would read.
+	//
+	// The IC-7700 and the IC-7850 differ by one count for the same nominal
+	// 200 W, which is a good reminder that these are transcriptions of separate
+	// documents rather than a formula. Note also that four of them print WATTS
+	// where the rest print a percentage; remoses publishes the deflection and
+	// its scale either way, because Caps.PowerWattAccurate is false family-wide
+	// and reading a watt figure off 15 11 is the transmit meter's own change.
 	POScale int
 	// SMeter is true when the radio has command 15 02.
 	//
@@ -396,17 +457,24 @@ func withModes(base []radio.Mode, extra ...radio.Mode) []radio.Mode {
 // wpm keyer. Models that differ override the fields after building.
 func modern(name, label string, addr byte, modes []radio.Mode) Model {
 	return Model{
-		Name:           name,
-		Label:          label,
-		Address:        addr,
-		Modes:          modes,
-		FilterSlots:    3,
-		PTT:            true,
-		PTTSub:         0x00,
-		Power:          true,
-		SMeter:         true,
-		TXMeters:       true,
-		SWRCal:         true,
+		Name:        name,
+		Label:       label,
+		Address:     addr,
+		Modes:       modes,
+		FilterSlots: 3,
+		PTT:         true,
+		PTTSub:      0x00,
+		Power:       true,
+		SMeter:      true,
+		TXMeters:    true,
+		SWRCal:      true,
+		// The IC-7610's PO meter scale, and NOT a family constant: it is the one
+		// radio here that reaches 100% at 255, and every other profile built from
+		// this function overrides it from its own table. See Model.POScale for the
+		// eleven calibration lines. What is left holding this default is generic,
+		// where it is a guess either way — nothing on the bus says which
+		// generation is answering, and a scale that is 42 counts too generous
+		// under-reports rather than over-reports the power going out.
 		POScale:        255,
 		CWBuffer:       true,
 		FilterWidth:    true,
@@ -544,28 +612,23 @@ func mkiiFamily(name, label string, addr byte) Model {
 		Power:    false,
 		SMeter:   false,
 		CWBuffer: false,
-		// The front end is the one part of the receive side these radios do
-		// have on the bus: 16 02 for the preamp and 11 for the 20 dB pad, the
-		// two controls the panel puts on a shared [P.AMP/ATT] key. Being in the
-		// 14 group, the RF gain is not — it is the panel's own knob.
-		Preamp:     1,
-		Attenuator: []int{20},
-		// The MKIIG's 16 group is 02, 12, 22, 42, 43, 44, 46 and 47 — preamp,
-		// AGC, NB, TONE, TSQL, COMP, VOX and BK-IN, each its own labelled row
-		// (instruction manual §6, printed p. 46): a noise blanker, and no noise
-		// reduction or notch of either kind.
+		// No receive front end on the bus either, and this is the part that used
+		// to be wrong.
 		//
-		// The two earlier radios share this profile, and it is worth being
-		// straight about what that rests on. Their tables ARE legible — printed
-		// p. 39 and p. 41 — and what they show is a command set running 05 to
-		// 10 with no 16 group at all, and no 11 or 15 either. So the blanker,
-		// the preamp and the pad here are claimed for the IC-706 and IC-706MKII
-		// on the strength of the MKIIG's table rather than their own, which is
-		// the same footing as the 03 and 04 reads those radios answer without
-		// printing. Worth revisiting on a radio; not changed here, because it is
-		// three capabilities across two models and belongs in its own change.
-		NoiseBlanker: true,
-		// No 1A at all, so neither a filter width nor a data mode.
+		// The IC-706's and IC-706MKII's command tables run 05, 06, 07, 08, 09,
+		// 0A, 0B, 0E, 0F, 10 — and STOP (instruction manuals §6, printed p. 39
+		// and p. 41). There is no 11 and no 16 at any sub-command, so no
+		// attenuator, no preamplifier and no noise blanker; the panel's shared
+		// [P.AMP/ATT] key and the [NB] switch are the only way to any of them.
+		// Those three were claimed here for all three radios on the strength of
+		// the MKIIG's table alone, under a comment saying the earlier two
+		// "cannot be read at all" — they are perfectly legible, and they say no.
+		// The MKIIG's entry claims them for itself, where its own table prints
+		// them.
+		//
+		// Being in the 14 group, the RF gain is absent on all three.
+		//
+		// No 1A at all either, so neither a filter width nor a data mode.
 		FilterWidth: false,
 		DataMode:    false,
 		// 07 selects VFO mode, and 07 00 / 07 01 select VFO A and B.
@@ -656,6 +719,12 @@ var models = map[string]Model{
 		m.IPPlus = true
 		m.DigiSel = true
 		m.DigiSelShift = true
+		// Two antenna sockets on command 12, each carrying its own receive-antenna
+		// flag: "12 00 00 or 01 Select/read ANT1 selection (00=RX ANT OFF, 01=RX
+		// ANT ON)" and the same for 01 / ANT2 (CI-V Reference Guide p. 3). This is
+		// the radio the "no Icom has an antenna selector" comment was written
+		// against, and it is the radio on the bench.
+		m.Antennas, m.RXAntenna, m.RXAntennaSockets = 2, true, 2
 		return m
 	}(),
 
@@ -664,6 +733,14 @@ var models = map[string]Model{
 		m := withTuner(modern("ic-7300mk2", "Icom IC-7300MK2", 0xB6, modesCommon()))
 		m.Attenuator = []int{20}
 		m.IPPlus = true
+		m.POScale = 213 // "00 00=0% ~ 01 43=50% ~ 02 13=100%", Ref. Guide p. 5
+		// It has command 12 and it is NOT a selector: one row, "12 00 Sets or
+		// reads the ON/OFF status of a receiving antenna. (00=OFF, 01=ON)"
+		// (Ref. Guide p. 4), where the bigger sets put the socket in that same
+		// sub-command position. So there is one receive-antenna switch and
+		// nothing to select between, which is exactly the shape Antennas 0 with
+		// RXAntenna true describes.
+		m.RXAntenna = true
 		return m
 	}(),
 
@@ -677,6 +754,15 @@ var models = map[string]Model{
 		m.IPPlus = true
 		m.DigiSel = true
 		m.DigiSelShift = true
+		// "00 00=0W ~ 01 43=100W ~ 02 12=200W" (Ref. Guide p. 4). A watt figure
+		// rather than a percentage, and one of three tables printing 200 W where
+		// no two of them agree on the count: the IC-7700 also says 212 and the
+		// IC-7850 says 213 for the same nominal output.
+		m.POScale = 212
+		// Four sockets, ANT1 to ANT4, each with its own receive-antenna flag over
+		// 00/01 (Ref. Guide p. 3). The only one of the four-socket radios whose
+		// ANT4 row is not fixed off.
+		m.Antennas, m.RXAntenna, m.RXAntennaSockets = 4, true, 4
 		return m
 	}(),
 
@@ -742,7 +828,9 @@ var models = map[string]Model{
 			withModes(modesCommon(), radio.ModeDV, radio.ModeDD, radio.ModeATV))
 		m.WideFrequency = true
 		m.Attenuator = []int{10}
-		m.Preamp = 1 // 16 02 is 00/01 here, with no second stage
+		m.Preamp = 1    // 16 02 is 00/01 here, with no second stage
+		m.POScale = 213 // "00 00=0% ~ 01 43=50% ~ 02 13=100%", Ref. Guide p. 4
+		// No command 12 at all: its table steps 11 straight to 13.
 		return m
 	}(),
 
@@ -751,6 +839,9 @@ var models = map[string]Model{
 		m := withTuner(modern("ic-7300", "Icom IC-7300", 0x94, modesCommon()))
 		m.Attenuator = []int{20}
 		m.IPPlus = true
+		m.POScale = 213 // "00 00=0%, 01 43=50%, 02 13=100%", printed p. 19-3
+		// No command 12 at all: its table steps 11 straight to 13. The MK2 gained
+		// one, for a receive antenna rather than a socket selector.
 		return m
 	}(),
 
@@ -763,6 +854,15 @@ var models = map[string]Model{
 		m.AGC = map[radio.AGC]byte{
 			radio.AGCFast: 0x00, radio.AGCMid: 0x01, radio.AGCSlow: 0x02,
 		}
+		m.POScale = 213 // "0000=0%, 0143=50%, 0213=100%", printed p. 160
+		// Two sockets, and the only radio here whose command 12 has no
+		// sub-command column at all: its four rows are one two-byte data field,
+		// "0000 Send/read ANT1 selection (RX ANT OFF)" through "0101 Send/read
+		// ANT2 selection (RX ANT ON)" (printed p. 160). Byte for byte that is
+		// the same frame the IC-7610 prints as a sub-command and a data byte —
+		// the socket first, its receive-antenna flag second — which is why one
+		// encoder serves all six. See antenna.go.
+		m.Antennas, m.RXAntenna, m.RXAntennaSockets = 2, true, 2
 		return m
 	}(),
 
@@ -778,6 +878,14 @@ var models = map[string]Model{
 			radio.AGCMid: 0x02, radio.AGCSlow: 0x03,
 		}
 		m.DigiSel = true
+		m.POScale = 212 // "0000=0 W, 0143=100 W, 0212=200 W", printed p. 14-4
+		// Four sockets, and the first of the two whose ANT4 is fixed: "12 03 00
+		// Select/read ANT4 selection (00=RX ANT OFF; fix)", where ANT1 to ANT3
+		// each take 00 or 01 (printed p. 14-3). ANT4 is the socket its Set mode
+		// lets an operator make receive-only — 1A 05 0181, "00=OFF, 01=TX/RX,
+		// 02=RX", a value the other three sockets do not have (p. 14-8) — which
+		// is not the same setting but is the reason it stands apart.
+		m.Antennas, m.RXAntenna, m.RXAntennaSockets = 4, true, 3
 		return m
 	}(),
 
@@ -792,6 +900,11 @@ var models = map[string]Model{
 		m.Attenuator = attSteps(3, 21, 3)
 		m.AGC = nil
 		m.DigiSel = true
+		m.POScale = 213 // "0000=0 W, 0143=100 W, 0213=200 W", printed p. 18-4
+		// Four sockets with ANT4 fixed off, worded exactly as the IC-7700's:
+		// "12 03 00 Select/read ANT4 selection (00=RX ANT OFF; fix)", ANT1 to
+		// ANT3 taking 00 or 01 (printed p. 18-3).
+		m.Antennas, m.RXAntenna, m.RXAntennaSockets = 4, true, 3
 		return m
 	}(),
 
@@ -817,6 +930,18 @@ var models = map[string]Model{
 		m := withTuner(modern("ic-9100", "Icom IC-9100", 0x7C,
 			withModes(modesCommon(), radio.ModeDV)))
 		m.Attenuator = []int{20}
+		// The only radio here whose PO meter tops out at 215, and the only one
+		// whose half-scale point is not 143: "0000=0%, 0141=50%, 0215=100%"
+		// (printed p. 185). remoses publishes the deflection against the top, so
+		// the odd midpoint costs nothing — but it is the clearest evidence in
+		// this file that these lines are transcriptions rather than a formula.
+		m.POScale = 215
+		// Two sockets and no receive-antenna byte: "12 00 Send/read ANT1
+		// selection" and "12 01 Send/read ANT2 selection" with the Data column
+		// EMPTY (printed p. 184). A bare socket selector, which is why RXAntenna
+		// is a separate flag from Antennas — command 12 here is one byte shorter
+		// than it is on every other radio that has it.
+		m.Antennas = 2
 		return m
 	}(),
 
@@ -887,13 +1012,19 @@ var models = map[string]Model{
 		// reduction level, a CW pitch, the RF power, the mic gain, the keyer
 		// speed, the compressor level and the break-in delay.
 		//
-		// Which leaves a gap this change does not close: 14 02 is
-		// "[RF GAIN] level setting (0=max. CCW; 255=max. CW)" and RFGain is
-		// still false here, so the radio has a receiver gain control on the bus
-		// that remoses does not offer. That is the front end's to fix, with its
-		// own test; it is recorded rather than flipped in a transmit-audio
-		// change.
+		// Which is where the RF gain comes from. "02 [RF GAIN] level setting
+		// (0=max. CCW; 255=max. CW)" is the family's own 14 02 in the family's
+		// own 0-255 field, so setLevel writes it and the slow poll reads it back
+		// with no special case at all — the radio had a receiver gain control on
+		// the bus that remoses declined to offer, on the strength of a comment
+		// claiming a command group this table plainly prints.
 		//
+		// Its 14 06, "Set noise reduction level (0=0%; 255=100%)", is NOT
+		// claimed with it, and that is the same decision as the reducer above:
+		// 14 06 is the strength and 16 40 on this radio carries the switch and
+		// the strength together, so remoses would be offering a level for a
+		// circuit it cannot switch. One command at a time.
+		RFGain: true, // 14 02
 		// The transmit chain it has entire, and its compressor level is the
 		// third spelling of 14 0E in this table: "Set mic. compressor level
 		// (0=0%; 255=100%)" — a plain percentage over 0-255, where the modern
@@ -942,6 +1073,8 @@ var models = map[string]Model{
 	// The MKIIG is the one with a documented command table of the modern shape,
 	// and it is the only one of the three that gained anything remoses can use:
 	//
+	//   11     "ATT ON/OFF; 00=OFF; 20=ON" — one 20 dB pad, and the byte is the
+	//          depth in BCD, printed as plainly as the IC-703's
 	//   15 02  a readable S-meter, where the earlier two have no meter at all
 	//   16 47  CW break-in, which matters because these radios have no CAT CW
 	//          buffer: an operator keying a control line still needs the rig in
@@ -952,10 +1085,30 @@ var models = map[string]Model{
 	//          from; the tone commands and VOX remoses still does not model
 	//   19 00  the identity read, so a wrong bus address can be diagnosed
 	//
+	// All of that is from its own command table (instruction manual §6, printed
+	// p. 46), and none of it is in the other two radios' tables, which run 05 to
+	// 10 and stop. Which is the whole reason these three lines are here rather
+	// than in mkiiFamily.
+	//
 	// It still has no 1C and no 14, so PTT and power remain absent.
 	"ic-706mkiig": func() Model {
 		m := mkiiFamily("ic-706mkiig", "Icom IC-706MKIIG", 0x58)
 		m.SMeter = true
+		// The front end, such as it is: "16 02 Preamp setting" and "11 ATT
+		// ON/OFF; 00=OFF; 20=ON", the two controls its panel puts on a shared
+		// [P.AMP/ATT] key, and "16 22 NB setting" beside them. One preamplifier
+		// and one pad, because that is what the radio has.
+		//
+		// The AGC is left alone even though "16 12 AGC setting" is printed: that
+		// table has no Data column, and 16 12's byte values are the one thing in
+		// this command group no two references spell the same way — 01/02/03 on
+		// the IC-7610, 00/01/02 on the IC-7600, 1/2 on the IC-703, 0/1 the other
+		// way round on the IC-910H. Guessing wrong there sets a speed nobody
+		// asked for and reads back as though it were right, which is not the
+		// cheap kind of mistake an on/off is.
+		m.Preamp = 1
+		m.Attenuator = []int{20}
+		m.NoiseBlanker = true
 		// Its table lists "16 47 BK-IN setting" and no data values at all —
 		// that table has no Data column. Taken as the three-value form, which
 		// is the family norm and which fails LOUDLY if wrong: a request for
@@ -1116,6 +1269,20 @@ var models = map[string]Model{
 		CWBuffer:    false,
 		FilterWidth: false,
 		MaxWPM:      60,
+		// Its PO meter reaches 100 W at 231 — "00 00=no transmission, 02 31=
+		// 100 W (approximate)" (printed p. 5-3) — the highest top in this file
+		// and nothing like the 255 the rest of the table used to assume.
+		//
+		// It is recorded and NOT yet spent, because TXMeters stays false here and
+		// this is the field that says why. The radio's 15 group does carry all
+		// three meters, but its SWR row reads "00 00=SWR1, 02 55=antenna open" —
+		// two points over the full 255, where every reference this backend has
+		// built swrScale from calibrates 0000=SWR1.0 to 0120=SWR3.0 and says
+		// nothing above. Claiming the group would publish this radio's SWR bar
+		// pinned from about half deflection onwards, which over-warns on an
+		// antenna that is fine. A per-model SWR scale would settle it; that is
+		// the transmit meter's change, not this one.
+		POScale: 231,
 		// And a second place where this radio spells a shared command its own
 		// way. Its table gives command 11 as "00=OFF (0dB), 01=20dB" — an INDEX,
 		// where the IC-703's table of the same vintage gives "00=OFF, 20=ON

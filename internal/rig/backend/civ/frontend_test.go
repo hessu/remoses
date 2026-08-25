@@ -310,8 +310,15 @@ func TestFrontEndCapsMatchTheModelTable(t *testing.T) {
 // TestFrontEndSettersRefuseWhereUnsupported: every setter has to answer
 // ErrUnsupported rather than putting a command on the bus that the radio has
 // never heard of.
+//
+// The IC-706MKIIG rather than the IC-910H, which is where this test used to
+// look. That entry claimed the IC-910H had no command 14 at all, so it stood in
+// for a radio with no RF gain — and its table plainly prints "14 02 [RF GAIN]
+// level setting (0=max. CCW; 255=max. CW)" (printed p. 79). The MKIIG genuinely
+// has no 14 at any sub-command, and a 16 group of eight rows with no
+// preselector in it.
 func TestFrontEndSettersRefuseWhereUnsupported(t *testing.T) {
-	r, s := modelRig(t, "ic-910h") // no 14 group at all, no preselector
+	r, s := modelRig(t, "ic-706mkiig")
 	ctx := context.Background()
 	for _, tc := range []struct {
 		what string
@@ -321,14 +328,51 @@ func TestFrontEndSettersRefuseWhereUnsupported(t *testing.T) {
 		{"ip+", r.SetIPPlus(ctx, s, true)},
 		{"digi-sel", r.SetDigiSel(ctx, s, true)},
 		{"digi-sel shift", r.SetDigiSelShift(ctx, s, 50)},
+		// And the AGC, which its table does list as "16 12 AGC setting" with no
+		// data column: the byte values are the one thing in this group no two
+		// references spell the same way, so the model claims nothing.
+		{"agc", r.SetAGC(ctx, s, radio.AGCFast)},
 	} {
 		if tc.err == nil {
-			t.Errorf("%s was accepted on an IC-910H", tc.what)
+			t.Errorf("%s was accepted on an IC-706MKIIG", tc.what)
 			continue
 		}
 		if !errors.Is(tc.err, backend.ErrUnsupported) {
 			t.Errorf("%s refused with %v, which is not ErrUnsupported and would be a 500",
 				tc.what, tc.err)
 		}
+	}
+}
+
+// TestIC910HHasAnRFGain is the other half of that correction, and it is the
+// whole of what the model entry got wrong.
+//
+// Its command table (§13, printed p. 79) carries a 14 group of 01, 02, 03, 04,
+// 06, 09, 0A, 0B, 0C, 0E and 0F — which is also why that same entry could set
+// Power from 14 0A and MaxWPM from 14 0C while claiming the group did not exist.
+// 14 02 is the receiver's RF gain in the family's ordinary 0-255 field, so it
+// needs no special case: setLevel writes it and the slow poll reads it back.
+func TestIC910HHasAnRFGain(t *testing.T) {
+	r, s := modelRig(t, "ic-910h")
+	if !r.Caps().RFGainControl {
+		t.Fatal("caps.rf_gain_control is false on a radio whose table prints 14 02")
+	}
+	if err := r.SetRFGain(context.Background(), s, 50); err != nil {
+		t.Fatalf("SetRFGain: %v", err)
+	}
+	// 50% of 255 is 127.5, rounded up: the same encoding as every other level
+	// in the group, because this radio spells 14 02 the same way the rest do.
+	if s.rfGain != [2]byte{0x01, 0x28} {
+		t.Errorf("SetRFGain(50%%) sent % X, want 01 28", s.rfGain)
+	}
+	u, err := r.Decode(fromRig(cmdLevel, subRFGain, s.rfGain[0], s.rfGain[1]))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if u.Key != KeyRFGain {
+		t.Errorf("a 14 02 answer keyed %q, want %q", u.Key, KeyRFGain)
+	}
+	if u.Patch.RFGain == nil || int(*u.Patch.RFGain+0.5) != 50 {
+		t.Errorf("RF gain decoded as %v, want 50%%", u.Patch.RFGain)
 	}
 }

@@ -601,8 +601,11 @@ type Caps struct {
 	ALCMeter bool `json:"alc_meter"`
 
 	// Antennas How many antenna sockets remoses can select between, 0 where it
-	// cannot. Zero on every Icom: the antenna there is a per-band memory
-	// rather than a live selector.
+	// cannot.
+	//
+	// Independent of `rx_antenna_control`: an IC-9100 selects between two
+	// sockets and has no receive antenna, while an IC-7300MK2 has a
+	// receive antenna and no socket to choose.
 	Antennas int `json:"antennas"`
 
 	// AttenuatorDB The attenuation steps this radio accepts, in dB and ascending, NOT
@@ -958,10 +961,15 @@ type State struct {
 
 	// Antenna Which antenna socket is selected, counting from 1.
 	//
-	// Absent on every Icom, and that is about those radios rather than
-	// about remoses: they have no live antenna selector on the bus. The
-	// antenna is a per-band MEMORY in the Set menu, so switching it would
-	// mean writing a stored setting rather than throwing a switch.
+	// Absent on a radio with no selector remoses can work. Where it is
+	// present the two antenna fields may not be independent: on Icom the
+	// socket and `rx_antenna` share one frame, the flag belonging to the
+	// selected socket, so changing the socket can change `rx_antenna`
+	// with it.
+	//
+	// The big Icoms also keep a separate per-band antenna MEMORY in their
+	// Set menu. That is stored configuration rather than a switch, and
+	// remoses does not write it.
 	Antenna *int `json:"antenna,omitempty"`
 
 	// AttenuatorDB The attenuation in line, in dB, 0 for switched out.
@@ -1336,10 +1344,15 @@ type StateFields struct {
 
 	// Antenna Which antenna socket is selected, counting from 1.
 	//
-	// Absent on every Icom, and that is about those radios rather than
-	// about remoses: they have no live antenna selector on the bus. The
-	// antenna is a per-band MEMORY in the Set menu, so switching it would
-	// mean writing a stored setting rather than throwing a switch.
+	// Absent on a radio with no selector remoses can work. Where it is
+	// present the two antenna fields may not be independent: on Icom the
+	// socket and `rx_antenna` share one frame, the flag belonging to the
+	// selected socket, so changing the socket can change `rx_antenna`
+	// with it.
+	//
+	// The big Icoms also keep a separate per-band antenna MEMORY in their
+	// Set menu. That is stored configuration rather than a switch, and
+	// remoses does not write it.
 	Antenna *int `json:"antenna,omitempty"`
 
 	// AttenuatorDB The attenuation in line, in dB, 0 for switched out.
@@ -1690,8 +1703,9 @@ type StatePatch struct {
 	// the rig's own refusal.
 	AGC *AGCSet `json:"agc,omitempty"`
 
-	// Antenna Select an antenna socket, 1 to `caps.antennas`. Refused on every
-	// Icom, which has no live selector — see the state field.
+	// Antenna Select an antenna socket, 1 to `caps.antennas`. Refused where
+	// `caps.antennas` is 0, which is most of the small sets in every
+	// family — see the state field.
 	Antenna *int `json:"antenna,omitempty"`
 
 	// AttenuatorDB Set the attenuator, in dB, 0 for switched out. Must be 0 or one of

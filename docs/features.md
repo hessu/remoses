@@ -292,10 +292,21 @@ Kenwood reference, so a request applies each switch before its level.
 `state.antenna` and `state.rx_antenna` where the radio has a live selector,
 counted from 1, with `caps.antennas` and `caps.rx_antenna_control`.
 
-**No Icom gets one**, and that is about the radios rather than about remoses.
-They have no live selector: the antenna is a per-band *memory*, so switching it
-means writing a stored setting rather than throwing a switch. Kenwood's `AN` and
-the FTdx101's are live and are offered.
+**On Icom the two fields are one frame**, and it is worth knowing before drawing
+them as separate controls: command `12` puts the socket in the sub-command and
+that socket's receive-antenna flag in the data byte, so `rx_antenna` is a
+property *of the selected socket* rather than an independent switch, and
+changing the socket can change it. The IC-7610, IC-7600, IC-7700, IC-7760,
+IC-7850 and IC-9100 have it; the IC-7300MK2 has the receive antenna with no
+socket to choose.
+
+Those radios *also* keep a per-band antenna **memory** in their Set menu, which
+is a different thing and is stored configuration. remoses works the live switch
+and leaves the memory alone — so an antenna that changes by itself on a band
+change is the memory doing its job, not remoses.
+
+The two capabilities are independent, so read both rather than inferring one
+from the other. Kenwood's `AN` and the FTdx101's selector are offered too.
 
 ## Switching the radio itself off and on
 

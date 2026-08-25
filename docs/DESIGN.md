@@ -2615,19 +2615,41 @@ This is a general fix rather than a noise one. Any optional read placed before
 another was exposed to it; the notch width was simply the first command
 unsupported-in-a-mode to land in the middle of a queue rather than at its end.
 
-### Why no Icom has an antenna selector
+### The antenna selector, and the Icom memory that is not one
 
 Kenwood's `AN` and Yaesu's `AN` are live selectors, and remoses offers them where
 the parameter layout has been transcribed — the TS-590's three parameters and the
 FTdx101's socket count. The TS-890S's `AN` takes four parameters that have not
 been read, and the TS-990S has no `AN` row at all.
 
-Icom has no such command. On an IC-7610 the antenna is a **per-band memory**:
-`1A 05 02 76` through `02 87`, one entry per band range, each carrying the socket
-and the receive-antenna flag. Switching antenna there means writing a stored
-setting for the band you happen to be on, which is a different act from throwing
-a switch, and remoses does not write band memories. `caps.antennas` is 0 and the
-request is refused.
+**Icom's is command `12`, and this section previously said it did not exist.**
+That was wrong, and wrong in an instructive way: it argued from what the antenna
+*is* on an IC-7610 rather than from the command table, and the radio has both
+things. The per-band memory is real — `1A 05 02 76` through `02 87`, one entry
+per band range, each carrying the socket and the receive-antenna flag — and
+remoses still does not write it, because that is stored configuration. But
+alongside it the IC-7610, IC-7600, IC-7700, IC-7760, IC-7850 and IC-9100 all
+answer a live `12`, and the IC-7300MK2 answers it for a receive antenna with no
+socket to choose.
+
+**The frame is one command carrying two fields**: `12 <socket> [<flag>]`, socket
+counting from zero in the *sub-command* and the data byte holding that socket's
+receive-antenna flag. Three column layouts print the same bytes — the IC-7600
+has no sub-command column at all and one two-byte data field, and the IC-9100
+prints the socket with an empty Data column, one byte shorter, because it has no
+receive antenna. So `state.rx_antenna` is a property of the selected socket
+there rather than an independent switch, and both setters read before they write
+because neither field can be set without carrying the other across.
+
+**The read is a bare `12` on every model, and that is a safety property rather
+than a style.** Sending `12 00` to read ANT1's flag would, on an IC-9100, be a
+complete *set* frame selecting ANT1 — a poll one byte away from moving somebody's
+antenna. A test pins it.
+
+Two things remain reported rather than resolved: the flag's meaning is
+conditioned by the RX-ANT Connectors item (`1A 05 02 75`), and with `[ANT] SW`
+in Auto the socket can move with no command sent at all. remoses reports what
+the radio says rather than second-guessing either.
 
 ---
 
