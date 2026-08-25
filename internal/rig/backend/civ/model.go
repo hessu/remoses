@@ -892,13 +892,20 @@ var models = map[string]Model{
 	// The IC-7850 and IC-7851 are the same radio to CI-V and share an address.
 	//
 	// Its attenuator steps in threes like the IC-7610's but stops at 21, and its
-	// table has DIGI-SEL with no shift command. No AGC: its 16 group is printed
-	// without a 12 row, and the AGC is a front-panel control with its own knob.
+	// table has DIGI-SEL with no shift command. Its 16 12 is the IC-7700's, four
+	// values where most of the family has three: "00 AGC OFF selection", then
+	// "01 AGC FAST selection", "02 AGC MID selection" and "03 AGC SLOW
+	// selection" (printed p. 18-4). The three speeds sit where the default map
+	// puts them; the OFF at 00 is the addition, and it is why this entry spells
+	// the map out rather than taking the one modern() hands it.
 	"ic-7850": func() Model {
 		m := withTuner(modern("ic-7850", "Icom IC-7850/7851", 0x8E,
 			withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)))
 		m.Attenuator = attSteps(3, 21, 3)
-		m.AGC = nil
+		m.AGC = map[radio.AGC]byte{
+			radio.AGCOff: 0x00, radio.AGCFast: 0x01,
+			radio.AGCMid: 0x02, radio.AGCSlow: 0x03,
+		}
 		m.DigiSel = true
 		m.POScale = 213 // "0000=0 W, 0143=100 W, 0213=200 W", printed p. 18-4
 		// Four sockets with ANT4 fixed off, worded exactly as the IC-7700's:

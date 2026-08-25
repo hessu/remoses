@@ -93,6 +93,8 @@ func TestAGCEncodingPerModel(t *testing.T) {
 		{"ic-7600", radio.AGCSlow, 0x02},
 		{"ic-7700", radio.AGCOff, 0x00}, // four values, 00 being OFF
 		{"ic-7700", radio.AGCFast, 0x01},
+		{"ic-7850", radio.AGCOff, 0x00}, // the same four, printed p. 18-4
+		{"ic-7850", radio.AGCSlow, 0x03},
 		{"ic-703", radio.AGCFast, 0x01}, // two values: 1 fast, 2 slow
 		{"ic-703", radio.AGCSlow, 0x02},
 		{"ic-910h", radio.AGCSlow, 0x00}, // two values the other way round
