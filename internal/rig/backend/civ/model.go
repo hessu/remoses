@@ -178,9 +178,28 @@ type Model struct {
 	// DigiSel is command 16 4E, the DIGI-SEL tracking preselector, and
 	// DigiSelShift command 14 13, which moves it.
 	//
-	// Separate because the big superhets have the first and not, so far as
-	// their references say, the second: the IC-7700 and IC-7850 document 16 4E
-	// and no shift command, while the IC-7610 and IC-7760 document both.
+	// Every reference here that prints the preselector prints both rows, in the
+	// same words. This pair used to claim the opposite — that the big superhets
+	// had the switch and nothing to move it with — and the two manuals it named
+	// as the evidence say:
+	//
+	//	IC-7700  "13  0000 to 0255  Send/read [DIGI-SEL] position
+	//	          (0000=max. CCW to 0255=max. CW)"      (printed p. 14-4)
+	//	IC-7850  "13  0000 to 0255  Send/read [DIGI-SEL] position
+	//	          (0000=max. CCW to 0255=max. CW)"      (printed p. 18-3)
+	//
+	// which is the IC-7610's and IC-7760's row word for word. The IC-7700's is
+	// the easy one to miss: its 14 group breaks across a page, ending at 0F at
+	// the foot of printed p. 14-3 and resuming at 11 on 14-4. A reading that
+	// stops where the page does sees a level group that has no 13 in it.
+	//
+	// They stay two flags because they are two commands, and because each
+	// radio's own table has to be read for both. The IC-7600 is the shape that
+	// shows why: its 14 group runs 01 to 19 with no 13 and its 16 group 02 to
+	// 58 with no 4E (printed p. 160 and p. 161), so it is claimed for neither.
+	// Nothing read so far has 16 4E without 14 13 — but that is an observation
+	// about four references rather than a rule, and this field was set from
+	// exactly that kind of inference once already.
 	DigiSel      bool
 	DigiSelShift bool
 
@@ -867,8 +886,7 @@ var models = map[string]Model{
 	}(),
 
 	// And the IC-7700's 16 12 has a fourth value the rest do not: 00 is AGC
-	// OFF, with the three speeds shifted up behind it. It is also the only
-	// radio here with DIGI-SEL and no command to move it.
+	// OFF, with the three speeds shifted up behind it.
 	"ic-7700": func() Model {
 		m := withTuner(modern("ic-7700", "Icom IC-7700", 0x74,
 			withModes(modesCommon(), radio.ModePSK, radio.ModePSKR)))
@@ -877,7 +895,14 @@ var models = map[string]Model{
 			radio.AGCOff: 0x00, radio.AGCFast: 0x01,
 			radio.AGCMid: 0x02, radio.AGCSlow: 0x03,
 		}
+		// The preselector and the command that moves it, both printed on the
+		// same page: "4E 00 DIGI-SEL function OFF, 01 DIGI-SEL function ON" and
+		// "13 0000 to 0255 Send/read [DIGI-SEL] position (0000=max. CCW to
+		// 0255=max. CW)" (printed p. 14-4). The shift was denied here for a
+		// while on the strength of printed p. 14-3 alone, where the 14 group
+		// ends at 0F and carries on overleaf.
 		m.DigiSel = true
+		m.DigiSelShift = true
 		m.POScale = 212 // "0000=0 W, 0143=100 W, 0212=200 W", printed p. 14-4
 		// Four sockets, and the first of the two whose ANT4 is fixed: "12 03 00
 		// Select/read ANT4 selection (00=RX ANT OFF; fix)", where ANT1 to ANT3
@@ -892,8 +917,8 @@ var models = map[string]Model{
 	// The IC-7850 and IC-7851 are the same radio to CI-V and share an address.
 	//
 	// Its attenuator steps in threes like the IC-7610's but stops at 21, and its
-	// table has DIGI-SEL with no shift command. Its 16 12 is the IC-7700's, four
-	// values where most of the family has three: "00 AGC OFF selection", then
+	// table has DIGI-SEL with the shift beside it. Its 16 12 is the IC-7700's,
+	// four values where most of the family has three: "00 AGC OFF selection", then
 	// "01 AGC FAST selection", "02 AGC MID selection" and "03 AGC SLOW
 	// selection" (printed p. 18-4). The three speeds sit where the default map
 	// puts them; the OFF at 00 is the addition, and it is why this entry spells
@@ -906,7 +931,13 @@ var models = map[string]Model{
 			radio.AGCOff: 0x00, radio.AGCFast: 0x01,
 			radio.AGCMid: 0x02, radio.AGCSlow: 0x03,
 		}
+		// "13 0000 to 0255 Send/read [DIGI-SEL] position (0000=max. CCW to
+		// 0255=max. CW)" sits in the 14 group on printed p. 18-3, and the switch
+		// it moves — "4E 00 DIGI-SEL function OFF, 01 DIGI-SEL function ON" —
+		// in the 16 group overleaf on p. 18-4. Both rows are the IC-7610's word
+		// for word; this entry claimed only the switch until the page was read.
 		m.DigiSel = true
+		m.DigiSelShift = true
 		m.POScale = 213 // "0000=0 W, 0143=100 W, 0213=200 W", printed p. 18-4
 		// Four sockets with ANT4 fixed off, worded exactly as the IC-7700's:
 		// "12 03 00 Select/read ANT4 selection (00=RX ANT OFF; fix)", ANT1 to

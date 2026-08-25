@@ -230,6 +230,11 @@ func TestAGCRefusalInFMSaysWhy(t *testing.T) {
 
 // TestPreselectorIsPerModel: IP+ belongs to the direct-sampling sets and
 // DIGI-SEL to the big superhets and the IC-7610, and neither is family-wide.
+//
+// The shift used to be denied to the IC-7700 and the IC-7850 here, and both
+// their manuals print it — see Model.DigiSelShift for the rows. What is left
+// per model is the pair against radios that have neither: the IC-7600's 14
+// group runs 01 to 19 with no 13, and its 16 group 02 to 58 with no 4E.
 func TestPreselectorIsPerModel(t *testing.T) {
 	tests := []struct {
 		model              string
@@ -238,9 +243,9 @@ func TestPreselectorIsPerModel(t *testing.T) {
 		{"ic-7610", true, true, true},
 		{"ic-7760", true, true, true},
 		{"ic-7300", true, false, false},
-		{"ic-7700", false, true, false}, // DIGI-SEL, and no command to move it
-		{"ic-7850", false, true, false},
-		{"ic-7600", false, false, false},
+		{"ic-7700", false, true, true},   // 16 4E and 14 13, printed p. 14-4
+		{"ic-7850", false, true, true},   // the same pair, printed p. 18-3 and 18-4
+		{"ic-7600", false, false, false}, // neither row is in its table
 		{"ic-718", false, false, false},
 	}
 	for _, tt := range tests {
@@ -251,6 +256,64 @@ func TestPreselectorIsPerModel(t *testing.T) {
 			t.Errorf("%s: ip+=%v digi_sel=%v shift=%v, want %v/%v/%v",
 				tt.model, c.IPPlusControl, c.DigiSelControl, c.DigiSelShiftControl,
 				tt.ipPlus, tt.ds, tt.dsShif)
+		}
+	}
+}
+
+// TestDigiSelShiftReachesTheWire is the half of that correction that belongs on
+// the bus rather than in the capability set.
+//
+// 14 13 WRITES to a radio, and the model table denied it to the IC-7700 and the
+// IC-7850: a client asking to move the preselector on either got ErrUnsupported
+// and nothing went out. Both tables print "13 0000 to 0255 Send/read [DIGI-SEL]
+// position (0000=max. CCW to 0255=max. CW)", which is the IC-7610's row word for
+// word, so one encoder serves all four and the top of the range has to arrive as
+// the two BCD bytes 02 55 rather than 0xFF.
+func TestDigiSelShiftReachesTheWire(t *testing.T) {
+	for _, model := range []string{"ic-7610", "ic-7760", "ic-7700", "ic-7850"} {
+		r, s := modelRig(t, model)
+		if err := r.SetDigiSelShift(context.Background(), s, 100); err != nil {
+			t.Fatalf("%s SetDigiSelShift: %v", model, err)
+		}
+		if s.digiSelShift != [2]byte{0x02, 0x55} {
+			t.Errorf("%s SetDigiSelShift(100%%) sent % X, want 02 55", model, s.digiSelShift)
+		}
+		// And the slow poll has to ask for it, or the published position would
+		// only ever be what remoses last wrote — the control is a knob on the
+		// front panel too.
+		//
+		// A rejection does not fail this: the simulator is an IC-7610 and the
+		// four-socket radios have antenna rows it does not answer, which stops
+		// nothing in the tier. The frame going out is the part being checked.
+		s.log = nil
+		if err := r.Poll(context.Background(), s, backend.PollSlow); err != nil &&
+			!errors.Is(err, ErrRejected) {
+			t.Fatalf("%s Poll: %v", model, err)
+		}
+		var asked bool
+		for _, f := range s.log {
+			if len(f) >= 6 && f[4] == cmdLevel && f[5] == subDigiSelShift {
+				asked = true
+			}
+		}
+		if !asked {
+			t.Errorf("%s: the slow poll never read 14 13", model)
+		}
+	}
+
+	// And the radio whose table has neither row still refuses both. The IC-7600
+	// is a superhet of the same size and generation, which is exactly why this
+	// is read per model: its 14 group runs 01 to 19 with no 13 in it.
+	r, s := modelRig(t, "ic-7600")
+	for _, tc := range []struct {
+		what string
+		err  error
+	}{
+		{"digi-sel", r.SetDigiSel(context.Background(), s, true)},
+		{"digi-sel shift", r.SetDigiSelShift(context.Background(), s, 50)},
+	} {
+		if !errors.Is(tc.err, backend.ErrUnsupported) {
+			t.Errorf("IC-7600 %s refused with %v, which is not ErrUnsupported", tc.what, tc.err)
 		}
 	}
 }
